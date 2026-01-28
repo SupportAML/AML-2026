@@ -1,0 +1,218 @@
+
+export interface Client {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: 'Plaintiff' | 'Defendant' | 'Lawyer' | 'Other';
+}
+
+export interface ReportComment {
+  id: string;
+  sectionId?: string; // Kept for legacy compatibility, but effectively global or "main"
+  author: string;
+  text: string;
+  context?: string; // The selected text this comment refers to
+  timestamp: number;
+  resolved: boolean;
+  replies: ReportComment[]; // Nested replies
+}
+
+export interface ReportSection {
+  id: string;
+  title: string;
+  content: string;
+  pageNumber: number;
+}
+
+export interface Suggestion {
+  id: string;
+  type: 'REVISION' | 'CITATION' | 'GENERATION';
+  sectionId: string; // "main" for single doc
+  originalText?: string;
+  suggestedText: string;
+  rationale: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  timestamp: number;
+}
+
+export interface ChronologyEvent {
+  id: string;
+  date: string;
+  formattedText: string;
+  sourceDocumentId?: string;
+  sourceDocumentName?: string;
+  sourcePage?: number;
+}
+
+export interface StructuredChronology {
+  years: {
+    year: string;
+    months: {
+      month: string;
+      events: ChronologyEvent[];
+    }[];
+  }[];
+  irrelevantFacts: ChronologyEvent[];
+}
+
+export interface Case {
+  id: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  startDate?: string;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  status: 'planning' | 'active' | 'on_hold' | 'cancelled' | 'archived';
+  ownerId: string;
+  ownerName?: string;
+  assignedUserIds?: string[];
+
+  // New Fields
+  primaryLawyer?: string;
+  clients: Client[];
+
+  // Report Writer State
+  reportContent?: string; // Single unified document content
+  reportSections?: ReportSection[]; // Legacy support
+  suggestions?: Suggestion[];
+
+  // Legacy fields 
+  reportDraft?: string;
+  pendingReportDraft?: string;
+
+  reportStatus?: 'idle' | 'generating' | 'review';
+  reportComments?: ReportComment[];
+  additionalContext?: string;
+  caseSummary?: string;
+
+  // Strategy Persistence
+  strategyData?: StrategyAnalysis;
+
+  // Chronology Persistence
+  chronologyData?: StructuredChronology;
+
+  // Research Persistence
+  researchResults?: ResearchArticle[];
+  researchGaps?: { topic: string; reason: string }[];
+
+  // Finalization
+  isFinal?: boolean;
+  signature?: string;
+  signedDate?: string;
+}
+
+export interface StrategyScenario {
+  id: string;
+  title: string;
+  plaintiffArgument: string;
+  defenseArgument: string;
+  firstQuestion: string;
+  idealAnswer: string;
+}
+
+export interface ResearchArticle {
+  title: string;
+  source: string;
+  summary: string;
+  url: string;
+  citation: string;
+}
+
+export interface ResearchGap {
+  topic: string;
+  reason: string;
+}
+
+export interface StrategyAnalysis {
+  scenarios: StrategyScenario[];
+  overallAssessment: string;
+}
+
+export type UserRole = 'ADMIN' | 'USER';
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  avatarUrl?: string;
+  avatarColor?: string;
+  qualifications?: string;
+  cvFileName?: string;
+}
+
+export interface AuthorizedUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  status: 'active' | 'invited';
+  addedAt: string;
+  password?: string;
+  avatarColor?: string;
+}
+
+export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';
+
+export interface Document {
+  id: string;
+  caseId: string;
+  name: string;
+  type: 'pdf';
+  category?: 'legal' | 'research' | 'medical';
+  url: string;
+  uploadDate: string;
+  size: string;
+  driveFileId?: string;
+  path?: string;
+  citation?: string;
+  reviewStatus?: ReviewStatus;
+}
+
+export interface Annotation {
+  id: string;
+  documentId: string;
+  caseId: string;
+  page: number;
+  text: string;
+  author: string;
+  timestamp: string;
+  eventDate?: string;
+  eventTime?: string;
+  category: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  type?: 'point' | 'highlight' | 'area' | 'voice';
+  imageUrl?: string;
+}
+
+export interface DepoFeedback {
+  score: number; // 1-10
+  critique: string;
+  questionIntent: string; // What counsel was trying to do
+  technique: string; // Name of technique to use
+  betterAnswer: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'model';
+  text: string;
+  timestamp: number;
+  coaching?: DepoFeedback;
+}
+
+export enum ViewMode {
+  DASHBOARD = 'DASHBOARD',
+  CASE_VIEW = 'CASE_VIEW',
+  DOC_VIEWER = 'DOC_VIEWER',
+  ANNOTATION_ROLLUP = 'ANNOTATION_ROLLUP',
+  CLIENTS = 'CLIENTS',
+  ORIENTATION = 'ORIENTATION',
+  PROFILE = 'PROFILE',
+  TEAM_ADMIN = 'TEAM_ADMIN'
+}

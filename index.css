@@ -1,0 +1,19 @@
+
+@keyframes annotation-bounce {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50% { transform: translate(-50%, -50%) scale(2); }
+}
+
+.animate-annotation-bounce {
+  animation: annotation-bounce 1s ease-in-out infinite;
+}
+
+@keyframes annotation-focus {
+  0% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.7); }
+  70% { box-shadow: 0 0 0 15px rgba(79, 70, 229, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
+}
+
+.animate-annotation-focus {
+  animation: annotation-focus 2s infinite;
+}
