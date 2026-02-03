@@ -4,9 +4,9 @@
 
 The following API keys were hardcoded in the repository and need to be rotated **IMMEDIATELY**:
 
-1. **Firebase API Key**: `AIzaSyBPMLqxe3oELGXut9QD6vbHYpnadW_nVd0`
-2. **Google Drive API Key**: `AIzaSyC3XaVY-3IdIdd_moc7pD7CvMWj9rsX15g`
-3. **Gemini API Key**: `AIzaSyC3XaVY-3IdIdd_moc7pD7CvMWj9rsX15g`
+1. **Firebase API Key**: `AIzaSy...nVd0` (starts with AIzaSyBPMLqx)
+2. **Google Drive API Key**: `AIzaSy...X15g` (starts with AIzaSyC3XaVY)
+3. **Gemini API Key**: Same as #2
 
 ---
 
@@ -38,7 +38,7 @@ The following API keys were hardcoded in the repository and need to be rotated *
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Select your project
 3. Navigate to **APIs & Services** → **Credentials**
-4. Find the API key: `AIzaSyC3XaVY-3IdIdd_moc7pD7CvMWj9rsX15g`
+4. Find the API key that starts with `AIzaSyC3XaVY`
 5. **Delete this key** (click trash icon)
 6. Click **+ CREATE CREDENTIALS** → **API key**
 7. Immediately click **RESTRICT KEY** after creation:
@@ -57,7 +57,7 @@ The following API keys were hardcoded in the repository and need to be rotated *
 ### 1.3 Google OAuth Client ID
 
 1. In Google Cloud Console → **APIs & Services** → **Credentials**
-2. Find OAuth 2.0 Client ID: `384939045438-rg5ffgl8cnjgf1m7i4km80ih195hmmaq...`
+2. Find OAuth 2.0 Client ID starting with `384939045438-rg5ffgl8...`
 3. **Option A: Update restrictions**
    - Click to edit
    - Under **Authorized JavaScript origins**, ensure only your domains are listed
@@ -77,7 +77,7 @@ The following API keys were hardcoded in the repository and need to be rotated *
 ### 1.4 Gemini API Key
 
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Find your API key or check if `AIzaSyC3XaVY-3IdIdd_moc7pD7CvMWj9rsX15g` is listed
+2. Find your API key (look for one starting with `AIzaSyC3XaVY`)
 3. **Delete the exposed key**
 4. Click **Create API Key**
 5. Select your Google Cloud project or create new
@@ -90,7 +90,7 @@ The following API keys were hardcoded in the repository and need to be rotated *
 ### 1.5 Brevo API Key
 
 1. Go to [Brevo](https://app.brevo.com/settings/keys/api)
-2. Find if `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` is listed
+2. Find the key starting with `xkeysib-992ebc3f...` (your exposed Brevo key)
 3. **Delete this key**
 4. Click **Generate a new API key**
 5. Give it a name (e.g., "Production API Key")
@@ -120,10 +120,10 @@ git clone --mirror "copy-of-apexmedlaw-working-before-merger-2" backup-repo.git
 # 3. Create a file with sensitive strings to remove
 # Save this in: d:\SSD DATA\Projects\secrets.txt
 # Add each secret on a new line:
-AIzaSyBPMLqxe3oELGXut9QD6vbHYpnadW_nVd0
-AIzaSyC3XaVY-3IdIdd_moc7pD7CvMWj9rsX15g
-384939045438-rg5ffgl8cnjgf1m7i4km80ih195hmmaq.apps.googleusercontent.com
-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
+AIzaSyBPMLqxe***FIREBASE_KEY***
+AIzaSyC3XaVY***GOOGLE_DRIVE_KEY***
+384939045438-rg5f***OAUTH_CLIENT_ID***
+xkeysib-992ebc3f***BREVO_KEY***
 
 # 4. Run BFG to remove secrets
 cd "d:\SSD DATA\Projects\copy-of-apexmedlaw-working-before-merger-2"
@@ -223,8 +223,8 @@ git push origin main
 
 ```powershell
 # Search for any remaining secrets
-git log --all --full-history -S "AIzaSyBPMLqxe3oELGXut9QD6vbHYpnadW_nVd0"
-git log --all --full-history -S "AIzaSyC3XaVY-3IdIdd_moc7pD7CvMWj9rsX15g"
+git log --all --full-history -S "AIzaSyBPMLqxe"
+git log --all --full-history -S "AIzaSyC3XaVY"
 
 # Should return no results
 ```
