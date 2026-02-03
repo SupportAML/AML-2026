@@ -3,6 +3,7 @@ import React from 'react';
 import {
     MicIcon,
     ArrowRightIcon,
+    ArrowLeftIcon,
     SparklesIcon,
     RepeatIcon,
     Loader2Icon,
@@ -48,16 +49,16 @@ export const DepositionSimulation: React.FC<DepositionSimulationProps> = ({
                     {chatHistory.map((msg, i) => (
                         <div key={i} className={`flex flex-col w-full ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                             <div className={`p-8 rounded-[1.25rem] leading-[1.8] shadow-sm max-w-[85%] ${msg.role === 'user'
-                                    ? 'bg-white text-slate-700 border border-slate-200 text-sm font-medium'
-                                    : 'bg-[#1a2130] text-white font-medium text-lg'
+                                ? 'bg-white text-slate-700 border border-slate-200 text-sm font-medium'
+                                : 'bg-[#1a2130] text-white font-medium text-lg'
                                 }`}>
                                 {msg.text}
                             </div>
                             {/* Inline Score Badge (Matching Image) */}
                             {msg.role === 'user' && msg.coaching && (
                                 <div className={`mt-3 py-1 px-3 rounded-full flex items-center gap-2 border shadow-sm text-[11px] font-bold ${msg.coaching.score >= 8 ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                        msg.coaching.score >= 5 ? 'bg-amber-50 text-amber-700 border-amber-100' :
-                                            'bg-rose-50 text-rose-500 border-rose-100'
+                                    msg.coaching.score >= 5 ? 'bg-amber-50 text-amber-700 border-amber-100' :
+                                        'bg-rose-50 text-rose-500 border-rose-100'
                                     }`}>
                                     <ShieldAlertIcon className="w-3.5 h-3.5" />
                                     Score: {msg.coaching.score}/10
@@ -74,21 +75,30 @@ export const DepositionSimulation: React.FC<DepositionSimulationProps> = ({
 
                 {/* Bottom Input Field (Matching Image) */}
                 <div className="p-8 bg-white border-t border-slate-100 shrink-0">
-                    <form onSubmit={onSubmit} className="max-w-5xl mx-auto flex items-center gap-4 bg-[#f8f9fb] rounded-2xl p-2 px-4 border border-slate-100 shadow-inner">
+                    <div className="max-w-5xl mx-auto mb-2 px-4 flex justify-between items-end">
+                        <label className="text-[10px] font-black text-indigo-500 uppercase tracking-widest bg-indigo-50 px-2 py-1 rounded">
+                            Action: Reply to Counsel
+                        </label>
+                        {isChatting && (
+                            <span className="text-[10px] font-bold text-slate-400 italic">Analysis in progress...</span>
+                        )}
+                    </div>
+                    <form onSubmit={onSubmit} className="max-w-5xl mx-auto flex items-center gap-4 bg-[#f8f9fb] rounded-2xl p-2 px-4 border border-slate-100 shadow-inner focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-500/5 transition-all">
                         <button type="button" onClick={onMicClick} className={`p-2 transition-colors ${isListening ? 'text-rose-500 animate-pulse' : 'text-slate-400 hover:text-indigo-600'}`}>
                             <MicIcon className="w-5 h-5" />
                         </button>
                         <input
                             className="flex-1 bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 text-base py-3"
-                            placeholder={currentFeedback ? "Review feedback before proceeding..." : "Type your professional response..."}
+                            placeholder={currentFeedback ? "Review feedback before proceeding..." : "Type your professional response to the counsel's question..."}
                             value={chatInput}
                             onChange={(e) => onChatInputChange(e.target.value)}
                             disabled={!!currentFeedback || isChatting}
+                            autoFocus
                         />
                         <button
                             type="submit"
                             disabled={!chatInput.trim() || !!currentFeedback || isChatting}
-                            className="w-10 h-10 bg-[#818cf8] text-white rounded-xl flex items-center justify-center hover:bg-indigo-600 disabled:opacity-30 transition-all shadow-lg"
+                            className="w-10 h-10 bg-[#818cf8] text-white rounded-xl flex items-center justify-center hover:bg-indigo-600 disabled:opacity-30 transition-all shadow-lg shadow-indigo-200"
                         >
                             <SendHorizontalIcon className="w-5 h-5 rotate-0" />
                         </button>
@@ -157,12 +167,30 @@ export const DepositionSimulation: React.FC<DepositionSimulationProps> = ({
                         </div>
                     </div>
                 ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-40">
-                        <div className="w-20 h-20 bg-white rounded-[2rem] border border-slate-100 flex items-center justify-center mb-6 shadow-sm">
-                            <Loader2Icon className="w-8 h-8 text-indigo-400 animate-spin" />
+                    <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
+                        <div className="w-24 h-24 bg-white rounded-full border-4 border-slate-100 flex items-center justify-center mb-8 shadow-inner relative">
+                            {isChatting ? (
+                                <Loader2Icon className="w-10 h-10 text-indigo-500 animate-spin" />
+                            ) : (
+                                <TargetIcon className="w-10 h-10 text-slate-200" />
+                            )}
+                            {isChatting && (
+                                <div className="absolute inset-0 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                            )}
                         </div>
-                        <h3 className="text-[10px] font-black text-slate-800 uppercase tracking-[0.2em]">Awaiting Professional Input</h3>
-                        <p className="text-xs text-slate-500 mt-3 font-medium leading-relaxed">Respond to the counsel's line of questioning to activate real-time cognitive coaching.</p>
+                        <h3 className="text-[12px] font-black text-slate-800 uppercase tracking-[0.3em]">
+                            {isChatting ? "Counsel is Analyzing..." : "Coaching Ready"}
+                        </h3>
+                        <p className="text-sm text-slate-500 mt-4 font-medium leading-relaxed max-w-[240px] mx-auto opacity-70">
+                            {isChatting
+                                ? "Opposing counsel is evaluating your response for potential clinical traps and legal weaknesses."
+                                : "Respond to the counsel's line of questioning in the chat field to activate real-time cognitive coaching."}
+                        </p>
+                        {!isChatting && (
+                            <div className="mt-8 flex items-center gap-2 px-4 py-2 bg-indigo-50 rounded-full border border-indigo-100 text-indigo-600 text-[10px] font-black uppercase tracking-widest animate-bounce">
+                                <ArrowLeftIcon className="w-3.5 h-3.5" /> Start Typing Below
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

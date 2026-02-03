@@ -46,7 +46,11 @@ import {
    StethoscopeIcon,
    TerminalIcon,
    ChevronDownIcon,
-   ChevronRightIcon
+   ChevronRightIcon,
+   LayoutIcon,
+   FileCheckIcon,
+   UnlockIcon,
+   LockIcon
 } from 'lucide-react';
 import { Case, Document, Annotation, UserProfile, ChatMessage, ReportComment, Suggestion, StrategyAnalysis, StructuredChronology, DepoFeedback, ChronologyEvent, ResearchArticle, ResearchGap } from '../types';
 import { DepositionSimulation } from './DepositionSimulation';
@@ -64,7 +68,8 @@ import {
    analyzeReportForResearchGaps,
    insertSmartCitation,
    extractFactsFromNotes,
-   formatClinicalNotes
+   rewordClinicalNotes,
+   finalizeLegalReport
 } from '../services/geminiService';
 
 interface AnnotationRollupProps {
@@ -129,6 +134,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [strategyData, setStrategyData] = useState<StrategyAnalysis | null>(caseItem.strategyData || null);
    const [chronologyData, setChronologyData] = useState<StructuredChronology | null>(caseItem.chronologyData || null);
 
+   const DEFAULT_TEMPLATE = `1. HEADER: Case name, date, and expert identification.\n2. INTRODUCTION: Brief case overview and purpose of the report.\n3. DOCUMENTS REVIEWED: Detailed list of all materials examined.\n4. PATIENT HISTORY & TIMELINE: Chronological clinical summary.\n5. MEDICAL ANALYSIS: Clinical findings, standard of care, and causation.\n6. PROFESSIONAL OPINION: Final conclusions and recommendations.`;
+
+   const [reportTemplate, setReportTemplate] = useState<string>(caseItem.reportTemplate || DEFAULT_TEMPLATE);
+   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+   const [writerViewMode, setWriterViewMode] = useState<'EDIT' | 'FINAL'>('EDIT');
+
    // --- UI State ---
    const [isGenerating, setIsGenerating] = useState(false);
    const [additionalContext, setAdditionalContext] = useState(caseItem.additionalContext || '');
@@ -151,6 +162,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [isVoiceActiveWriter, setIsVoiceActiveWriter] = useState(false);
 
    const textareaRef = useRef<HTMLTextAreaElement>(null);
+   const researchScrollRef = useRef<HTMLDivElement>(null);
+   const researchSearchRef = useRef<HTMLDivElement>(null);
 
    const handleQuickEdit = (prompt: string) => {
       setEditorInput(prompt);
@@ -181,7 +194,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [annotationSearchQuery, setAnnotationSearchQuery] = useState('');
 
    // Chronology UI State
-   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
+   const [collapsedMonths, setCollapsedMonths] = useState<Set<string>>(new Set());
 
    // --- Derived State: Live Chronology & Facts ---
    const liveChronology = useMemo(() => {
@@ -240,7 +253,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
             JSON.stringify(chronologyData) !== JSON.stringify(caseItem.chronologyData) ||
             JSON.stringify(researchResults) !== JSON.stringify(caseItem.researchResults) ||
             JSON.stringify(researchGaps) !== JSON.stringify(caseItem.researchGaps) ||
-            JSON.stringify(caseItem.reportComments) !== JSON.stringify(caseItem.reportComments);
+            JSON.stringify(caseItem.reportComments) !== JSON.stringify(caseItem.reportComments) ||
+            reportTemplate !== caseItem.reportTemplate;
 
          if (hasChanges) {
             console.log('💾 Persisting Clinical Workspace state...');
@@ -252,13 +266,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                additionalContext,
                researchResults,
                researchGaps,
+               reportTemplate,
                // Preserve existing comments
                reportComments: caseItem.reportComments || []
             });
          }
       }, 1500); // Debounce for 1.5 seconds
       return () => clearTimeout(timer);
-   }, [reportContent, strategyData, chronologyData, additionalContext, researchResults, researchGaps, caseItem.reportComments]);
+   }, [reportContent, strategyData, chronologyData, additionalContext, researchResults, researchGaps, caseItem.reportComments, reportTemplate]);
 
    // --- Sync State from Case Data (when case changes externally) ---
    useEffect(() => {
@@ -419,15 +434,15 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       }
    };
 
-   const handleFormatNotes = async () => {
+   const handleRewordNotes = async () => {
       if (!additionalContext.trim()) return;
       setIsGenerating(true);
       try {
-         const reformatted = await formatClinicalNotes(additionalContext, caseItem.title);
+         const reformatted = await rewordClinicalNotes(additionalContext, caseItem.title);
          setAdditionalContext(reformatted);
       } catch (error) {
-         console.error("Failed to format notes:", error);
-         alert("Failed to reformat notes. Please try again.");
+         console.error("Failed to reword notes:", error);
+         alert("Failed to reword notes. Please try again.");
       } finally {
          setIsGenerating(false);
       }
@@ -480,6 +495,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
    const handleResearchTopic = async (topic: string) => {
       setResearchQuery(topic);
+
+      // Auto-scroll to search bar
+      if (researchSearchRef.current) {
+         researchSearchRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
       setIsGenerating(true);
       const results = await searchMedicalResearch(topic, reportContent);
       setResearchResults(results);
@@ -624,6 +645,21 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       onUpdateCase({ ...caseItem, reportComments: updated });
    };
 
+   const handleFinalizeReport = async () => {
+      if (!reportContent.trim()) return;
+      setIsGenerating(true);
+      try {
+         const finalized = await finalizeLegalReport(reportContent);
+         setReportContent(finalized);
+         setWriterViewMode('FINAL');
+      } catch (error) {
+         console.error("Failed to finalize report:", error);
+         alert("Failed to finalize report. Please try again.");
+      } finally {
+         setIsGenerating(false);
+      }
+   };
+
    // --- Handlers: Annotation Feed Edit/Delete ---
    const handleUpdateAnnotation = (ann: Annotation) => {
       onNavigateToAnnotation(ann.id, true);
@@ -677,28 +713,45 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       setIsChatting(true);
       setCurrentFeedback(null);
 
-      const result = await chatWithDepositionCoach(historyWithUser, userMsg.text, reportContent || caseItem.description);
+      try {
+         const result = await chatWithDepositionCoach(historyWithUser, userMsg.text, reportContent || caseItem.description);
 
-      const historyWithFeedback = historyWithUser.map(msg =>
-         msg.id === userMsg.id ? { ...msg, coaching: result.coaching } : msg
-      );
-      setChatHistory(historyWithFeedback);
-      setCurrentFeedback(result.coaching);
-
-      setIsChatting(false);
+         if (result && result.coaching) {
+            const historyWithFeedback = historyWithUser.map(msg =>
+               msg.id === userMsg.id ? { ...msg, coaching: result.coaching } : msg
+            );
+            setChatHistory(historyWithFeedback);
+            setCurrentFeedback(result.coaching);
+         } else {
+            // If coaching is still null despite our service fallback
+            console.error("Coaching analysis failed to return valid data");
+            alert("The AI coached had trouble analyzing that specific response. Please try again or rephrase.");
+         }
+      } catch (error) {
+         console.error("Critical error in handleDepoSubmit:", error);
+         alert("A critical error occurred. Please refresh the page or try again.");
+      } finally {
+         setIsChatting(false);
+      }
    };
 
    const handleProceedToNextQuestion = async () => {
       setIsChatting(true);
       setCurrentFeedback(null);
-      const result = await chatWithDepositionCoach(chatHistory, "Proceed", reportContent || "");
-      setChatHistory(prev => [...prev, {
-         id: Date.now().toString(),
-         role: 'model',
-         text: result.nextQuestion,
-         timestamp: Date.now()
-      }]);
-      setIsChatting(false);
+      try {
+         const result = await chatWithDepositionCoach(chatHistory, "Proceed", reportContent || "");
+         setChatHistory(prev => [...prev, {
+            id: Date.now().toString(),
+            role: 'model',
+            text: result.nextQuestion,
+            timestamp: Date.now()
+         }]);
+      } catch (error) {
+         console.error("Error in handleProceedToNextQuestion:", error);
+         alert("Could not load the next question. Please try again.");
+      } finally {
+         setIsChatting(false);
+      }
    };
 
    const handleRetryAnswer = () => {
@@ -753,7 +806,64 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
             </div>
          )}
 
-         {/* Navbar */}
+         {/* Modal for Report Templates */}
+         {isTemplateModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+               <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-8 animate-in zoom-in-95">
+                  <div className="flex justify-between items-center mb-6">
+                     <div>
+                        <h3 className="text-2xl font-serif font-black text-slate-800">Report Template</h3>
+                        <p className="text-sm text-slate-500">Define the structure the AI should follow for your legal report.</p>
+                     </div>
+                     <button onClick={() => setIsTemplateModalOpen(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                        <XIcon className="w-6 h-6 text-slate-400" />
+                     </button>
+                  </div>
+
+                  <div className="space-y-6">
+                     <div>
+                        <div className="flex justify-between items-center mb-2">
+                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Example Templates</label>
+                           <button
+                              onClick={() => setReportTemplate(DEFAULT_TEMPLATE)}
+                              className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase"
+                           >
+                              Reset to Default
+                           </button>
+                        </div>
+                        <div className="flex gap-2 mb-4 overflow-x-auto pb-2 no-scrollbar">
+                           <button
+                              onClick={() => setReportTemplate(DEFAULT_TEMPLATE)}
+                              className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all whitespace-nowrap ${reportTemplate === DEFAULT_TEMPLATE ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-200'}`}
+                           >
+                              Standard Legal Report
+                           </button>
+                           {/* Potentially more examples here */}
+                        </div>
+                     </div>
+
+                     <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Custom Structure / Paste Template</label>
+                        <textarea
+                           className="w-full h-64 p-4 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all font-serif leading-relaxed"
+                           placeholder="Paste your report template here..."
+                           value={reportTemplate}
+                           onChange={(e) => setReportTemplate(e.target.value)}
+                        />
+                     </div>
+
+                     <div className="flex gap-3">
+                        <button
+                           onClick={() => setIsTemplateModalOpen(false)}
+                           className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all"
+                        >
+                           Apply & Close
+                        </button>
+                     </div>
+                  </div>
+               </div>
+            </div>
+         )}
          <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm">
             <div className="flex items-center gap-4">
                <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"><ArrowLeftIcon className="w-5 h-5" /></button>
@@ -863,16 +973,16 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                           <div className="space-y-6">
                                              {yr.months.map(m => {
                                                 const monthKey = `${yr.year}-${m.month}`;
-                                                const isExpanded = expandedMonths.has(monthKey);
+                                                const isExpanded = !collapsedMonths.has(monthKey);
 
                                                 return (
                                                    <div key={m.month} className="border-l-2 border-slate-200 pl-8">
                                                       {/* Month Toggle */}
                                                       <button
                                                          onClick={() => {
-                                                            const newSet = new Set(expandedMonths);
-                                                            isExpanded ? newSet.delete(monthKey) : newSet.add(monthKey);
-                                                            setExpandedMonths(newSet);
+                                                            const newSet = new Set(collapsedMonths);
+                                                            isExpanded ? newSet.add(monthKey) : newSet.delete(monthKey);
+                                                            setCollapsedMonths(newSet);
                                                          }}
                                                          className="flex items-center gap-3 mb-4 text-slate-600 hover:text-indigo-600 transition-colors group"
                                                       >
@@ -968,12 +1078,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         </div>
                         <div className="flex gap-2">
                            <button
-                              onClick={handleFormatNotes}
+                              onClick={handleRewordNotes}
                               disabled={isGenerating || !additionalContext.trim()}
                               className="px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 flex items-center gap-2 shadow-md shadow-indigo-100 transition-all disabled:opacity-50"
                            >
                               {isGenerating ? <Loader2Icon className="w-3 h-3 animate-spin" /> : <SparklesIcon className="w-3 h-3" />}
-                              AI Log Format
+                              Reword with AI
                            </button>
                            <button
                               onClick={handleCleanupChronology}
@@ -1031,6 +1141,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            placeholder={isVoiceActiveFactsNotes ? "🎤 Listening... Speak your clinical notes" : `# Annotations\n(1/24/2026, 1:30:00 PM)\n\n## Clinic Records\n* Patient observations go here...\n* Use (["Source", p. 1]) for references.`}
                            value={additionalContext}
                            onChange={e => setAdditionalContext(e.target.value)}
+                           onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey && isVoiceActiveFactsNotes) {
+                                 e.preventDefault();
+                                 handleRewordNotes();
+                              }
+                           }}
                         />
                      </div>
                   </div>
@@ -1195,100 +1311,102 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                      </div>
                   )}
 
-                  <div className="flex-1 overflow-auto p-10 max-w-7xl mx-auto w-full no-scrollbar">
-                     <div className="flex justify-between items-start mb-12">
-                        <div>
-                           <h2 className="text-4xl font-extrabold tracking-[-0.02em] text-slate-900 leading-tight">Medical Research Assistant</h2>
-                           <p className="text-slate-500 text-base mt-2 font-medium">Analyze your report for gaps or search manually.</p>
-                        </div>
-                        <button
-                           onClick={handleAnalyzeGaps}
-                           disabled={isGenerating}
-                           className="flex items-center gap-2.5 px-8 py-3.5 bg-indigo-600 text-white rounded-2xl font-bold text-sm hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition-all disabled:opacity-50"
-                        >
-                           {isGenerating ? <Loader2Icon className="w-5 h-5 animate-spin" /> : <SparklesIcon className="w-5 h-5" />}
-                           Scan Report for Gaps
-                        </button>
-                     </div>
-
-                     {/* Gap Analysis Results (Matching Image) */}
-                     {researchGaps.length > 0 && (
-                        <div className="mb-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                           {researchGaps.map((gap, i) => (
-                              <div key={i} className="bg-amber-50/50 p-6 rounded-[2rem] border border-amber-100/50 hover:shadow-xl hover:shadow-amber-100/20 transition-all group flex flex-col h-full">
-                                 <div className="flex items-start gap-3 mb-4">
-                                    <div className="p-2 bg-white rounded-xl shadow-sm">
-                                       <AlertCircleIcon className="w-5 h-5 text-amber-500 shrink-0" />
-                                    </div>
-                                    <h3 className="font-serif font-black text-amber-950 text-base leading-tight pt-1">{gap.topic}</h3>
-                                 </div>
-                                 <p className="text-sm text-amber-900/70 mb-8 font-medium leading-relaxed flex-1">{gap.reason}</p>
-                                 <button
-                                    onClick={() => handleResearchTopic(gap.topic)}
-                                    className="w-full py-3 bg-white border border-amber-200 text-amber-900 text-xs font-black uppercase tracking-widest rounded-xl hover:bg-amber-100 flex items-center justify-center gap-2 transition-colors shadow-sm"
-                                 >
-                                    <SearchIcon className="w-4 h-4" /> Find Sources
-                                 </button>
-                              </div>
-                           ))}
-                        </div>
-                     )}
-
-                     {/* Search Bar (Matching Image Placement) */}
-                     <div className="relative mb-12 max-w-5xl">
-                        <div className="relative flex items-center bg-white border border-slate-200 rounded-[1.5rem] shadow-sm focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 transition-all p-1.5 pr-2">
-                           <SearchIcon className="ml-4 w-5 h-5 text-slate-400" />
-                           <input
-                              className="flex-1 pl-3 pr-4 py-4 text-base focus:outline-none bg-transparent"
-                              placeholder="Search for guidelines, studies, or clinical standards..."
-                              value={researchQuery}
-                              onChange={e => setResearchQuery(e.target.value)}
-                              onKeyDown={e => e.key === 'Enter' && handleResearch(e)}
-                           />
+                  <div ref={researchScrollRef} className="flex-1 overflow-auto p-10 w-full">
+                     <div className="max-w-7xl mx-auto w-full">
+                        <div className="flex justify-between items-start mb-12">
+                           <div>
+                              <h2 className="text-4xl font-extrabold tracking-[-0.02em] text-slate-900 leading-tight">Medical Research Assistant</h2>
+                              <p className="text-slate-500 text-base mt-2 font-medium">Analyze your report for gaps or search manually.</p>
+                           </div>
                            <button
-                              onClick={handleResearch}
+                              onClick={handleAnalyzeGaps}
                               disabled={isGenerating}
-                              className="bg-emerald-600 text-white px-8 py-3.5 rounded-2xl font-bold text-sm hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all disabled:opacity-50"
+                              className="flex items-center gap-2.5 px-8 py-3.5 bg-indigo-600 text-white rounded-2xl font-bold text-sm hover:bg-indigo-700 shadow-xl shadow-indigo-100 transition-all disabled:opacity-50"
                            >
-                              {isGenerating ? <Loader2Icon className="w-4 h-4 animate-spin" /> : 'Search'}
+                              {isGenerating ? <Loader2Icon className="w-5 h-5 animate-spin" /> : <SparklesIcon className="w-5 h-5" />}
+                              Scan Report for Gaps
                            </button>
                         </div>
-                     </div>
 
-                     {/* Results List */}
-                     <div className="space-y-6">
-                        {researchResults.map((article, i) => (
-                           <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                              <div className="flex justify-between items-start mb-2">
-                                 <div className="flex-1">
-                                    <h3 className="text-lg font-bold text-slate-800 text-emerald-800 hover:underline cursor-pointer" onClick={() => window.open(article.url, '_blank')}>
-                                       {article.title} <ExternalLinkIcon className="w-3 h-3 inline ml-1 text-slate-400" />
-                                    </h3>
-                                    <span className="text-xs font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded uppercase tracking-wider mt-1 inline-block">{article.source}</span>
+                        {/* Gap Analysis Results (Matching Image) */}
+                        {researchGaps.length > 0 && (
+                           <div className="mb-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                              {researchGaps.map((gap, i) => (
+                                 <div key={i} className="bg-amber-50/50 p-6 rounded-[2rem] border border-amber-100/50 hover:shadow-xl hover:shadow-amber-100/20 transition-all group flex flex-col h-full">
+                                    <div className="flex items-start gap-3 mb-4">
+                                       <div className="p-2 bg-white rounded-xl shadow-sm">
+                                          <AlertCircleIcon className="w-5 h-5 text-amber-500 shrink-0" />
+                                       </div>
+                                       <h3 className="font-serif font-black text-amber-950 text-base leading-tight pt-1">{gap.topic}</h3>
+                                    </div>
+                                    <p className="text-sm text-amber-900/70 mb-8 font-medium leading-relaxed flex-1">{gap.reason}</p>
+                                    <button
+                                       onClick={() => handleResearchTopic(gap.topic)}
+                                       className="w-full py-3 bg-white border border-amber-200 text-amber-900 text-xs font-black uppercase tracking-widest rounded-xl hover:bg-amber-100 flex items-center justify-center gap-2 transition-colors shadow-sm"
+                                    >
+                                       <SearchIcon className="w-4 h-4" /> Find Sources
+                                    </button>
                                  </div>
-                                 <button
-                                    onClick={() => handleSmartCite(article)}
-                                    disabled={isGenerating}
-                                    className="ml-4 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 flex items-center gap-2 whitespace-nowrap"
-                                 >
-                                    <PenToolIcon className="w-4 h-4" /> Smart Cite
-                                 </button>
-                              </div>
-                              <p className="text-sm text-slate-600 leading-relaxed mb-4">{article.summary}</p>
-                              <div className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
-                                 <code className="text-xs text-slate-500 font-mono flex-1 mr-4 truncate">{article.citation}</code>
-                                 <button onClick={() => copyToClipboard(article.citation)} className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700">
-                                    <CopyIcon className="w-3.5 h-3.5" /> Copy
-                                 </button>
-                              </div>
-                           </div>
-                        ))}
-                        {researchResults.length === 0 && !isGenerating && !researchGaps.length && (
-                           <div className="text-center py-20 opacity-50">
-                              <BookOpenIcon className="w-12 h-12 mx-auto mb-2 text-slate-400" />
-                              <p className="text-slate-500">Search for medical literature to support your case.</p>
+                              ))}
                            </div>
                         )}
+
+                        {/* Search Bar (Matching Image Placement) */}
+                        <div ref={researchSearchRef} className="relative mb-12 max-w-5xl">
+                           <div className="relative flex items-center bg-white border border-slate-200 rounded-[1.5rem] shadow-sm focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 transition-all p-1.5 pr-2">
+                              <SearchIcon className="ml-4 w-5 h-5 text-slate-400" />
+                              <input
+                                 className="flex-1 pl-3 pr-4 py-4 text-base focus:outline-none bg-transparent"
+                                 placeholder="Search for guidelines, studies, or clinical standards..."
+                                 value={researchQuery}
+                                 onChange={e => setResearchQuery(e.target.value)}
+                                 onKeyDown={e => e.key === 'Enter' && handleResearch(e)}
+                              />
+                              <button
+                                 onClick={handleResearch}
+                                 disabled={isGenerating}
+                                 className="bg-emerald-600 text-white px-8 py-3.5 rounded-2xl font-bold text-sm hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all disabled:opacity-50"
+                              >
+                                 {isGenerating ? <Loader2Icon className="w-4 h-4 animate-spin" /> : 'Search'}
+                              </button>
+                           </div>
+                        </div>
+
+                        {/* Results List */}
+                        <div className="space-y-6">
+                           {researchResults.map((article, i) => (
+                              <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                                 <div className="flex justify-between items-start mb-2">
+                                    <div className="flex-1">
+                                       <h3 className="text-lg font-bold text-slate-800 text-emerald-800 hover:underline cursor-pointer" onClick={() => window.open(article.url, '_blank')}>
+                                          {article.title} <ExternalLinkIcon className="w-3 h-3 inline ml-1 text-slate-400" />
+                                       </h3>
+                                       <span className="text-xs font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded uppercase tracking-wider mt-1 inline-block">{article.source}</span>
+                                    </div>
+                                    <button
+                                       onClick={() => handleSmartCite(article)}
+                                       disabled={isGenerating}
+                                       className="ml-4 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 flex items-center gap-2 whitespace-nowrap"
+                                    >
+                                       <PenToolIcon className="w-4 h-4" /> Smart Cite
+                                    </button>
+                                 </div>
+                                 <p className="text-sm text-slate-600 leading-relaxed mb-4">{article.summary}</p>
+                                 <div className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                    <code className="text-xs text-slate-500 font-mono flex-1 mr-4 truncate">{article.citation}</code>
+                                    <button onClick={() => copyToClipboard(article.citation)} className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700">
+                                       <CopyIcon className="w-3.5 h-3.5" /> Copy
+                                    </button>
+                                 </div>
+                              </div>
+                           ))}
+                           {researchResults.length === 0 && !isGenerating && !researchGaps.length && (
+                              <div className="text-center py-20 opacity-50">
+                                 <BookOpenIcon className="w-12 h-12 mx-auto mb-2 text-slate-400" />
+                                 <p className="text-slate-500">Search for medical literature to support your case.</p>
+                              </div>
+                           )}
+                        </div>
                      </div>
                   </div>
                </div>
@@ -1312,17 +1430,29 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         </div>
                         <div className="flex items-center gap-3">
                            <button
+                              onClick={() => setIsTemplateModalOpen(true)}
+                              className="flex items-center gap-2 px-3 py-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 rounded-xl transition-all text-xs font-bold"
+                              title="Upload or Paste Template"
+                           >
+                              <LayoutIcon className="w-4 h-4" />
+                              Templates
+                           </button>
+
+                           <div className="h-4 w-px bg-slate-200 mx-1" />
+
+                           <button
                               onClick={async () => {
                                  setIsGenerating(true);
                                  try {
                                     const generatedReport = await draftMedicalLegalReport(
-                                       caseItem,
+                                       { ...caseItem, reportTemplate },
                                        docs,
                                        annotations,
                                        additionalContext,
                                        currentUser.qualifications
                                     );
                                     setReportContent(generatedReport);
+                                    setWriterViewMode('EDIT');
                                  } catch (error) {
                                     console.error("Failed to generate report:", error);
                                     alert("Failed to generate report. Please try again.");
@@ -1345,6 +1475,35 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                  </>
                               )}
                            </button>
+
+                           <button
+                              onClick={handleFinalizeReport}
+                              disabled={isGenerating || !reportContent}
+                              className="bg-emerald-600 text-white px-4 py-1.5 rounded-xl shadow-md shadow-emerald-100 hover:bg-emerald-700 font-bold flex items-center gap-2 text-xs transition-all disabled:opacity-50"
+                           >
+                              <FileCheckIcon className="w-3.5 h-3.5" />
+                              Finalize
+                           </button>
+
+                           <div className="h-4 w-px bg-slate-200 mx-1" />
+
+                           <div className="flex bg-slate-100 p-1 rounded-xl">
+                              <button
+                                 onClick={() => setWriterViewMode('EDIT')}
+                                 className={`p-1.5 rounded-lg transition-all ${writerViewMode === 'EDIT' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}
+                                 title="Edit Mode"
+                              >
+                                 <PencilIcon className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                 onClick={() => setWriterViewMode('FINAL')}
+                                 className={`p-1.5 rounded-lg transition-all ${writerViewMode === 'FINAL' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400'}`}
+                                 title="Final Preview"
+                              >
+                                 <EyeIcon className="w-3.5 h-3.5" />
+                              </button>
+                           </div>
+
                            <div className="h-4 w-px bg-slate-200 mx-1" />
 
                            {/* Voice Input Button */}
@@ -1365,20 +1524,26 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
                            <div className="h-4 w-px bg-slate-200 mx-1" />
                            <button className="text-slate-400 hover:text-indigo-600 p-2"><CopyIcon className="w-4 h-4" /></button>
-                           <button className="text-slate-400 hover:text-indigo-600 p-2"><ArchiveIcon className="w-4 h-4" /></button>
                         </div>
                      </div>
 
                      {/* The Page Container - Unified Editable Workspace */}
                      <div className="w-[8.5in] min-h-[8in] bg-white shadow-2xl shadow-slate-200/50 rounded-sm border border-slate-200 flex flex-col transition-all relative group mb-20 overflow-hidden">
-                        <textarea
-                           ref={textareaRef}
-                           className="flex-1 resize-none outline-none p-12 w-full h-full bg-transparent font-serif text-lg leading-[2] text-slate-800"
-                           value={reportContent}
-                           onChange={(e) => setReportContent(e.target.value)}
-                           onSelect={handleTextSelect}
-                           placeholder={isVoiceActiveWriter ? "🎤 Listening... Speak to dictate your report" : "Start typing your professional medical-legal report here..."}
-                        />
+                        {writerViewMode === 'EDIT' ? (
+                           <textarea
+                              ref={textareaRef}
+                              className="flex-1 resize-none outline-none p-16 w-full h-full bg-transparent font-serif text-lg leading-[2] text-slate-800"
+                              value={reportContent}
+                              onChange={(e) => setReportContent(e.target.value)}
+                              onSelect={handleTextSelect}
+                              placeholder={isVoiceActiveWriter ? "🎤 Listening... Speak to dictate your report" : "Start typing your professional medical-legal report here..."}
+                           />
+                        ) : (
+                           <div
+                              className="flex-1 p-16 w-full h-full bg-transparent font-serif text-lg leading-[2] text-slate-800 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-black overflow-y-auto"
+                              dangerouslySetInnerHTML={{ __html: parse(reportContent) }}
+                           />
+                        )}
                         {isGenerating && (
                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4">
                               <div className="w-12 h-12 border-4 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
@@ -1649,6 +1814,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                </div>
             )}
          </div>
-      </div>
+      </div >
    );
 };

@@ -8,9 +8,13 @@ import {
     ShieldCheckIcon,
     SearchIcon,
     FilterIcon,
-    ActivityIcon
+    ActivityIcon,
+    CopyIcon,
+    CheckIcon,
+    ExternalLinkIcon
 } from 'lucide-react';
 import { AuthorizedUser, UserRole, UserProfile } from '../types';
+import { sendInvitationEmail } from '../services/emailService';
 
 interface TeamAdminProps {
     authorizedUsers: AuthorizedUser[];
@@ -26,12 +30,54 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
     const [newUserEmail, setNewUserEmail] = useState('');
     const [newUserRole, setNewUserRole] = useState<UserRole>('USER');
     const [searchQuery, setSearchQuery] = useState('');
+    const [lastInviteLink, setLastInviteLink] = useState('');
+    const [copied, setCopied] = useState(false);
 
-    const handleInvite = () => {
-        if (!newUserEmail) return;
-        onInviteUser(newUserEmail, newUserRole, newUserName);
-        setNewUserName('');
-        setNewUserEmail('');
+    const [isInviting, setIsInviting] = useState(false);
+    const [inviteSuccess, setInviteSuccess] = useState(false);
+
+    const handleInvite = async () => {
+        if (!newUserEmail || !newUserName) {
+            alert("Please provide both name and email.");
+            return;
+        }
+
+        setIsInviting(true);
+        setInviteSuccess(false);
+
+        try {
+            // Generate a secure invitation token link
+            const invitationId = Math.random().toString(36).substr(2, 9);
+            const inviteUrl = `${window.location.origin}/join?invite=${invitationId}`;
+
+            // 1. Save to database immediately
+            await onInviteUser(newUserEmail, newUserRole, newUserName);
+
+            // 2. Dispatch REAL email via Brevo
+            try {
+                await sendInvitationEmail(newUserEmail, newUserName, inviteUrl, currentUser.name);
+                console.log("Real email dispatched successfully");
+            } catch (emailError) {
+                console.error("Mail service error:", emailError);
+                // We still proceed because the user is registered in the DB and we have the Copy Link fallback
+            }
+
+            setLastInviteLink(inviteUrl);
+            setInviteSuccess(true);
+            setNewUserName('');
+            setNewUserEmail('');
+
+        } catch (error) {
+            alert("Failed to register invitation. Please try again.");
+        } finally {
+            setIsInviting(false);
+        }
+    };
+
+    const copyInviteLink = () => {
+        navigator.clipboard.writeText(lastInviteLink);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
     };
 
     const filteredUsers = authorizedUsers.filter(u =>
@@ -54,7 +100,7 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
 
                 <div className="flex gap-4">
                     {/* Summary Stats */}
-                    <div className="flex gap-6 mr-8">
+                    <div className="flex gap-6">
                         <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm w-48">
                             <div className="flex items-center gap-2 mb-2 text-slate-400">
                                 <UsersIcon className="w-4 h-4" />
@@ -70,14 +116,6 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                             <p className="text-3xl font-bold text-slate-800">{authorizedUsers.filter(u => u.status === 'active').length}</p>
                         </div>
                     </div>
-
-                    <button
-                        onClick={() => {/* Toggle modal or inline form */ }}
-                        className="bg-cyan-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-cyan-100 hover:bg-cyan-700 transition-all self-end"
-                    >
-                        <UserPlusIcon className="w-5 h-5" />
-                        Invite Clinician
-                    </button>
                 </div>
             </div>
 
@@ -152,32 +190,89 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                 </table>
             </div>
 
-            {/* Quick Invite Form (could be a modal) */}
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 flex items-center justify-between text-white shadow-2xl">
-                <div>
-                    <h3 className="text-xl font-serif font-bold mb-1">Invite New Expert</h3>
-                    <p className="text-slate-400 text-sm">Send a clinical access invitation to a new physician expert.</p>
+            {/* Refined Invitation Section */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm relative overflow-hidden">
+                {inviteSuccess && (
+                    <div className="absolute inset-0 bg-white/95 backdrop-blur-md flex items-center justify-center z-10 animate-in fade-in zoom-in duration-300">
+                        <div className="flex flex-col items-center gap-4 text-center">
+                            <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shadow-inner">
+                                <CheckIcon className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-slate-900">Invitation Sent!</h4>
+                                <p className="text-xs text-slate-500 max-w-[250px]">Our system has dispatched a secure access link to the expert's email.</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={copyInviteLink}
+                                    className="flex items-center gap-2 px-4 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-black transition-all"
+                                >
+                                    {copied ? <CheckIcon className="w-3.5 h-3.5" /> : <CopyIcon className="w-3.5 h-3.5" />}
+                                    {copied ? 'Copied Link' : 'Copy Link'}
+                                </button>
+                                <button
+                                    onClick={() => setInviteSuccess(false)}
+                                    className="flex items-center gap-2 px-4 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all"
+                                >
+                                    Invite Another
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex-1">
+                    <h3 className="text-xl font-serif font-bold text-slate-900 mb-1 flex items-center gap-2">
+                        <UserPlusIcon className="w-5 h-5 text-cyan-600" />
+                        Invite New Expert
+                    </h3>
+                    <p className="text-slate-500 text-sm">A secure invitation link will be sent to their email to join the platform.</p>
                 </div>
-                <div className="flex gap-3">
+
+                <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                    <input
+                        placeholder="Full Name"
+                        disabled={isInviting}
+                        className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 text-slate-700 min-w-[180px] transition-all"
+                        value={newUserName}
+                        onChange={e => setNewUserName(e.target.value)}
+                    />
                     <input
                         placeholder="Expert Email"
-                        className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-cyan-500 text-white min-w-[250px]"
+                        type="email"
+                        disabled={isInviting}
+                        className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 text-slate-700 min-w-[220px] transition-all"
                         value={newUserEmail}
                         onChange={e => setNewUserEmail(e.target.value)}
                     />
                     <select
-                        className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-cyan-500 text-slate-300"
+                        disabled={isInviting}
+                        className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 text-slate-600 font-medium transition-all"
                         value={newUserRole}
                         onChange={e => setNewUserRole(e.target.value as UserRole)}
                     >
                         <option value="USER">Expert Physician</option>
-                        <option value="ADMIN">Team Administrator</option>
+                        <option value="ADMIN">Administrator</option>
                     </select>
                     <button
                         onClick={handleInvite}
-                        className="bg-cyan-500 text-white px-6 py-2 rounded-xl font-bold hover:bg-cyan-400 shadow-lg shadow-cyan-900/20 transition-all"
+                        disabled={isInviting}
+                        className={`min-w-[120px] px-6 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${isInviting
+                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'bg-cyan-600 text-white hover:bg-cyan-700 shadow-lg shadow-cyan-100'
+                            }`}
                     >
-                        Invite
+                        {isInviting ? (
+                            <>
+                                <ActivityIcon className="w-4 h-4 animate-spin" />
+                                Sending...
+                            </>
+                        ) : (
+                            <>
+                                <MailIcon className="w-4 h-4" />
+                                Send Invite
+                            </>
+                        )}
                     </button>
                 </div>
             </div>

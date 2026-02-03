@@ -20,7 +20,9 @@ import {
   Trash2Icon,
   FileTextIcon,
   ChevronDownIcon,
-  CheckIcon
+  CheckIcon,
+  LayoutListIcon,
+  SquareIcon
 } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
 import { processAnnotationInput } from '../services/geminiService';
@@ -88,10 +90,49 @@ const AnnotationPopup: React.FC<any> = ({
           }
         }
       }
+      return result; // Return result for unified voice workflow
     } catch (err) {
       console.error("Refine error:", err);
+      return null;
     } finally {
       setIsRefining(false);
+    }
+  };
+
+  const handleVoiceConfirm = async () => {
+    if (!pendingText.trim() || isRefining) return;
+
+    setIsRefining(true);
+    try {
+      // 1. Refine with AI
+      const result = await processAnnotationInput(pendingText);
+      let finalDate = pendingDate;
+
+      if (result.extractedDate) {
+        const dateMatch = result.extractedDate.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+        if (dateMatch) {
+          finalDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
+        }
+      }
+
+      // 2. Commit directly with the refined values
+      onCommit(result.refinedText || pendingText, finalDate);
+    } catch (err) {
+      console.error("Voice confirm error:", err);
+      onCommit(); // Fallback to normal commit if AI fails
+    } finally {
+      setIsRefining(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (activeTool === 'VOICE') {
+        handleVoiceConfirm();
+      } else {
+        onCommit();
+      }
     }
   };
 
@@ -156,6 +197,7 @@ const AnnotationPopup: React.FC<any> = ({
           placeholder={activeTool === 'VOICE' ? "Voice transcription appearing here..." : "Type your clinical observation..."}
           value={pendingText}
           onChange={e => setPendingText(e.target.value)}
+          onKeyDown={handleKeyDown}
           className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-[13px] h-28 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all leading-relaxed text-slate-700"
         />
         <button
@@ -177,10 +219,11 @@ const AnnotationPopup: React.FC<any> = ({
         </button>
         <button
           disabled={!pendingText.trim() || isRefining}
-          onClick={onCommit}
-          className="py-2.5 bg-indigo-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-indigo-700 disabled:opacity-50 shadow-lg shadow-indigo-100 transition-all active:scale-[0.98]"
+          onClick={() => onCommit()}
+          className="py-2.5 bg-indigo-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-indigo-700 disabled:opacity-50 shadow-lg shadow-indigo-100 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
         >
-          Save Note
+          {isRefining && <Loader2Icon className="w-3 h-3 animate-spin" />}
+          {isRefining ? 'Refining...' : 'Save Note'}
         </button>
       </div>
     </div>
@@ -190,23 +233,48 @@ const AnnotationPopup: React.FC<any> = ({
 const PDFPage: React.FC<any> = ({
   pageNumber, pdfDoc, scale, annotations, onPageClick, activeTool, pendingAnnotation, isPendingOnThisPage, onCancelPending, onCommitPending,
   pendingText, setPendingText, pendingAuthor, setPendingAuthor, pendingDate, setPendingDate, availableAuthors, activeCategory, onCycleCategory, getCategoryColor, setActiveCategory,
-  focusedAnnotationId, onEditExisting
+  focusedAnnotationId, onEditExisting, onVisible
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [isRendering, setIsRendering] = useState(true);
 
+  // Intersection observer for continuous scroll
+  useEffect(() => {
+    if (!onVisible) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+            onVisible(pageNumber);
+          }
+        });
+      },
+      { threshold: [0.1, 0.5, 0.9], rootMargin: '-10% 0px -10% 0px' }
+    );
+
+    if (wrapperRef.current) {
+      observer.observe(wrapperRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [pageNumber, onVisible]);
+
   useEffect(() => {
     if (focusedAnnotationId && wrapperRef.current) {
       const activeAnn = annotations.find(a => a.id === focusedAnnotationId);
       if (activeAnn) {
         // Smooth scroll to the focused annotation
-        const container = wrapperRef.current.parentElement?.parentElement;
+        const container = wrapperRef.current.closest('.overflow-auto');
         if (container) {
-          const rect = wrapperRef.current.getBoundingClientRect();
-          const targetY = (activeAnn.y / 100) * rect.height;
-          container.scrollTo({ top: targetY - container.clientHeight / 2, behavior: 'smooth' });
+          const pageRect = wrapperRef.current.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          const targetYInPage = (activeAnn.y / 100) * pageRect.height;
+
+          const targetScrollTop = container.scrollTop + (pageRect.top - containerRect.top) + targetYInPage - (container.clientHeight / 2);
+
+          container.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
         }
       }
     }
@@ -250,7 +318,7 @@ const PDFPage: React.FC<any> = ({
   };
 
   return (
-    <div ref={wrapperRef} className="relative bg-white shadow-lg mb-4 mx-auto" onMouseUp={handleMouseUp}>
+    <div id={`pdf-page-${pageNumber}`} ref={wrapperRef} className="relative bg-white shadow-lg mb-4 mx-auto" onMouseUp={handleMouseUp}>
       <canvas ref={canvasRef} className="block" />
       <div ref={textLayerRef} className="textLayer absolute inset-0" style={{ pointerEvents: activeTool === 'TEXT' ? 'auto' : 'none' }} />
       {isRendering && <div className="absolute inset-0 flex items-center justify-center bg-white/50"><Loader2Icon className="w-8 h-8 animate-spin text-indigo-400" /></div>}
@@ -291,6 +359,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [error, setError] = useState<{ message: string; isCors: boolean } | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
   const [showDocMenu, setShowDocMenu] = useState(false);
+  const [isContinuous, setIsContinuous] = useState(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const [pendingAnnotation, setPendingAnnotation] = useState<any>(null);
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
@@ -298,12 +368,34 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [pendingAuthor, setPendingAuthor] = useState('Dr. User');
   const [pendingDate, setPendingDate] = useState('');
 
+  const jumpToPage = (targetPage: number, smooth = true) => {
+    const page = Math.max(1, Math.min(numPages, targetPage));
+    setCurrentPage(page);
+
+    if (isContinuous && scrollRef.current) {
+      const pageElement = document.getElementById(`pdf-page-${page}`);
+      if (pageElement) {
+        pageElement.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+      }
+    }
+  };
+
+  const handlePageVisible = React.useCallback((pageNumber: number) => {
+    if (isContinuous) {
+      setCurrentPage(pageNumber);
+    }
+  }, [isContinuous]);
+
   // Sync with initialPage from prop for navigation jumps
   useEffect(() => {
     if (initialPage && initialPage !== currentPage) {
-      setCurrentPage(initialPage);
+      if (isContinuous) {
+        jumpToPage(initialPage, false);
+      } else {
+        setCurrentPage(initialPage);
+      }
     }
-  }, [initialPage]);
+  }, [initialPage, numPages]); // Added numPages to ensure we can jump once doc is loaded
 
   // Handle focused annotation from props
   useEffect(() => {
@@ -345,21 +437,37 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     loadPdf();
   }, [doc.url]);
 
-  const handleCommitPending = () => {
+  const handleCommitPending = (manualText?: string, manualDate?: string) => {
+    const textToUse = manualText !== undefined ? manualText : pendingText;
+    const dateToUse = manualDate !== undefined ? manualDate : pendingDate;
+
     if (editingAnnotation) {
       onUpdateAnnotation({
         ...editingAnnotation,
-        text: pendingText,
+        text: textToUse,
         category: activeCategory,
         author: pendingAuthor,
-        eventDate: pendingDate
+        eventDate: dateToUse
       });
       setEditingAnnotation(null);
       setPendingText('');
       setPendingDate('');
       onClearFocus?.();
     } else if (pendingAnnotation) {
-      onAddAnnotation(pendingAnnotation.page, pendingText, activeCategory, pendingAnnotation.x, pendingAnnotation.y, pendingAnnotation.type, undefined, undefined, undefined, pendingAuthor, pendingDate, undefined);
+      onAddAnnotation(
+        pendingAnnotation.page,
+        textToUse,
+        activeCategory,
+        pendingAnnotation.x,
+        pendingAnnotation.y,
+        pendingAnnotation.type,
+        undefined,
+        undefined,
+        undefined,
+        pendingAuthor,
+        dateToUse,
+        undefined
+      );
       setPendingAnnotation(null);
       setPendingText('');
       setPendingDate('');
@@ -571,10 +679,26 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           )}
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex bg-slate-100 p-1 rounded-lg">
+            <button
+              onClick={() => setIsContinuous(!isContinuous)}
+              className={`p-1.5 rounded transition-all ${isContinuous ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+              title={isContinuous ? "Switch to Single Page" : "Switch to Continuous Scrolling"}
+            >
+              <LayoutListIcon className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setIsContinuous(!isContinuous)}
+              className={`p-1.5 rounded transition-all ${!isContinuous ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+              title={isContinuous ? "Switch to Single Page" : "Switch to Continuous Scrolling"}
+            >
+              <SquareIcon className="w-4 h-4" />
+            </button>
+          </div>
           <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border">
-            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1} className="p-1 disabled:opacity-30"><ChevronLeftIcon className="w-4 h-4" /></button>
+            <button onClick={() => jumpToPage(currentPage - 1)} disabled={currentPage <= 1} className="p-1 disabled:opacity-30"><ChevronLeftIcon className="w-4 h-4" /></button>
             <span className="text-xs font-bold px-2">{currentPage} / {numPages}</span>
-            <button onClick={() => setCurrentPage(p => Math.min(numPages, p + 1))} disabled={currentPage >= numPages} className="p-1 disabled:opacity-30"><ChevronRightIcon className="w-4 h-4" /></button>
+            <button onClick={() => jumpToPage(currentPage + 1)} disabled={currentPage >= numPages} className="p-1 disabled:opacity-30"><ChevronRightIcon className="w-4 h-4" /></button>
           </div>
           <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className="p-1.5 text-slate-500 hover:text-indigo-600"><ZoomOutIcon className="w-4 h-4" /></button>
           <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 text-slate-500 hover:text-indigo-600"><ZoomInIcon className="w-4 h-4" /></button>
@@ -582,51 +706,96 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       </div>
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 overflow-auto p-8 bg-slate-200/50">
+        <div ref={scrollRef} className="flex-1 overflow-auto p-8 bg-slate-200/50">
           {loading ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400">
               <Loader2Icon className="w-10 h-10 animate-spin mb-4 text-indigo-500" />
               <p className="font-serif italic text-slate-500">Decrypting & Loading Clinical Record...</p>
             </div>
           ) : (
-            <div className="max-w-4xl mx-auto pb-20">
-              <PDFPage
-                pageNumber={currentPage}
-                pdfDoc={pdfDoc}
-                scale={scale}
-                annotations={annotations.filter(a => a.page === currentPage)}
-                onPageClick={(pg: any, x: any, y: any, t: any) => {
-                  setPendingAnnotation({ page: pg, x, y, type: t });
-                  setEditingAnnotation(null);
-                  setPendingText('');
-                  setPendingDate('');
-                  onClearFocus?.();
-                }}
-                activeTool={activeTool}
-                pendingAnnotation={pendingAnnotation || (editingAnnotation ? { x: editingAnnotation.x, y: editingAnnotation.y, page: editingAnnotation.page } : null)}
-                isPendingOnThisPage={pendingAnnotation?.page === currentPage || editingAnnotation?.page === currentPage}
-                onCancelPending={() => {
-                  setPendingAnnotation(null);
-                  setEditingAnnotation(null);
-                  setPendingText('');
-                  setPendingDate('');
-                  onClearFocus?.();
-                }}
-                onCommitPending={handleCommitPending}
-                pendingText={pendingText}
-                setPendingText={setPendingText}
-                pendingAuthor={pendingAuthor}
-                setPendingAuthor={setPendingAuthor}
-                pendingDate={pendingDate}
-                setPendingDate={setPendingDate}
-                availableAuthors={['Dr. User']}
-                activeCategory={activeCategory}
-                onCycleCategory={cycleCategory}
-                getCategoryColor={getCategoryColor}
-                setActiveCategory={setActiveCategory}
-                focusedAnnotationId={focusedAnnotationId}
-                onEditExisting={handleFocusAnnotation}
-              />
+            <div className={`max-w-4xl mx-auto pb-20 ${isContinuous ? 'space-y-8' : ''}`}>
+              {isContinuous ? (
+                Array.from({ length: numPages }, (_, i) => i + 1).map((pg) => (
+                  <PDFPage
+                    key={pg}
+                    pageNumber={pg}
+                    pdfDoc={pdfDoc}
+                    scale={scale}
+                    annotations={annotations.filter(a => a.page === pg)}
+                    onPageClick={(p: any, x: any, y: any, t: any) => {
+                      setPendingAnnotation({ page: p, x, y, type: t });
+                      setEditingAnnotation(null);
+                      setPendingText('');
+                      setPendingDate('');
+                      onClearFocus?.();
+                    }}
+                    activeTool={activeTool}
+                    pendingAnnotation={pendingAnnotation || (editingAnnotation ? { x: editingAnnotation.x, y: editingAnnotation.y, page: editingAnnotation.page } : null)}
+                    isPendingOnThisPage={pendingAnnotation?.page === pg || editingAnnotation?.page === pg}
+                    onCancelPending={() => {
+                      setPendingAnnotation(null);
+                      setEditingAnnotation(null);
+                      setPendingText('');
+                      setPendingDate('');
+                      onClearFocus?.();
+                    }}
+                    onCommitPending={handleCommitPending}
+                    pendingText={pendingText}
+                    setPendingText={setPendingText}
+                    pendingAuthor={pendingAuthor}
+                    setPendingAuthor={setPendingAuthor}
+                    pendingDate={pendingDate}
+                    setPendingDate={setPendingDate}
+                    availableAuthors={['Dr. User']}
+                    activeCategory={activeCategory}
+                    onCycleCategory={cycleCategory}
+                    getCategoryColor={getCategoryColor}
+                    setActiveCategory={setActiveCategory}
+                    focusedAnnotationId={focusedAnnotationId}
+                    onEditExisting={handleFocusAnnotation}
+                    onVisible={handlePageVisible}
+                  />
+                ))
+              ) : (
+                <PDFPage
+                  pageNumber={currentPage}
+                  pdfDoc={pdfDoc}
+                  scale={scale}
+                  annotations={annotations.filter(a => a.page === currentPage)}
+                  onPageClick={(pg: any, x: any, y: any, t: any) => {
+                    setPendingAnnotation({ page: pg, x, y, type: t });
+                    setEditingAnnotation(null);
+                    setPendingText('');
+                    setPendingDate('');
+                    onClearFocus?.();
+                  }}
+                  activeTool={activeTool}
+                  pendingAnnotation={pendingAnnotation || (editingAnnotation ? { x: editingAnnotation.x, y: editingAnnotation.y, page: editingAnnotation.page } : null)}
+                  isPendingOnThisPage={pendingAnnotation?.page === currentPage || editingAnnotation?.page === currentPage}
+                  onCancelPending={() => {
+                    setPendingAnnotation(null);
+                    setEditingAnnotation(null);
+                    setPendingText('');
+                    setPendingDate('');
+                    onClearFocus?.();
+                  }}
+                  onCommitPending={handleCommitPending}
+                  pendingText={pendingText}
+                  setPendingText={setPendingText}
+                  pendingAuthor={pendingAuthor}
+                  setPendingAuthor={setPendingAuthor}
+                  pendingDate={pendingDate}
+                  setPendingDate={setPendingDate}
+                  availableAuthors={['Dr. User']}
+                  activeCategory={activeCategory}
+                  onCycleCategory={cycleCategory}
+                  getCategoryColor={getCategoryColor}
+                  setActiveCategory={setActiveCategory}
+                  focusedAnnotationId={focusedAnnotationId}
+                  onEditExisting={handleFocusAnnotation}
+                  onVisible={handlePageVisible}
+                />
+              )}
             </div>
           )}
         </div>

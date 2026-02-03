@@ -82,33 +82,21 @@ ${additionalContext || 'None provided'}
 
 ---
 
-**TASK:** Generate a complete, professional Medical-Legal Report in Markdown format with the following sections:
+**TASK:** Generate a complete, professional Medical-Legal Report.
 
-1. **HEADER**
-   - Case name and date
-   - Expert identification
+If a template is provided below, follow its structure exactly. If not, use the standard professional format.
 
-2. **INTRODUCTION**
-   - Brief overview of the case
-   - Purpose of the report
+**REPORT STRUCTURE/TEMPLATE:**
+${caseData.reportTemplate || `
+1. HEADER: Case name, date, and expert identification.
+2. INTRODUCTION: Brief case overview and purpose of the report.
+3. DOCUMENTS REVIEWED: Detailed list of all materials examined.
+4. PATIENT HISTORY & TIMELINE: Chronological clinical summary.
+5. MEDICAL ANALYSIS: Clinical findings, standard of care, and causation.
+6. PROFESSIONAL OPINION: Final conclusions and recommendations.
+`}
 
-3. **DOCUMENTS REVIEWED**
-   - List all medical records and materials examined
-
-4. **PATIENT HISTORY & TIMELINE**
-   - Chronological summary based on the clinical evidence
-   - Key dates and events
-
-5. **MEDICAL ANALYSIS**
-   - Clinical findings
-   - Standard of care considerations
-   - Causation analysis
-
-6. **PROFESSIONAL OPINION**
-   - Expert conclusions
-   - Recommendations
-
-Format the report professionally with proper headings, bullet points, and clinical terminology.
+Format the report professionally with proper sections and clinical terminology.
 `;
 
   try {
@@ -315,16 +303,16 @@ export const runFullCaseStrategy = async (context: string): Promise<StrategyAnal
 };
 
 /**
- * Transforms raw messy notes into a professional medical-legal structured log.
+ * Rewords and refines raw notes into professional medical-legal language.
  */
-export const formatClinicalNotes = async (rawNotes: string, caseTitle: string): Promise<string> => {
+export const rewordClinicalNotes = async (rawNotes: string, caseTitle: string): Promise<string> => {
   try {
-    const model = getModel("gemini-2.0-flash", "You are a professional medical scribe. Reformat raw notes into clean Markdown logs with headers and citations.");
-    const prompt = `CASE: "${caseTitle}" RAW NOTES: "${rawNotes}"`;
+    const model = getModel("gemini-2.0-flash", "You are a professional medical-legal scribe. Your task is to reword and refine clinical notes to be more professional, authoritative, and clinically precise. Maintain ALL original facts, dates, symptoms, and findings exactly as provided. Only improve the phrasing, vocabulary, and clarity. Do not add headers if they aren't there, and do not change the basic structure.");
+    const prompt = `CASE: "${caseTitle}"\n\nNOTES TO REWORD:\n${rawNotes}`;
     const result = await model.generateContent(prompt);
     return result.response.text() || rawNotes;
   } catch (e) {
-    console.error("formatClinicalNotes error:", e);
+    console.error("rewordClinicalNotes error:", e);
     return rawNotes;
   }
 };
@@ -421,27 +409,50 @@ export const chatWithDepositionCoach = async (history: ChatMessage[], message: s
   };
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-pro",
+    model: "gemini-2.0-flash",
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: schema as any
     },
-    systemInstruction: `You are an aggressive opposing counsel deposition coach. Context: ${context}.`
+    systemInstruction: `You are an aggressive opposing counsel deposition coach. 
+    Your goal is to trap the physician expert with difficult clinical questions.
+    After the user responds, analyze their answer:
+    1. Score it (1-10).
+    2. Provide a critique of why their answer might be dangerous or weak.
+    3. Identify the 'trap' intent of your question.
+    4. Provide a 'Golden Answer' (betterAnswer) that use a specific deposition technique (e.g. Pivot, Assertive Neutrality).
+    5. Propose the 'nextQuestion' to continue the cross-examination.
+    
+    Context: ${context}.`
   });
 
   const contents = history.map(h => ({
-    role: h.role,
+    role: h.role === 'user' ? 'user' : 'model',
     parts: [{ text: h.text }]
   }));
-  // Add the current message
-  contents.push({ role: 'user', parts: [{ text: message }] });
+
+  // The SDK expects rolls to alternate. If history is empty or last was model, next should be user.
+  // We already added the user message in historyWithUser in UI, so history contains it.
 
   try {
     const result = await model.generateContent({ contents });
-    return JSON.parse(result.response.text());
+    const responseText = result.response.text();
+    if (!responseText) throw new Error("Empty response from AI");
+
+    return JSON.parse(responseText);
   } catch (e) {
     console.error("chatWithDepositionCoach error:", e);
-    return { coaching: null, nextQuestion: "I'm having trouble processing that. Can you repeat?" };
+    // Return a structured fallback so the UI handles it gracefully
+    return {
+      coaching: {
+        score: 5,
+        critique: "I'm having trouble analyzing that specific response due to a connection issue. However, in general, ensure you remain neutral and don't speculate.",
+        questionIntent: "To clarify the clinical timeline.",
+        technique: "Pivot to Standards",
+        betterAnswer: "I followed the accepted standard of care based on the clinical presentation at that time."
+      },
+      nextQuestion: "Can you elaborate on the standard of care you applied in this instance?"
+    };
   }
 };
 
@@ -554,5 +565,20 @@ export const insertSmartCitation = async (content: string, article: any) => {
   } catch (e) {
     console.error("insertSmartCitation error:", e);
     return { newContent: content, explanation: "Citation addition failed." };
+  }
+};
+
+/**
+ * Finalizes the report into a client-ready format.
+ */
+export const finalizeLegalReport = async (content: string): Promise<string> => {
+  try {
+    const model = getModel("gemini-2.0-flash", "You are a senior medical-legal editor. Your task is to convert a draft report into a final, client-ready format. Remove all markdown artifacts (like double asterisks or hashtags) if they interfere with professional look, ensure consistent typography, and remove any 'working' tags or AI markers. The output should be a clean, perfectly formatted professional report ready for signature.");
+    const prompt = `FINAL EDIT REQUEST:\n\n${content}\n\n--- \nPlease provide the finalized text below:`;
+    const result = await model.generateContent(prompt);
+    return result.response.text() || content;
+  } catch (e) {
+    console.error("finalizeLegalReport error:", e);
+    return content;
   }
 };

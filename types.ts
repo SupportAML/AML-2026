@@ -101,6 +101,7 @@ export interface Case {
   isFinal?: boolean;
   signature?: string;
   signedDate?: string;
+  reportTemplate?: string;
 }
 
 export interface StrategyScenario {
