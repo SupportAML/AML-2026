@@ -20,6 +20,12 @@ dist-ssr
 .env.test.local
 .env.production.local
 
+# Security cleanup files - local use only
+secrets-to-remove.txt
+cleanup-git-history.ps1
+run-git-cleanup.ps1
+
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
