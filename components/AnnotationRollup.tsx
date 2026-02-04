@@ -257,7 +257,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
             reportTemplate !== caseItem.reportTemplate;
 
          if (hasChanges) {
-            console.log('💾 Persisting Clinical Workspace state...');
+            // console.log('💾 Persisting Clinical Workspace state...');
             onUpdateCase({
                ...caseItem,
                reportContent,
@@ -279,11 +279,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    useEffect(() => {
       // Update local state if case data has been modified externally
       if (caseItem.researchResults && JSON.stringify(caseItem.researchResults) !== JSON.stringify(researchResults)) {
-         console.log('🔄 Syncing research results from case data...');
+         // console.log('🔄 Syncing research results from case data...');
          setResearchResults(caseItem.researchResults);
       }
       if (caseItem.researchGaps && JSON.stringify(caseItem.researchGaps) !== JSON.stringify(researchGaps)) {
-         console.log('🔄 Syncing research gaps from case data...');
+         // console.log('🔄 Syncing research gaps from case data...');
          setResearchGaps(caseItem.researchGaps);
       }
    }, [caseItem.id]); // Only run when case ID changes (switching cases)

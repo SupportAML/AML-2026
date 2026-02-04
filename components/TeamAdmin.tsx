@@ -35,6 +35,8 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
 
     const [isInviting, setIsInviting] = useState(false);
     const [inviteSuccess, setInviteSuccess] = useState(false);
+    const [emailSent, setEmailSent] = useState(false);
+    const [emailError, setEmailError] = useState('');
 
     const handleInvite = async () => {
         if (!newUserEmail || !newUserName) {
@@ -44,6 +46,8 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
 
         setIsInviting(true);
         setInviteSuccess(false);
+        setEmailSent(false);
+        setEmailError('');
 
         try {
             // Generate a secure invitation token link
@@ -52,14 +56,18 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
 
             // 1. Save to database immediately
             await onInviteUser(newUserEmail, newUserRole, newUserName);
+            // console.log("✅ User added to database");
 
             // 2. Dispatch REAL email via Brevo
             try {
-                await sendInvitationEmail(newUserEmail, newUserName, inviteUrl, currentUser.name);
-                console.log("Real email dispatched successfully");
+                const result = await sendInvitationEmail(newUserEmail, newUserName, inviteUrl, currentUser.name);
+                // console.log("✅ Email sent successfully:", result);
+                setEmailSent(true);
             } catch (emailError) {
-                console.error("Mail service error:", emailError);
-                // We still proceed because the user is registered in the DB and we have the Copy Link fallback
+                console.error("❌ Email service error:", emailError);
+                const errorMessage = emailError instanceof Error ? emailError.message : 'Unknown email error';
+                setEmailError(errorMessage);
+                // Continue - user is registered, can use Copy Link fallback
             }
 
             setLastInviteLink(inviteUrl);
@@ -68,6 +76,7 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
             setNewUserEmail('');
 
         } catch (error) {
+            console.error("❌ Failed to register invitation:", error);
             alert("Failed to register invitation. Please try again.");
         } finally {
             setIsInviting(false);
@@ -194,13 +203,28 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
             <div className="bg-white border border-slate-200 rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm relative overflow-hidden">
                 {inviteSuccess && (
                     <div className="absolute inset-0 bg-white/95 backdrop-blur-md flex items-center justify-center z-10 animate-in fade-in zoom-in duration-300">
-                        <div className="flex flex-col items-center gap-4 text-center">
-                            <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shadow-inner">
+                        <div className="flex flex-col items-center gap-4 text-center max-w-md">
+                            <div className={`w-12 h-12 ${emailSent ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'} rounded-full flex items-center justify-center shadow-inner`}>
                                 <CheckIcon className="w-6 h-6" />
                             </div>
                             <div>
-                                <h4 className="font-bold text-slate-900">Invitation Sent!</h4>
-                                <p className="text-xs text-slate-500 max-w-[250px]">Our system has dispatched a secure access link to the expert's email.</p>
+                                <h4 className="font-bold text-slate-900">
+                                    {emailSent ? 'Invitation Sent!' : 'User Registered!'}
+                                </h4>
+                                <p className="text-xs text-slate-500 max-w-[280px] mt-1">
+                                    {emailSent ? (
+                                        'Our system has dispatched a secure access link to the expert\'s email.'
+                                    ) : emailError ? (
+                                        <>Email delivery failed: {emailError}</>
+                                    ) : (
+                                        'User added but email could not be sent. Use the link below.'
+                                    )}
+                                </p>
+                                {!emailSent && (
+                                    <p className="text-xs text-cyan-600 font-medium mt-2">
+                                        ✓ User can still join using the invite link below
+                                    </p>
+                                )}
                             </div>
                             <div className="flex gap-2">
                                 <button
@@ -211,7 +235,11 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                                     {copied ? 'Copied Link' : 'Copy Link'}
                                 </button>
                                 <button
-                                    onClick={() => setInviteSuccess(false)}
+                                    onClick={() => {
+                                        setInviteSuccess(false);
+                                        setEmailError('');
+                                        setEmailSent(false);
+                                    }}
                                     className="flex items-center gap-2 px-4 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all"
                                 >
                                     Invite Another

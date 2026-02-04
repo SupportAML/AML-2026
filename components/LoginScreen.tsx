@@ -15,21 +15,48 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onDemoLogin }) => {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setErrorCode(null);
 
     try {
+      const cleanEmail = email.trim();
       if (isRegistering) {
-        const userCred = await createUserWithEmailAndPassword(auth, email, password);
+        const userCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
         await updateProfile(userCred.user, { displayName: name });
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        await signInWithEmailAndPassword(auth, cleanEmail, password);
       }
     } catch (err: any) {
-      setError(err.message);
+      console.error("Auth Error:", err.code, err.message);
+
+      // Clean up common Firebase error codes into user-friendly messages
+      const code = err.code || '';
+      setErrorCode(code);
+
+      if (code === 'auth/invalid-credential' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found') {
+        setError('The email or password you entered is incorrect.');
+      } else if (code === 'auth/email-already-in-use') {
+        setError('This email is already registered. Please sign in instead.');
+      } else if (code === 'auth/weak-password') {
+        setError('Password should be at least 6 characters long.');
+      } else if (code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.');
+      } else if (code === 'auth/network-request-failed') {
+        setError('Network error. Please check your internet connection.');
+      } else if (code === 'auth/too-many-requests') {
+        setError('Too many failed attempts. Please try again later.');
+      } else {
+        // Fallback: strip technical prefix if it exists
+        const cleanMessage = err.message.replace(/^Firebase: Error \(auth\//, '').replace(/\)\.?$/, '').replace(/-/g, ' ');
+        setError(cleanMessage.charAt(0).toUpperCase() + cleanMessage.slice(1) || 'An unexpected error occurred.');
+      }
     } finally {
       setLoading(false);
     }
@@ -82,13 +109,28 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onDemoLogin }) => {
               </div>
             </div>
 
-            {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+            {errorCode === 'auth/email-already-in-use' ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col gap-2">
+                <p className="text-xs text-amber-700 font-bold">This email is already registered.</p>
+                <button
+                  type="button"
+                  onClick={() => { setIsRegistering(false); setError(null); }}
+                  className="text-[10px] font-black uppercase tracking-widest text-amber-900 hover:underline text-left"
+                >
+                  Switch to Login Mode →
+                </button>
+              </div>
+            ) : error && (
+              <p className="text-xs text-red-500 font-bold bg-red-50 border border-red-100 p-3 rounded-xl">
+                {error}
+              </p>
+            )}
 
             <button
               type="submit" disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-3 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-700 transition-all shadow-lg"
+              className="w-full flex items-center justify-center gap-2 py-3 bg-cyan-600 text-white rounded-xl font-bold hover:bg-cyan-700 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50"
             >
-              {loading ? <Loader2Icon className="w-5 h-5 animate-spin" /> : <>{isRegistering ? 'Create Account' : 'Secure Login'} <ArrowRightIcon className="w-4 h-4" /></>}
+              {loading ? <Loader2Icon className="w-5 h-5 animate-spin" /> : <>{isRegistering ? 'Create New Account' : 'Secure Login'} <ArrowRightIcon className="w-4 h-4" /></>}
             </button>
           </form>
 
@@ -102,10 +144,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onDemoLogin }) => {
             </button>
 
             <button
-              onClick={() => setIsRegistering(!isRegistering)}
-              className="text-xs font-bold text-slate-400 hover:text-cyan-600 transition-colors"
+              onClick={() => {
+                setIsRegistering(!isRegistering);
+                setError(null);
+              }}
+              className="text-xs font-bold text-slate-400 hover:text-cyan-600 transition-colors text-center"
             >
-              {isRegistering ? "Already have an account? Sign In" : "Need access? Register here"}
+              {isRegistering ? "Already have an account? Sign In" : "Need clinical access? Register here"}
             </button>
           </div>
         </div>

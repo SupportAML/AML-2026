@@ -53,17 +53,43 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
     useEffect(() => {
         if (!pdfDoc || !canvasRef.current) return;
 
+        let active = true;
+        let renderTask: any = null;
+
         const renderPage = async () => {
             try {
                 const pdfPage = await pdfDoc.getPage(page);
                 const viewport = pdfPage.getViewport({ scale: 1.0 });
-                const canvas = canvasRef.current!;
-                const context = canvas.getContext('2d')!;
+                const canvas = canvasRef.current;
+                if (!canvas || !active) return;
+
+                const context = canvas.getContext('2d');
+                if (!context) return;
 
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
 
-                await pdfPage.render({ canvasContext: context, viewport }).promise;
+                // Cancel previous render task if exists
+                if (renderTask) {
+                    renderTask.cancel();
+                }
+
+                if (!active) return;
+
+                // Start new render task
+                renderTask = pdfPage.render({ canvasContext: context, viewport });
+
+                try {
+                    await renderTask.promise;
+                } catch (err: any) {
+                    // Ignore cancellation errors
+                    if (err?.name === 'RenderingCancelledException') {
+                        return;
+                    }
+                    throw err;
+                }
+
+                if (!active) return;
 
                 // Scroll to highlighted annotation if present
                 if (highlightAnnotationId && containerRef.current) {
@@ -74,11 +100,20 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
                     }
                 }
             } catch (err) {
-                console.error("Preview render error:", err);
+                if (active) {
+                    console.error("Preview render error:", err);
+                }
             }
         };
 
         renderPage();
+
+        return () => {
+            active = false;
+            if (renderTask) {
+                renderTask.cancel();
+            }
+        };
     }, [pdfDoc, page, highlightAnnotationId, annotations]);
 
     const getCategoryColor = (cat: string) => {

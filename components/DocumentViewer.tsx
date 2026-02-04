@@ -46,6 +46,7 @@ interface DocumentViewerProps {
   onSetFocus?: (id: string) => void;
   allDocuments?: DocType[];
   onSwitchDocument?: (doc: DocType) => void;
+  currentUser: { name: string; email: string };
 }
 
 const getAvatarColor = (name: string) => {
@@ -282,30 +283,80 @@ const PDFPage: React.FC<any> = ({
 
   useEffect(() => {
     let active = true;
+    let renderTask: any = null; // Track the render task so we can cancel it
+
     const renderPage = async () => {
       if (!pdfDoc || !canvasRef.current || !textLayerRef.current) return;
+
       setIsRendering(true);
+
       try {
         const page = await pdfDoc.getPage(pageNumber);
         const viewport = page.getViewport({ scale });
         const canvas = canvasRef.current;
         const context = canvas.getContext('2d');
-        if (!context) return;
+
+        if (!context || !active) return;
+
+        // Set canvas dimensions
         canvas.height = viewport.height;
         canvas.width = viewport.width;
+
+        // Cancel any previous render task on this canvas
+        if (renderTask) {
+          renderTask.cancel();
+        }
+
+        if (!active) return;
+
+        // Start new render task
+        renderTask = page.render({ canvasContext: context, viewport });
+
+        try {
+          await renderTask.promise;
+        } catch (err: any) {
+          // Ignore cancellation errors
+          if (err?.name === 'RenderingCancelledException') {
+            // console.log('Render cancelled (expected during cleanup)');
+            return;
+          }
+          throw err;
+        }
+
+        if (!active) return;
+
+        // Render text layer
+        const textContent = await page.getTextContent();
+        textLayerRef.current.innerHTML = '';
+        textLayerRef.current.style.height = `${viewport.height}px`;
+        textLayerRef.current.style.width = `${viewport.width}px`;
+
+        await (pdfjsLib as any).renderTextLayer({
+          textContentSource: textContent,
+          container: textLayerRef.current,
+          viewport
+        }).promise;
+
         if (active) {
-          await page.render({ canvasContext: context, viewport }).promise;
-          const textContent = await page.getTextContent();
-          textLayerRef.current.innerHTML = '';
-          textLayerRef.current.style.height = `${viewport.height}px`;
-          textLayerRef.current.style.width = `${viewport.width}px`;
-          await (pdfjsLib as any).renderTextLayer({ textContentSource: textContent, container: textLayerRef.current, viewport }).promise;
           setIsRendering(false);
         }
-      } catch (err) { console.error(err); }
+      } catch (err) {
+        if (active) {
+          console.error('PDF render error:', err);
+          setIsRendering(false);
+        }
+      }
     };
+
     renderPage();
-    return () => { active = false; };
+
+    return () => {
+      active = false;
+      // Cancel render task on unmount or when dependencies change
+      if (renderTask) {
+        renderTask.cancel();
+      }
+    };
   }, [pdfDoc, pageNumber, scale]);
 
   const handleMouseUp = (e: React.MouseEvent) => {
@@ -347,7 +398,8 @@ const PDFPage: React.FC<any> = ({
 const DocumentViewer: React.FC<DocumentViewerProps> = ({
   doc, annotations, onAddAnnotation, onUpdateAnnotation, onDeleteAnnotation, onBack, onOpenClinicalWorkspace,
   googleAccessToken, initialPage = 1, focusedAnnotationId, isEditingFocused, onClearFocus, onSetFocus,
-  allDocuments = [], onSwitchDocument
+  allDocuments = [], onSwitchDocument,
+  currentUser
 }) => {
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [scale, setScale] = useState(1.2);
@@ -365,7 +417,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [pendingAnnotation, setPendingAnnotation] = useState<any>(null);
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
   const [pendingText, setPendingText] = useState('');
-  const [pendingAuthor, setPendingAuthor] = useState('Dr. User');
+  const [pendingAuthor, setPendingAuthor] = useState(currentUser.name);
   const [pendingDate, setPendingDate] = useState('');
 
   const jumpToPage = (targetPage: number, smooth = true) => {
@@ -746,7 +798,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                     setPendingAuthor={setPendingAuthor}
                     pendingDate={pendingDate}
                     setPendingDate={setPendingDate}
-                    availableAuthors={['Dr. User']}
+                    availableAuthors={[currentUser.name]}
                     activeCategory={activeCategory}
                     onCycleCategory={cycleCategory}
                     getCategoryColor={getCategoryColor}
@@ -786,7 +838,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   setPendingAuthor={setPendingAuthor}
                   pendingDate={pendingDate}
                   setPendingDate={setPendingDate}
-                  availableAuthors={['Dr. User']}
+                  availableAuthors={[currentUser.name]}
                   activeCategory={activeCategory}
                   onCycleCategory={cycleCategory}
                   getCategoryColor={getCategoryColor}

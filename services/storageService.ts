@@ -10,7 +10,7 @@ import {
   orderBy
 } from "firebase/firestore";
 import { db, auth } from "../firebase";
-import { Case, Annotation, Document, AuthorizedUser } from "../types";
+import { Case, Annotation, Document, AuthorizedUser, UserRole } from "../types";
 
 const COLL_CASES = "cases";
 const COLL_ANNOTATIONS = "annotations";
@@ -118,7 +118,7 @@ const notifyListeners = (type: 'cases' | 'documents' | 'annotations', filterFn?:
 
 export const enableDemoMode = () => {
   isDemoMode = true;
-  console.log("Storage Service switched to Demo Mode (In-Memory)");
+  // console.log("Storage Service switched to Demo Mode (In-Memory)");
 };
 
 // Helper to remove undefined fields which Firestore rejects
@@ -128,13 +128,17 @@ const cleanData = <T>(data: T): T => {
 
 // --- Subscriptions ---
 
-export const subscribeToCases = (callback: (cases: Case[]) => void) => {
+export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: string, role?: UserRole) => {
   if (isDemoMode) {
-    // Initial call
-    callback([...mockStore.cases]);
+    const filterFn = (c: Case) => {
+      if (!userId || role === 'ADMIN') return true;
+      return c.ownerId === userId || c.assignedUserIds?.includes(userId);
+    };
 
-    // Register listener (simplified: just one global list of case listeners)
-    const listener = (allCases: Case[]) => callback(allCases);
+    // Initial call
+    callback(mockStore.cases.filter(filterFn));
+
+    const listener = (allCases: Case[]) => callback(allCases.filter(filterFn));
     listeners.cases.push(listener);
 
     return () => {
@@ -142,8 +146,26 @@ export const subscribeToCases = (callback: (cases: Case[]) => void) => {
     };
   }
 
+  // For Firestore, if we are ADMIN, we subscribe to everything.
+  // If we are USER, we'd ideally filter in the query, but 'OR' queries across fields are tricky.
+  // For now, we will subscribe to all (within the firm - though firmId isn't implemented yet) 
+  // and let the UI filter, or use a filtered query if possible.
+
+  // Actually, we can at least filter by ownerId if we want to be more secure.
+  // But assignedUserIds is also needed.
+
   return onSnapshot(collection(db, COLL_CASES), (snapshot) => {
-    callback(snapshot.docs.map(d => ({ ...d.data() } as Case)));
+    let allCases = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Case));
+
+    // Filter by user access if not an admin
+    if (role !== 'ADMIN' && userId) {
+      allCases = allCases.filter(c =>
+        c.ownerId === userId ||
+        c.assignedUserIds?.includes(userId)
+      );
+    }
+
+    callback(allCases);
   });
 };
 
@@ -166,7 +188,7 @@ export const subscribeToAnnotations = (caseId: string, callback: (anns: Annotati
 
   const q = query(collection(db, COLL_ANNOTATIONS), where("caseId", "==", caseId));
   return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map(d => ({ ...d.data() } as Annotation)));
+    callback(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Annotation)));
   });
 };
 
@@ -189,7 +211,7 @@ export const subscribeToDocuments = (caseId: string, callback: (docs: Document[]
 
   const q = query(collection(db, COLL_DOCUMENTS), where("caseId", "==", caseId));
   return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map(d => ({ ...d.data() } as Document)));
+    callback(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Document)));
   });
 };
 

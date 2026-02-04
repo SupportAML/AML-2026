@@ -1,81 +1,153 @@
-
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ApexMedLaw</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <script src="https://apis.google.com/js/api.js" async defer></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@700&family=Fraunces:opsz,wght@9..144,700;9..144,900&display=swap" rel="stylesheet">
-    <!-- PDF.js Viewer CSS for correct Text Layer rendering -->
-    <link rel="stylesheet" href="https://unpkg.com/pdfjs-dist@4.0.379/web/pdf_viewer.css">
-    <style>
-      body {
-        font-family: 'Inter', sans-serif;
-      }
-      .font-serif {
-        font-family: 'Fraunces', serif;
-        font-optical-sizing: auto;
-      }
-      /* Custom scrollbar */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #cbd5e1;
-        border-radius: 10px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8;
-      }
-      
-      /* Standard PDF.js Text Layer CSS - Fixes overlay and selection visibility */
-      .textLayer {
-        position: absolute;
-        left: 0;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        overflow: hidden;
-        opacity: 1;
-        line-height: 1.0;
-        text-align: initial;
-        pointer-events: none; /* Managed dynamically in React */
-      }
-      
-      .textLayer span {
-        color: transparent;
-        position: absolute;
-        white-space: pre;
-        cursor: text;
-        transform-origin: 0% 0%;
-      }
-      
-      /* Visible blue selection highlight */
-      .textLayer ::selection {
-        background: rgba(0, 100, 255, 0.2); 
-        color: transparent;
-      }
 
-      /* Markdown Preview Typography */
-      .prose h1 { font-size: 2em; font-weight: 700; margin-bottom: 0.5em; margin-top: 1em; font-family: 'Playfair Display', serif; }
-      .prose h2 { font-size: 1.5em; font-weight: 600; margin-bottom: 0.5em; margin-top: 1em; font-family: 'Playfair Display', serif; color: #1e293b; }
-      .prose h3 { font-size: 1.25em; font-weight: 600; margin-bottom: 0.5em; margin-top: 1em; color: #334155; }
-      .prose p { margin-bottom: 1em; line-height: 1.6; color: #334155; }
-      .prose ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; }
-      .prose ol { list-style-type: decimal; padding-left: 1.5em; margin-bottom: 1em; }
-      .prose blockquote { border-left: 4px solid #e2e8f0; padding-left: 1em; font-style: italic; color: #64748b; }
-      .prose strong { font-weight: 700; color: #0f172a; }
-      .prose em { font-style: italic; }
-    </style>
+<head>
+  <meta charset="UTF-8" />
+  <title>ApexMedLaw - Clinical Legal Workspace</title>
+  <meta name="description"
+    content="Secure medical-legal cloud analysis platform for expert physicians and legal teams.">
+  <meta property="og:title" content="ApexMedLaw">
+  <meta property="og:description" content="Secure medical-legal cloud analysis platform">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; 
+             script-src 'self' 'unsafe-inline' 'unsafe-eval' https://esm.sh https://cdn.tailwindcss.com https://accounts.google.com https://apis.google.com; 
+             style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; 
+             font-src 'self' https://fonts.gstatic.com; 
+             img-src 'self' data: https://firebasestorage.googleapis.com;
+             connect-src 'self' https://firebasestorage.googleapis.com https://api.brevo.com https://generativelanguage.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com;">
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@700&family=Fraunces:opsz,wght@9..144,700;9..144,900&display=swap"
+    rel="stylesheet">
+  <!-- PDF.js Viewer CSS for correct Text Layer rendering -->
+  <link rel="stylesheet" href="https://unpkg.com/pdfjs-dist@4.0.379/web/pdf_viewer.css">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+
+    .font-serif {
+      font-family: 'Fraunces', serif;
+      font-optical-sizing: auto;
+    }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    /* Standard PDF.js Text Layer CSS - Fixes overlay and selection visibility */
+    .textLayer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      overflow: hidden;
+      opacity: 1;
+      line-height: 1.0;
+      text-align: initial;
+      pointer-events: none;
+      /* Managed dynamically in React */
+    }
+
+    .textLayer span {
+      color: transparent;
+      position: absolute;
+      white-space: pre;
+      cursor: text;
+      transform-origin: 0% 0%;
+    }
+
+    /* Visible blue selection highlight */
+    .textLayer ::selection {
+      background: rgba(0, 100, 255, 0.2);
+      color: transparent;
+    }
+
+    /* Markdown Preview Typography */
+    .prose h1 {
+      font-size: 2em;
+      font-weight: 700;
+      margin-bottom: 0.5em;
+      margin-top: 1em;
+      font-family: 'Playfair Display', serif;
+    }
+
+    .prose h2 {
+      font-size: 1.5em;
+      font-weight: 600;
+      margin-bottom: 0.5em;
+      margin-top: 1em;
+      font-family: 'Playfair Display', serif;
+      color: #1e293b;
+    }
+
+    .prose h3 {
+      font-size: 1.25em;
+      font-weight: 600;
+      margin-bottom: 0.5em;
+      margin-top: 1em;
+      color: #334155;
+    }
+
+    .prose p {
+      margin-bottom: 1em;
+      line-height: 1.6;
+      color: #334155;
+    }
+
+    .prose ul {
+      list-style-type: disc;
+      padding-left: 1.5em;
+      margin-bottom: 1em;
+    }
+
+    .prose ol {
+      list-style-type: decimal;
+      padding-left: 1.5em;
+      margin-bottom: 1em;
+    }
+
+    .prose blockquote {
+      border-left: 4px solid #e2e8f0;
+      padding-left: 1em;
+      font-style: italic;
+      color: #64748b;
+    }
+
+    .prose strong {
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    .prose em {
+      font-style: italic;
+    }
+  </style>
   <script type="importmap">
 {
   "imports": {
@@ -91,10 +163,12 @@
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
+  <link rel="stylesheet" href="/index.css">
 </head>
-  <body class="bg-slate-50 text-slate-900">
-    <div id="root"></div>
+
+<body class="bg-slate-50 text-slate-900">
+  <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>
+
 </html>

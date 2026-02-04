@@ -9,7 +9,7 @@ const API_KEY = process.env.API_KEY || "";
 if (!API_KEY) {
   console.error("❌ GEMINI API KEY IS MISSING! Check your .env.local file.");
 } else {
-  console.log("✅ Gemini API Key loaded:", API_KEY.substring(0, 10) + "...");
+  // console.log("✅ Gemini API Key loaded:", API_KEY.substring(0, 10) + "...");
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY);

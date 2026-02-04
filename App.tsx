@@ -4,13 +4,16 @@ import { onAuthStateChanged, signOut, signInAnonymously, updateProfile } from "f
 import { auth } from './firebase';
 import { Case, Document, Annotation, ViewMode, UserProfile, AuthorizedUser, ReviewStatus, UserRole } from './types';
 import Sidebar from './components/Sidebar';
-import CaseList from './components/CaseList';
-import DocumentViewer from './components/DocumentViewer';
-import CaseDetails from './components/CaseDetails';
-import LoginScreen from './components/LoginScreen';
-import Orientation from './components/Orientation';
-import ClientDirectory from './components/ClientDirectory';
-import { AnnotationRollup } from './components/AnnotationRollup';
+const CaseList = React.lazy(() => import('./components/CaseList'));
+const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
+
+// Lazy load major components for code splitting
+const DocumentViewer = React.lazy(() => import('./components/DocumentViewer'));
+const CaseDetails = React.lazy(() => import('./components/CaseDetails'));
+const Orientation = React.lazy(() => import('./components/Orientation'));
+const ClientDirectory = React.lazy(() => import('./components/ClientDirectory'));
+const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup').then(m => ({ default: m.AnnotationRollup })));
+const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
 import { uploadFile } from './services/fileService';
 import {
   subscribeToCases,
@@ -28,7 +31,6 @@ import {
   deleteUserFromStore
 } from './services/storageService';
 import { Loader2Icon, CloudCheckIcon, LogOutIcon, ShieldIcon } from 'lucide-react';
-import { TeamAdmin } from './components/TeamAdmin';
 
 const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -51,9 +53,9 @@ const App: React.FC = () => {
       if (user) {
         setCurrentUser({
           id: user.uid,
-          name: user.displayName || "Dr. User",
+          name: user.displayName || user.email?.split('@')[0] || "Expert User",
           email: user.email || "user@apexmedlaw.com",
-          role: 'ADMIN'
+          role: 'USER' // Default to USER, will be upgraded if in authorizedUsers
         });
       } else {
         // Only clear if we aren't in explicit demo mode
@@ -68,13 +70,22 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    const unsubCases = subscribeToCases(setCases);
+    const unsubCases = subscribeToCases(setCases, currentUser.id, currentUser.role);
     const unsubUsers = subscribeToUsers(setAuthorizedUsers);
     return () => {
       unsubCases();
       unsubUsers();
     };
   }, [currentUser]);
+
+  // Sync user role and profile from authorizedUsers
+  useEffect(() => {
+    if (!currentUser || authorizedUsers.length === 0) return;
+    const profile = authorizedUsers.find(u => u.email.toLowerCase() === currentUser.email.toLowerCase());
+    if (profile && profile.role !== currentUser.role) {
+      setCurrentUser(prev => prev ? { ...prev, role: profile.role } : null);
+    }
+  }, [authorizedUsers, currentUser?.email]);
 
   // Keep activeCase in sync with cases array
   useEffect(() => {
@@ -191,7 +202,7 @@ const App: React.FC = () => {
     imageUrl?: string,
     width?: number,
     height?: number,
-    author: string = 'Dr. User',
+    author?: string,
     eventDate?: string,
     eventTime?: string,
     documentId?: string
@@ -204,7 +215,7 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       documentId: finalDocId,
       caseId: activeCase.id,
-      page, text, author, category, x, y, width, height, imageUrl, eventDate, eventTime,
+      page, text, author: author || currentUser?.name || 'Expert User', category, x, y, width, height, imageUrl, eventDate, eventTime,
       timestamp: new Date().toLocaleString(),
       type
     };
@@ -271,7 +282,15 @@ const App: React.FC = () => {
     </div>
   );
 
-  if (!currentUser) return <LoginScreen onDemoLogin={handleDemoLogin} />;
+  if (!currentUser) return (
+    <React.Suspense fallback={
+      <div className="h-screen flex items-center justify-center bg-slate-50">
+        <Loader2Icon className="w-8 h-8 text-indigo-500 animate-spin" />
+      </div>
+    }>
+      <LoginScreen onDemoLogin={handleDemoLogin} />
+    </React.Suspense>
+  );
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-50">
@@ -311,97 +330,104 @@ const App: React.FC = () => {
           </header>
 
           <div className={`flex-1 min-h-0 ${viewMode === ViewMode.ANNOTATION_ROLLUP ? 'flex flex-col overflow-hidden' : 'overflow-auto'}`}>
-            {viewMode === ViewMode.DASHBOARD && (
-              <CaseList cases={cases} onSelect={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }} onCreate={handleCreateCase} currentUser={currentUser} onDeleteCase={deleteCaseFromStore} onUpdateCase={upsertCase} />
-            )}
-            {viewMode === ViewMode.CASE_VIEW && activeCase && (
-              <CaseDetails
-                currentUser={currentUser} caseItem={activeCase} docs={activeDocuments} allUsers={authorizedUsers}
-                onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
-                onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
-                onUpload={handleFileUpload}
-                onUpdateCase={upsertCase}
-                onDeleteDoc={deleteDocumentFromStore}
-                onUpdateDocStatus={(did, status) => {
-                  const d = activeDocuments.find(x => x.id === did);
-                  if (d) upsertDocument({ ...d, reviewStatus: status });
-                }}
-                onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-              />
-            )}
-            {viewMode === ViewMode.DOC_VIEWER && activeDoc && (
-              <DocumentViewer
-                doc={activeDoc}
-                annotations={activeAnnotations.filter(a => a.documentId === activeDoc.id)}
-                onAddAnnotation={handleAddAnnotation}
-                onUpdateAnnotation={upsertAnnotation}
-                onDeleteAnnotation={deleteAnnotationFromStore}
-                onBack={() => setViewMode(ViewMode.CASE_VIEW)}
-                onOpenClinicalWorkspace={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-                googleAccessToken={null}
-                initialPage={viewerInitialPage}
-                focusedAnnotationId={focusedAnnotationId}
-                isEditingFocused={isEditingAnnotation}
-                onClearFocus={() => { setFocusedAnnotationId(null); setIsEditingAnnotation(false); }}
-                onSetFocus={(id) => setFocusedAnnotationId(id)}
-                allDocuments={activeDocuments}
-                onSwitchDocument={(newDoc) => {
-                  setActiveDoc(newDoc);
-                  setViewerInitialPage(1);
-                }}
-              />
-            )}
-            {viewMode === ViewMode.ANNOTATION_ROLLUP && activeCase && (
-              <AnnotationRollup
-                caseItem={activeCase} docs={activeDocuments} annotations={activeAnnotations}
-                onBack={() => setViewMode(ViewMode.CASE_VIEW)} googleAccessToken={null} onUpdateCase={upsertCase}
-                onAddAnnotation={handleAddAnnotation}
-                onUpdateAnnotation={upsertAnnotation}
-                onDeleteAnnotation={deleteAnnotationFromStore}
-                onNavigateToSource={(did, pg) => {
-                  const doc = activeDocuments.find(d => d.id === did);
-                  if (doc) { setActiveDoc(doc); setViewerInitialPage(pg); setViewMode(ViewMode.DOC_VIEWER); }
-                }}
-                onNavigateToAnnotation={handleNavigateToAnnotation}
-                currentUser={currentUser}
-              />
-            )}
-            {viewMode === ViewMode.CLIENTS && (
-              <ClientDirectory cases={cases} currentUser={currentUser} />
-            )}
-            {viewMode === ViewMode.ORIENTATION && (
-              <Orientation />
-            )}
-            {viewMode === ViewMode.PROFILE && (
-              <div className="p-8 max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl mt-12 shadow-sm">
-                <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile</h2>
-                <div className="flex items-center gap-6 mb-8">
-                  <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl text-white font-bold shadow-lg ${currentUser.avatarColor || 'bg-cyan-600'}`}>
-                    {currentUser.name.charAt(0)}
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800">{currentUser.name}</h3>
-                    <p className="text-slate-500">{currentUser.email}</p>
-                    <span className="inline-block mt-2 px-2 py-0.5 bg-cyan-50 text-cyan-700 text-[10px] font-bold rounded uppercase tracking-widest border border-cyan-100">{currentUser.role}</span>
-                  </div>
-                </div>
-                <div className="space-y-6">
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qualifications & Bio</p>
-                    <p className="text-sm text-slate-600 italic">"No bio updated. Qualifications provided here are used to auto-generate Physician Expert segments in legal reports."</p>
-                  </div>
-                  <button className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-black transition-all">Edit Profile</button>
-                </div>
+            <React.Suspense fallback={
+              <div className="flex-1 flex items-center justify-center bg-slate-50">
+                <Loader2Icon className="w-8 h-8 text-indigo-500 animate-spin" />
               </div>
-            )}
-            {viewMode === ViewMode.TEAM_ADMIN && (
-              <TeamAdmin
-                authorizedUsers={authorizedUsers}
-                onInviteUser={handleInviteUser}
-                onDeleteUser={handleDeleteUser}
-                currentUser={currentUser}
-              />
-            )}
+            }>
+              {viewMode === ViewMode.DASHBOARD && (
+                <CaseList cases={cases} onSelect={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }} onCreate={handleCreateCase} currentUser={currentUser} onDeleteCase={deleteCaseFromStore} onUpdateCase={upsertCase} />
+              )}
+              {viewMode === ViewMode.CASE_VIEW && activeCase && (
+                <CaseDetails
+                  currentUser={currentUser} caseItem={activeCase} docs={activeDocuments} allUsers={authorizedUsers}
+                  onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
+                  onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
+                  onUpload={handleFileUpload}
+                  onUpdateCase={upsertCase}
+                  onDeleteDoc={deleteDocumentFromStore}
+                  onUpdateDocStatus={(did, status) => {
+                    const d = activeDocuments.find(x => x.id === did);
+                    if (d) upsertDocument({ ...d, reviewStatus: status });
+                  }}
+                  onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
+                />
+              )}
+              {viewMode === ViewMode.DOC_VIEWER && activeDoc && (
+                <DocumentViewer
+                  doc={activeDoc}
+                  annotations={activeAnnotations.filter(a => a.documentId === activeDoc.id)}
+                  onAddAnnotation={handleAddAnnotation}
+                  onUpdateAnnotation={upsertAnnotation}
+                  onDeleteAnnotation={deleteAnnotationFromStore}
+                  onBack={() => setViewMode(ViewMode.CASE_VIEW)}
+                  onOpenClinicalWorkspace={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
+                  googleAccessToken={null}
+                  initialPage={viewerInitialPage}
+                  focusedAnnotationId={focusedAnnotationId}
+                  isEditingFocused={isEditingAnnotation}
+                  onClearFocus={() => { setFocusedAnnotationId(null); setIsEditingAnnotation(false); }}
+                  onSetFocus={(id) => setFocusedAnnotationId(id)}
+                  allDocuments={activeDocuments}
+                  onSwitchDocument={(newDoc) => {
+                    setActiveDoc(newDoc);
+                    setViewerInitialPage(1);
+                  }}
+                  currentUser={currentUser}
+                />
+              )}
+              {viewMode === ViewMode.ANNOTATION_ROLLUP && activeCase && (
+                <AnnotationRollup
+                  caseItem={activeCase} docs={activeDocuments} annotations={activeAnnotations}
+                  onBack={() => setViewMode(ViewMode.CASE_VIEW)} googleAccessToken={null} onUpdateCase={upsertCase}
+                  onAddAnnotation={handleAddAnnotation}
+                  onUpdateAnnotation={upsertAnnotation}
+                  onDeleteAnnotation={deleteAnnotationFromStore}
+                  onNavigateToSource={(did, pg) => {
+                    const doc = activeDocuments.find(d => d.id === did);
+                    if (doc) { setActiveDoc(doc); setViewerInitialPage(pg); setViewMode(ViewMode.DOC_VIEWER); }
+                  }}
+                  onNavigateToAnnotation={handleNavigateToAnnotation}
+                  currentUser={currentUser}
+                />
+              )}
+              {viewMode === ViewMode.CLIENTS && (
+                <ClientDirectory cases={cases} currentUser={currentUser} />
+              )}
+              {viewMode === ViewMode.ORIENTATION && (
+                <Orientation />
+              )}
+              {viewMode === ViewMode.PROFILE && (
+                <div className="p-8 max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl mt-12 shadow-sm">
+                  <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile</h2>
+                  <div className="flex items-center gap-6 mb-8">
+                    <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl text-white font-bold shadow-lg ${currentUser.avatarColor || 'bg-cyan-600'}`}>
+                      {currentUser.name.charAt(0)}
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-800">{currentUser.name}</h3>
+                      <p className="text-slate-500">{currentUser.email}</p>
+                      <span className="inline-block mt-2 px-2 py-0.5 bg-cyan-50 text-cyan-700 text-[10px] font-bold rounded uppercase tracking-widest border border-cyan-100">{currentUser.role}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-6">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qualifications & Bio</p>
+                      <p className="text-sm text-slate-600 italic">"No bio updated. Qualifications provided here are used to auto-generate Physician Expert segments in legal reports."</p>
+                    </div>
+                    <button className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-black transition-all">Edit Profile</button>
+                  </div>
+                </div>
+              )}
+              {viewMode === ViewMode.TEAM_ADMIN && (
+                <TeamAdmin
+                  authorizedUsers={authorizedUsers}
+                  onInviteUser={handleInviteUser}
+                  onDeleteUser={handleDeleteUser}
+                  currentUser={currentUser}
+                />
+              )}
+            </React.Suspense>
           </div>
         </main>
       </div>
