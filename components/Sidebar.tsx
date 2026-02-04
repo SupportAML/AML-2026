@@ -20,7 +20,8 @@ import {
   EyeIcon,
   CompassIcon,
   BookUserIcon,
-  UserIcon
+  UserIcon,
+  SparklesIcon
 } from 'lucide-react';
 import { ViewMode, Case, UserProfile, AuthorizedUser, UserRole } from '../types';
 
@@ -280,8 +281,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <NavItem
                   icon={SettingsIcon}
                   label="Settings"
-                  active={false}
-                  onClick={onOpenSettings}
+                  active={currentView === ViewMode.SETTINGS}
+                  onClick={() => setView(ViewMode.SETTINGS)}
+                />
+                <NavItem
+                  icon={SparklesIcon}
+                  label="Admin Insights"
+                  active={currentView === ViewMode.ADMIN_INSIGHTS}
+                  onClick={() => setView(ViewMode.ADMIN_INSIGHTS)}
                 />
                 <NavItem
                   icon={ShieldIcon}

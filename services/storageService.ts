@@ -7,7 +7,8 @@ import {
   query,
   where,
   deleteDoc,
-  orderBy
+  orderBy,
+  getDocs
 } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { Case, Annotation, Document, AuthorizedUser, UserRole } from "../types";
@@ -225,7 +226,7 @@ export const subscribeToUsers = (callback: (users: AuthorizedUser[]) => void) =>
     };
   }
   return onSnapshot(collection(db, COLL_USERS), (snapshot) => {
-    callback(snapshot.docs.map(d => ({ ...d.data() } as AuthorizedUser)));
+    callback(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as AuthorizedUser)));
   });
 };
 
@@ -324,4 +325,87 @@ export const deleteUserFromStore = async (userId: string) => {
     return;
   }
   await deleteDoc(doc(db, COLL_USERS, userId));
+};
+
+/**
+ * Ensures that support@apexmedlaw.com exists as an ADMIN user
+ * Call this on app initialization
+ */
+export const ensureAdminUser = async (currentUserEmail: string) => {
+  console.log('🔍 ensureAdminUser called with email:', currentUserEmail);
+
+  if (isDemoMode) {
+    console.log('⏭️ Skipping - Demo mode is active');
+    return;
+  }
+
+  const adminEmail = 'support@apexmedlaw.com';
+
+  // Only proceed if the current user is the support account
+  if (currentUserEmail.toLowerCase() !== adminEmail.toLowerCase()) {
+    console.log('⏭️ Skipping - Not the support account');
+    return;
+  }
+
+  console.log('✅ Support account detected - proceeding with admin check');
+
+  try {
+    const usersRef = collection(db, COLL_USERS);
+    console.log('📂 Querying users collection:', COLL_USERS);
+
+    const q = query(usersRef, where('email', '==', adminEmail));
+    const snapshot = await getDocs(q);
+
+    console.log('📊 Query results - Empty:', snapshot.empty, 'Count:', snapshot.docs.length);
+
+    if (snapshot.empty) {
+      // Create the admin user
+      console.log('📝 Creating new admin user:', adminEmail);
+      const adminUser: AuthorizedUser = {
+        id: 'support-admin',
+        email: adminEmail,
+        name: 'Support Admin',
+        role: 'ADMIN',
+        status: 'active',
+        addedAt: new Date().toISOString(),
+        avatarColor: 'bg-purple-600'
+      };
+
+      console.log('💾 Writing to Firestore:', adminUser);
+      await setDoc(doc(db, COLL_USERS, 'support-admin'), cleanData(adminUser));
+      console.log('✅ Admin user created successfully!');
+      console.log('🔄 Please wait a moment for the role to sync...');
+    } else {
+      // User exists, ensure they have ADMIN role
+      const userDoc = snapshot.docs[0];
+      const userData = userDoc.data() as AuthorizedUser;
+
+      console.log('👤 Existing user found:', {
+        id: userDoc.id,
+        email: userData.email,
+        role: userData.role,
+        status: userData.status
+      });
+
+      if (userData.role !== 'ADMIN') {
+        console.log('⬆️ Updating user to ADMIN role...');
+        await setDoc(doc(db, COLL_USERS, userDoc.id), {
+          ...userData,
+          role: 'ADMIN',
+          status: 'active'
+        });
+        console.log('✅ User role updated to ADMIN!');
+        console.log('🔄 Please wait a moment for the role to sync...');
+      } else {
+        console.log('✅ User already has ADMIN role - no update needed');
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error ensuring admin user:', error);
+    console.error('📋 Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      code: (error as any)?.code,
+      stack: error instanceof Error ? error.stack : undefined
+    });
+  }
 };

@@ -14,6 +14,8 @@ const Orientation = React.lazy(() => import('./components/Orientation'));
 const ClientDirectory = React.lazy(() => import('./components/ClientDirectory'));
 const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup').then(m => ({ default: m.AnnotationRollup })));
 const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
+const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
+const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
 import { uploadFile } from './services/fileService';
 import {
   subscribeToCases,
@@ -28,7 +30,8 @@ import {
   enableDemoMode,
   subscribeToUsers,
   upsertUser,
-  deleteUserFromStore
+  deleteUserFromStore,
+  ensureAdminUser
 } from './services/storageService';
 import { Loader2Icon, CloudCheckIcon, LogOutIcon, ShieldIcon } from 'lucide-react';
 
@@ -47,9 +50,11 @@ const App: React.FC = () => {
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
   const [focusedAnnotationId, setFocusedAnnotationId] = useState<string | null>(null);
   const [isEditingAnnotation, setIsEditingAnnotation] = useState(false);
+  const [allDocuments, setAllDocuments] = useState<Document[]>([]);
+  const [allAnnotations, setAllAnnotations] = useState<Annotation[]>([]);
 
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser({
           id: user.uid,
@@ -57,6 +62,11 @@ const App: React.FC = () => {
           email: user.email || "user@apexmedlaw.com",
           role: 'USER' // Default to USER, will be upgraded if in authorizedUsers
         });
+
+        // Ensure support@apexmedlaw.com is an admin
+        if (user.email) {
+          await ensureAdminUser(user.email);
+        }
       } else {
         // Only clear if we aren't in explicit demo mode
         if (!isDemoUser) {
@@ -77,6 +87,33 @@ const App: React.FC = () => {
       unsubUsers();
     };
   }, [currentUser]);
+
+  // Subscribe to all documents and annotations for admin dashboard
+  useEffect(() => {
+    if (!currentUser || cases.length === 0) return;
+
+    const unsubscribers: (() => void)[] = [];
+    const docsMap = new Map<string, Document>();
+    const annsMap = new Map<string, Annotation>();
+
+    cases.forEach(caseItem => {
+      const unsubDocs = subscribeToDocuments(caseItem.id, (docs) => {
+        docs.forEach(doc => docsMap.set(doc.id, doc));
+        setAllDocuments(Array.from(docsMap.values()));
+      });
+
+      const unsubAnns = subscribeToAnnotations(caseItem.id, (anns) => {
+        anns.forEach(ann => annsMap.set(ann.id, ann));
+        setAllAnnotations(Array.from(annsMap.values()));
+      });
+
+      unsubscribers.push(unsubDocs, unsubAnns);
+    });
+
+    return () => {
+      unsubscribers.forEach(unsub => unsub());
+    };
+  }, [currentUser, cases]);
 
   // Sync user role and profile from authorizedUsers
   useEffect(() => {
@@ -315,6 +352,8 @@ const App: React.FC = () => {
                 {viewMode === ViewMode.ORIENTATION && "Orientation"}
                 {viewMode === ViewMode.PROFILE && "My Profile"}
                 {viewMode === ViewMode.TEAM_ADMIN && "Firm Administration"}
+                {viewMode === ViewMode.ADMIN_INSIGHTS && "Admin Intelligence"}
+                {viewMode === ViewMode.SETTINGS && "Platform Settings"}
               </h1>
               <div className={`flex items-center gap-2 px-2.5 py-1 rounded font-black text-[9px] uppercase tracking-widest ${isDemoUser ? 'bg-emerald-100 text-emerald-700' : 'bg-emerald-50 text-emerald-600'}`}>
                 {isDemoUser ? "SANDBOX" : "Firebase Realtime"}
@@ -426,6 +465,17 @@ const App: React.FC = () => {
                   onDeleteUser={handleDeleteUser}
                   currentUser={currentUser}
                 />
+              )}
+              {viewMode === ViewMode.ADMIN_INSIGHTS && (
+                <AdminInsights
+                  cases={cases}
+                  authorizedUsers={authorizedUsers}
+                  allAnnotations={allAnnotations}
+                  allDocuments={allDocuments}
+                />
+              )}
+              {viewMode === ViewMode.SETTINGS && (
+                <Settings currentUser={currentUser} />
               )}
             </React.Suspense>
           </div>

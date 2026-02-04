@@ -199,19 +199,19 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                 </table>
             </div>
 
-            {/* Refined Invitation Section */}
-            <div className="bg-white border border-slate-200 rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm relative overflow-hidden">
-                {inviteSuccess && (
-                    <div className="absolute inset-0 bg-white/95 backdrop-blur-md flex items-center justify-center z-10 animate-in fade-in zoom-in duration-300">
-                        <div className="flex flex-col items-center gap-4 text-center max-w-md">
-                            <div className={`w-12 h-12 ${emailSent ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'} rounded-full flex items-center justify-center shadow-inner`}>
-                                <CheckIcon className="w-6 h-6" />
+            {/* Success Modal Overlay - Fixed Position */}
+            {inviteSuccess && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-300">
+                    <div className="bg-white rounded-3xl p-8 shadow-2xl max-w-md w-full mx-4 animate-in zoom-in slide-in-from-bottom-4 duration-300">
+                        <div className="flex flex-col items-center gap-4 text-center">
+                            <div className={`w-16 h-16 ${emailSent ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'} rounded-full flex items-center justify-center shadow-lg`}>
+                                <CheckIcon className="w-8 h-8" />
                             </div>
                             <div>
-                                <h4 className="font-bold text-slate-900">
+                                <h4 className="text-2xl font-bold text-slate-900 mb-2">
                                     {emailSent ? 'Invitation Sent!' : 'User Registered!'}
                                 </h4>
-                                <p className="text-xs text-slate-500 max-w-[280px] mt-1">
+                                <p className="text-sm text-slate-600 max-w-[320px]">
                                     {emailSent ? (
                                         'Our system has dispatched a secure access link to the expert\'s email.'
                                     ) : emailError ? (
@@ -221,18 +221,19 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                                     )}
                                 </p>
                                 {!emailSent && (
-                                    <p className="text-xs text-cyan-600 font-medium mt-2">
-                                        ✓ User can still join using the invite link below
+                                    <p className="text-sm text-cyan-600 font-medium mt-3 flex items-center justify-center gap-2">
+                                        <CheckIcon className="w-4 h-4" />
+                                        User can still join using the invite link
                                     </p>
                                 )}
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex gap-3 w-full mt-2">
                                 <button
                                     onClick={copyInviteLink}
-                                    className="flex items-center gap-2 px-4 py-1.5 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-black transition-all"
+                                    className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-black transition-all shadow-lg"
                                 >
-                                    {copied ? <CheckIcon className="w-3.5 h-3.5" /> : <CopyIcon className="w-3.5 h-3.5" />}
-                                    {copied ? 'Copied Link' : 'Copy Link'}
+                                    {copied ? <CheckIcon className="w-4 h-4" /> : <CopyIcon className="w-4 h-4" />}
+                                    {copied ? 'Copied!' : 'Copy Link'}
                                 </button>
                                 <button
                                     onClick={() => {
@@ -240,14 +241,19 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                                         setEmailError('');
                                         setEmailSent(false);
                                     }}
-                                    className="flex items-center gap-2 px-4 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all"
+                                    className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-cyan-600 text-white rounded-xl text-sm font-bold hover:bg-cyan-700 transition-all shadow-lg"
                                 >
+                                    <UserPlusIcon className="w-4 h-4" />
                                     Invite Another
                                 </button>
                             </div>
                         </div>
                     </div>
-                )}
+                </div>
+            )}
+
+            {/* Refined Invitation Section */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
 
                 <div className="flex-1">
                     <h3 className="text-xl font-serif font-bold text-slate-900 mb-1 flex items-center gap-2">
