@@ -30,6 +30,12 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
 
     // Load PDF
     useEffect(() => {
+        if (!doc || !doc.url) {
+            setError('No document available');
+            setLoading(false);
+            return;
+        }
+
         const loadPdf = async () => {
             setLoading(true);
             setError(null);

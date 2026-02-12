@@ -1,5 +1,5 @@
 
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   FileTextIcon,
   UploadIcon,
@@ -76,6 +76,17 @@ const FileTreeItem: React.FC<{
           <p className="text-sm font-semibold text-slate-700 group-hover:text-indigo-600 truncate">{node.name}</p>
           <div className="flex items-center gap-2 text-[10px] text-slate-400">
             <span>{node.doc.size}</span>
+            {node.doc.uploadDate && (() => {
+              try {
+                const dt = new Date(node.doc!.uploadDate);
+                if (!isNaN(dt.getTime())) {
+                  return <span className="whitespace-nowrap">• {dt.toLocaleString()}</span>;
+                }
+              } catch {
+                /* ignore parse errors */
+              }
+              return null;
+            })()}
             <CheckCircle2Icon className="w-3 h-3 text-slate-400" />
           </div>
         </div>
@@ -152,6 +163,17 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [editStartDate, setEditStartDate] = useState(caseItem.startDate || caseItem.createdAt);
   const [editPrimaryLawyer, setEditPrimaryLawyer] = useState(caseItem.primaryLawyer || '');
   const [editStatus, setEditStatus] = useState(caseItem.status);
+ 
+  // Ensure modal fields reflect the latest case values when opening the edit modal
+  useEffect(() => {
+    if (isEditingMetadata) {
+      setEditTitle(caseItem.title || '');
+      setEditDescription(caseItem.description || '');
+      setEditStartDate(caseItem.startDate || caseItem.createdAt || new Date().toISOString());
+      setEditPrimaryLawyer(caseItem.primaryLawyer || '');
+      setEditStatus(caseItem.status || 'active');
+    }
+  }, [isEditingMetadata, caseItem]);
 
   const [showAddClient, setShowAddClient] = useState(false);
   const [newClient, setNewClient] = useState<Partial<Client>>({ role: 'Plaintiff' });
@@ -358,21 +380,77 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             ) : (
               (caseItem.clients || []).map(client => (
                 <div key={client.id} className="p-3 px-4 flex items-center justify-between hover:bg-slate-50 transition-colors group">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-slate-700">{client.name}</p>
-                      <span className={`text-[8px] font-black px-1.5 py-0.5 rounded border uppercase tracking-wider ${client.role === 'Plaintiff' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                        client.role === 'Lawyer' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' :
-                          'bg-slate-50 text-slate-500 border-slate-100'
-                        }`}>
-                        {client.role}
-                      </span>
+                  {editingClientId === client.id ? (
+                    <div className="flex-1 grid grid-cols-12 gap-2 items-center">
+                      <input
+                        className="col-span-5 text-sm p-2 border border-slate-200 rounded-lg"
+                        value={editClientData.name || ''}
+                        onChange={(e) => setEditClientData(prev => ({ ...prev, name: e.target.value }))}
+                      />
+                      <input
+                        className="col-span-4 text-sm p-2 border border-slate-200 rounded-lg"
+                        value={editClientData.email || ''}
+                        onChange={(e) => setEditClientData(prev => ({ ...prev, email: e.target.value }))}
+                      />
+                      <select
+                        className="col-span-2 text-sm p-2 border border-slate-200 rounded-lg"
+                        value={editClientData.role || client.role}
+                        onChange={(e) => setEditClientData(prev => ({ ...prev, role: e.target.value as any }))}
+                      >
+                        <option value="Plaintiff">Plaintiff</option>
+                        <option value="Defendant">Defendant</option>
+                        <option value="Lawyer">Lawyer</option>
+                        <option value="Other">Other</option>
+                      </select>
+                      <div className="col-span-1 flex gap-1">
+                        <button
+                          onClick={() => {
+                            // Save edits
+                            const updatedClients = (caseItem.clients || []).map(c => c.id === client.id ? { ...c, ...editClientData } as Client : c);
+                            onUpdateCase({ ...caseItem, clients: updatedClients });
+                            setEditingClientId(null);
+                            setEditClientData({});
+                          }}
+                          className="px-2 py-1 bg-indigo-600 text-white rounded text-xs"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => { setEditingClientId(null); setEditClientData({}); }}
+                          className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-xs"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-400">{client.email}</p>
-                  </div>
-                  <button onClick={() => handleRemoveClient(client.id)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all">
-                    <Trash2Icon className="w-3.5 h-3.5" />
-                  </button>
+                  ) : (
+                    <>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-slate-700">{client.name}</p>
+                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded border uppercase tracking-wider ${client.role === 'Plaintiff' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                            client.role === 'Lawyer' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' :
+                              'bg-slate-50 text-slate-500 border-slate-100'
+                            }`}>
+                            {client.role}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400">{client.email}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => { setEditingClientId(client.id); setEditClientData(client); }}
+                          className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-slate-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                          title="Edit client"
+                        >
+                          <PencilIcon className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => handleRemoveClient(client.id)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all" title="Remove client">
+                          <Trash2Icon className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))
             )}

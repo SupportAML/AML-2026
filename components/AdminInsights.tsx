@@ -10,13 +10,12 @@ import {
     MessageSquareIcon
 } from 'lucide-react';
 import { Case, AuthorizedUser, Annotation, Document as DocType } from '../types';
-import { analyzeDataWithAI } from '../services/adminAIService';
+import { analyzeDataWithAI } from '../services/adminClaudeService';
+import { subscribeToDocuments, subscribeToAnnotations } from '../services/storageService';
 
 interface AdminInsightsProps {
     cases: Case[];
     authorizedUsers: AuthorizedUser[];
-    allAnnotations: Annotation[];
-    allDocuments: DocType[];
 }
 
 interface Message {
@@ -28,10 +27,48 @@ interface Message {
 
 export const AdminInsights: React.FC<AdminInsightsProps> = ({
     cases,
-    authorizedUsers,
-    allAnnotations,
-    allDocuments
+    authorizedUsers
 }) => {
+    // Local state for all documents and annotations
+    const [allDocuments, setAllDocuments] = useState<DocType[]>([]);
+    const [allAnnotations, setAllAnnotations] = useState<Annotation[]>([]);
+    const [isLoadingData, setIsLoadingData] = useState(true);
+
+    // Subscribe to all platform data when this component is mounted
+    useEffect(() => {
+        if (!cases || cases.length === 0) {
+            setIsLoadingData(false);
+            return;
+        }
+
+        setIsLoadingData(true);
+        const unsubscribers: (() => void)[] = [];
+        const docsMap = new Map<string, DocType>();
+        const annsMap = new Map<string, Annotation>();
+
+        // Track completion of initial load if possible, 
+        // but for Firestore realtime streams, we just start listening.
+        // We'll set loading to false after a short timeout or immediately since streams are async
+        setIsLoadingData(false);
+
+        cases.forEach(caseItem => {
+            const unsubDocs = subscribeToDocuments(caseItem.id, (docs) => {
+                docs.forEach(doc => docsMap.set(doc.id, doc));
+                setAllDocuments(Array.from(docsMap.values()));
+            });
+
+            const unsubAnns = subscribeToAnnotations(caseItem.id, (anns) => {
+                anns.forEach(ann => annsMap.set(ann.id, ann));
+                setAllAnnotations(Array.from(annsMap.values()));
+            });
+
+            unsubscribers.push(unsubDocs, unsubAnns);
+        });
+
+        return () => {
+            unsubscribers.forEach(unsub => unsub());
+        };
+    }, [cases]);
     const [messages, setMessages] = useState<Message[]>([
         {
             id: '1',

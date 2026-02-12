@@ -97,6 +97,30 @@ export interface Case {
   researchResults?: ResearchArticle[];
   researchGaps?: { topic: string; reason: string }[];
 
+  // Deposition Chat Persistence - Multiple conversations per scenario
+  depoChats?: { [scenarioId: string]: ChatMessage[] }; // Map of scenario ID to chat history
+  depoStage?: 'ANALYSIS' | 'SIMULATION';
+  depoActiveScenario?: string;
+
+  // Draft Versioning
+  draftVersions?: {
+    id: string;
+    date: string;
+    content: string;
+    status: 'draft' | 'finalized' | 'generated';
+    author: string;
+    label?: string;
+  }[];
+
+  // Export History (Audit Trail)
+  exportHistory?: {
+    id: string;
+    date: string;
+    format: 'pdf' | 'word' | 'text' | 'clipboard';
+    user: string;
+    fileName?: string;
+  }[];
+
   // Finalization
   isFinal?: boolean;
   signature?: string;
@@ -153,6 +177,35 @@ export interface AuthorizedUser {
   addedAt: string;
   password?: string;
   avatarColor?: string;
+  inviteTokenId?: string; // Reference to invitation token used
+}
+
+export interface PendingSignupRequest {
+  id: string;
+  email: string;
+  name: string;
+  requestedAt: string;
+  status: 'pending' | 'approved' | 'denied';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  denialReason?: string;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export interface InvitationToken {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  expiresAt: string;
+  used: boolean;
+  usedAt?: string;
+  usedBy?: string;
+  status: 'active' | 'expired' | 'used' | 'revoked';
 }
 
 export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';

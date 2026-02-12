@@ -93,7 +93,8 @@ export const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
         };
 
         recognition.onerror = (event: any) => {
-            if (event.error === 'aborted') {
+            if (event.error === 'aborted' || event.error === 'no-speech') {
+                // These are normal - user stopped speaking or paused
                 isStartingRef.current = false;
                 return;
             }
@@ -101,7 +102,7 @@ export const VoiceInputButton: React.FC<VoiceInputButtonProps> = ({
             console.error("Speech recognition error:", event.error);
             if (event.error === 'not-allowed') {
                 setError("Microphone access denied.");
-            } else if (event.error !== 'no-speech') {
+            } else {
                 setError(`Error: ${event.error}`);
             }
             setIsListening(false);

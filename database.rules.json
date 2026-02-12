@@ -1,0 +1,20 @@
+{
+    "rules": {
+        "cases": {
+            ".read": "auth != null && root.child('authorizedUsers').child(auth.uid).exists()",
+            ".write": "auth != null && root.child('authorizedUsers').child(auth.uid).exists()",
+            "$caseId": {
+                ".read": "auth != null && root.child('authorizedUsers').child(auth.uid).exists()",
+                ".write": "auth != null && root.child('authorizedUsers').child(auth.uid).exists()"
+            }
+        },
+        "authorizedUsers": {
+            ".read": "auth != null",
+            ".write": "auth != null && (root.child('authorizedUsers').child(auth.uid).child('role').val() == 'ADMIN' || root.child('authorizedUsers').child(auth.uid).child('role').val() == 'OWNER')"
+        },
+        "settings": {
+            ".read": "auth != null && root.child('authorizedUsers').child(auth.uid).exists()",
+            ".write": "auth != null && (root.child('authorizedUsers').child(auth.uid).child('role').val() == 'ADMIN' || root.child('authorizedUsers').child(auth.uid).child('role').val() == 'OWNER')"
+        }
+    }
+}

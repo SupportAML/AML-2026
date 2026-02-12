@@ -9,6 +9,13 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      proxy: {
+        '/storage-proxy': {
+          target: 'https://firebasestorage.googleapis.com',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/storage-proxy/, ''),
+        },
+      },
     },
     plugins: [
       react(),
@@ -20,8 +27,8 @@ export default defineConfig(({ mode }) => {
       })
     ],
     define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+      'process.env.API_KEY': JSON.stringify(env.CLAUDE_API_KEY || env.VITE_CLAUDE_API_KEY || ''),
+      'process.env.CLAUDE_API_KEY': JSON.stringify(env.CLAUDE_API_KEY || env.VITE_CLAUDE_API_KEY || '')
     },
     resolve: {
       alias: {

@@ -9,16 +9,19 @@
   <meta property="og:title" content="ApexMedLaw">
   <meta property="og:description" content="Secure medical-legal cloud analysis platform">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; 
-             script-src 'self' 'unsafe-inline' 'unsafe-eval' https://esm.sh https://cdn.tailwindcss.com https://accounts.google.com https://apis.google.com; 
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; 
+             script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://esm.sh https://cdn.tailwindcss.com https://accounts.google.com https://apis.google.com; 
              style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; 
              font-src 'self' https://fonts.gstatic.com; 
-             img-src 'self' data: https://firebasestorage.googleapis.com;
-             connect-src 'self' https://firebasestorage.googleapis.com https://api.brevo.com https://generativelanguage.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com;">
+             img-src 'self' data: blob: https://firebasestorage.googleapis.com;
+             connect-src 'self' blob: https://esm.sh https://firebasestorage.googleapis.com https://api.brevo.com https://api.anthropic.com https://raw.githubusercontent.com https://generativelanguage.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com;
+             frame-src 'self' https://accounts.google.com;
+             worker-src 'self' blob:;
+             object-src 'none';">
 
   <!-- Favicons -->
-  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚖️%3C/text%3E%3C/svg%3E">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -149,6 +152,22 @@
     }
   </style>
   <link rel="stylesheet" href="/index.css">
+  
+  <!-- Suppress common browser extension errors that don't affect functionality -->
+  <script>
+    // Suppress "Could not establish connection. Receiving end does not exist" error
+    // This is a harmless browser extension error (React DevTools, etc.)
+    const originalError = console.error;
+    console.error = function(...args) {
+      const errorMsg = args.join(' ');
+      if (errorMsg.includes('Could not establish connection') || 
+          errorMsg.includes('Receiving end does not exist')) {
+        // Silently ignore browser extension connection errors
+        return;
+      }
+      originalError.apply(console, args);
+    };
+  </script>
 </head>
 
 <body class="bg-slate-50 text-slate-900">

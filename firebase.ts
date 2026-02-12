@@ -1,6 +1,11 @@
 // Firebase v9+ modular SDK
-import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { initializeApp, getApps } from 'firebase/app';
+import { 
+    getFirestore,
+    initializeFirestore, 
+    persistentLocalCache, 
+    persistentMultipleTabManager 
+} from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 
@@ -28,18 +33,38 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     throw new Error('Firebase configuration is incomplete. Check .env.local file.');
 }
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// Initialize Firebase (singleton pattern for HMR)
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 
-// Initialize Firebase services
-export const db = getFirestore(app);
+// Initialize Firestore with modern persistent cache (supports multiple tabs)
+// Use try-catch to handle HMR (Hot Module Reload) gracefully
+let db;
+try {
+    // Try to initialize with persistent cache
+    db = initializeFirestore(app, {
+        localCache: persistentLocalCache({
+            tabManager: persistentMultipleTabManager()
+        })
+    });
+    console.log('✅ Firebase initialized with offline persistence');
+} catch (error: any) {
+    // If already initialized (during HMR), just get the existing instance
+    if (error.code === 'failed-precondition' || error.message?.includes('already been called')) {
+        console.log('🔄 Using existing Firebase instance (HMR)');
+        db = getFirestore(app);
+    } else {
+        console.error('❌ Firebase initialization error:', error);
+        throw error;
+    }
+}
+
+export { db };
+
+// Initialize other Firebase services
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
-// Log successful initialization (helpful for debugging)
-/*
-console.log('✅ Firebase initialized successfully');
+// Log successful initialization
+console.log('✅ Firebase ready');
 console.log('   Project ID:', firebaseConfig.projectId);
-console.log('   Auth Domain:', firebaseConfig.authDomain);
-console.log('   Storage Bucket:', firebaseConfig.storageBucket);
-*/
+ 

@@ -10,7 +10,8 @@ import {
     AlertCircleIcon,
     SendHorizontalIcon,
     ShieldAlertIcon,
-    TargetIcon
+    TargetIcon,
+    Trash2Icon
 } from 'lucide-react';
 import { ChatMessage, DepoFeedback } from '../types';
 
@@ -25,6 +26,8 @@ interface DepositionSimulationProps {
     onSubmit: (e: React.FormEvent) => void;
     onRetry: () => void;
     onNext: () => void;
+    onClearHistory?: () => void;
+    onBackToAnalysis?: () => void;
     chatScrollRef: React.RefObject<HTMLDivElement>;
 }
 
@@ -39,12 +42,38 @@ export const DepositionSimulation: React.FC<DepositionSimulationProps> = ({
     onSubmit,
     onRetry,
     onNext,
+    onClearHistory,
+    onBackToAnalysis,
     chatScrollRef
 }) => {
     return (
         <div className="flex-1 flex w-full h-full bg-[#fcfdfe]">
             {/* Left: Chat Interaction */}
             <div className="flex-1 flex flex-col relative overflow-hidden">
+                {/* Header with controls */}
+                {(onBackToAnalysis || onClearHistory) && (
+                    <div className="p-4 border-b border-slate-200 bg-white flex items-center justify-between">
+                        {onBackToAnalysis && (
+                            <button
+                                onClick={onBackToAnalysis}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
+                            >
+                                <ArrowRightIcon className="w-4 h-4 rotate-180" />
+                                Back to Analysis
+                            </button>
+                        )}
+                        <div className="flex-1" />
+                        {onClearHistory && chatHistory.length > 1 && (
+                            <button
+                                onClick={onClearHistory}
+                                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                            >
+                                <Trash2Icon className="w-4 h-4" />
+                                Clear History
+                            </button>
+                        )}
+                    </div>
+                )}
                 <div className="flex-1 overflow-y-auto p-16 space-y-12 no-scrollbar" ref={chatScrollRef} style={{ scrollBehavior: 'smooth' }}>
                     {chatHistory.map((msg, i) => (
                         <div key={i} className={`flex flex-col w-full ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>

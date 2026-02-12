@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import ReactDOM from 'react-dom';
 import * as Diff from 'diff';
 import { parse } from 'marked';
 import {
@@ -50,7 +51,9 @@ import {
    LayoutIcon,
    FileCheckIcon,
    UnlockIcon,
-   LockIcon
+  LockIcon,
+  ClockIcon,
+  MoreHorizontalIcon
 } from 'lucide-react';
 import { Case, Document, Annotation, UserProfile, ChatMessage, ReportComment, Suggestion, StrategyAnalysis, StructuredChronology, DepoFeedback, ChronologyEvent, ResearchArticle, ResearchGap } from '../types';
 import { DepositionSimulation } from './DepositionSimulation';
@@ -70,7 +73,7 @@ import {
    extractFactsFromNotes,
    rewordClinicalNotes,
    finalizeLegalReport
-} from '../services/geminiService';
+} from '../services/claudeService';
 
 interface AnnotationRollupProps {
    caseItem: Case;
@@ -131,6 +134,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       caseItem.reportContent ||
       (caseItem.reportSections ? caseItem.reportSections.map(s => `## ${s.title}\n\n${s.content}`).join('\n\n') : '')
    );
+   
+   // Undo/Redo functionality
+   const [undoStack, setUndoStack] = useState<string[]>([]);
+   const [redoStack, setRedoStack] = useState<string[]>([]);
+   const lastContentRef = useRef<string>(reportContent);
+   const historyTimerRef = useRef<NodeJS.Timeout | null>(null);
    const [strategyData, setStrategyData] = useState<StrategyAnalysis | null>(caseItem.strategyData || null);
    const [chronologyData, setChronologyData] = useState<StructuredChronology | null>(caseItem.chronologyData || null);
 
@@ -139,10 +148,15 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [reportTemplate, setReportTemplate] = useState<string>(caseItem.reportTemplate || DEFAULT_TEMPLATE);
    const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
    const [writerViewMode, setWriterViewMode] = useState<'EDIT' | 'FINAL'>('EDIT');
+   const [showExportModal, setShowExportModal] = useState(false);
+   const [showVersionHistory, setShowVersionHistory] = useState(false);
 
    // --- UI State ---
-   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
    const [additionalContext, setAdditionalContext] = useState(caseItem.additionalContext || '');
+   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
 
    // Writer State
    const [writerSidebarMode, setWriterSidebarMode] = useState<'COMMENTS' | 'AI'>('COMMENTS');
@@ -160,9 +174,67 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    // Voice Input State
    const [isVoiceActiveFactsNotes, setIsVoiceActiveFactsNotes] = useState(false);
    const [isVoiceActiveWriter, setIsVoiceActiveWriter] = useState(false);
+   
+   // Store baseline content when voice starts to preserve AI-generated text
+   const voiceBaselineContentRef = useRef<string>('');
+   // Track cursor position for voice input insertion
+   const cursorPositionRef = useRef<number>(0);
 
    const textareaRef = useRef<HTMLTextAreaElement>(null);
    const researchScrollRef = useRef<HTMLDivElement>(null);
+ 
+  // Keyboard shortcut: Ctrl+Shift+E to open export modal
+  useEffect(() => {
+     const handler = (e: KeyboardEvent) => {
+        const isCtrl = e.ctrlKey || e.metaKey;
+        if (isCtrl && e.shiftKey && (e.key === 'E' || e.key === 'e')) {
+           e.preventDefault();
+           setShowExportModal(true);
+           setShowHeaderMenu(false);
+        }
+     };
+     window.addEventListener('keydown', handler);
+     return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+ // Global keyboard handler for textarea undo/redo (captures when textarea focused)
+ useEffect(() => {
+    const handleGlobalUndoRedo = (e: KeyboardEvent) => {
+       // Only handle when our textarea is focused
+       if (!textareaRef.current || document.activeElement !== textareaRef.current) return;
+       const key = e.key?.toLowerCase();
+       const isCtrl = e.ctrlKey || e.metaKey;
+       if (!isCtrl) return;
+
+       if (key === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          handleUndo();
+       } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+          e.preventDefault();
+          handleRedo();
+       }
+    };
+
+    document.addEventListener('keydown', handleGlobalUndoRedo);
+    return () => document.removeEventListener('keydown', handleGlobalUndoRedo);
+ }, [undoStack, redoStack, reportContent]);
+ 
+  // Update menu position when menu opens or window resizes
+  useEffect(() => {
+     const updatePos = () => {
+        const btn = moreButtonRef.current;
+        if (!btn) return setMenuPosition(null);
+        const rect = btn.getBoundingClientRect();
+        setMenuPosition({ left: rect.left, top: rect.bottom + 8 });
+     };
+     if (showHeaderMenu) updatePos();
+     window.addEventListener('resize', updatePos);
+     window.addEventListener('scroll', updatePos, true);
+     return () => {
+        window.removeEventListener('resize', updatePos);
+        window.removeEventListener('scroll', updatePos, true);
+     };
+  }, [showHeaderMenu]);
    const researchSearchRef = useRef<HTMLDivElement>(null);
 
    const handleQuickEdit = (prompt: string) => {
@@ -177,14 +249,31 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [researchGaps, setResearchGaps] = useState<{ topic: string; reason: string }[]>(caseItem.researchGaps || []);
    const [activeCitationProposal, setActiveCitationProposal] = useState<EditorSuggestion | null>(null);
 
+ 
+
    // Manual Source Link State
    const [linkingEventId, setLinkingEventId] = useState<string | null>(null);
    const [linkSourceFileId, setLinkSourceFileId] = useState<string>('');
    const [linkSourcePage, setLinkSourcePage] = useState<number>(1);
 
-   // Strategy/Depo State
-   const [depoStage, setDepoStage] = useState<'ANALYSIS' | 'SIMULATION'>('ANALYSIS');
-   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  // Strategy/Depo State - Multiple chat histories per scenario
+  const [depoStage, setDepoStage] = useState<'ANALYSIS' | 'SIMULATION'>(caseItem.depoStage || 'ANALYSIS');
+  
+  // Migrate old single depoChat to new multi-chat structure
+  const initializeDepoChats = () => {
+    if (caseItem.depoChats && Object.keys(caseItem.depoChats).length > 0) {
+      return caseItem.depoChats;
+    }
+    // Migration: If old depoChat exists and depoActiveScenario is set, migrate it
+    if ((caseItem as any).depoChat && caseItem.depoActiveScenario) {
+      return { [caseItem.depoActiveScenario]: (caseItem as any).depoChat };
+    }
+    return {};
+  };
+  
+  const [depoChats, setDepoChats] = useState<{ [scenarioId: string]: ChatMessage[] }>(initializeDepoChats());
+  const [activeScenarioId, setActiveScenarioId] = useState<string | undefined>(caseItem.depoActiveScenario);
+   const chatHistory = activeScenarioId ? (depoChats[activeScenarioId] || []) : [];
    const [chatInput, setChatInput] = useState('');
    const [isChatting, setIsChatting] = useState(false);
    const [isListening, setIsListening] = useState(false);
@@ -242,6 +331,55 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       return base;
    }, [chronologyData, annotations]);
 
+   // --- Track previous values to detect real changes ---
+   const prevDepoChatsRef = useRef<string>(JSON.stringify(caseItem.depoChats || {}));
+   const prevDepoStageRef = useRef<string>(caseItem.depoStage || 'ANALYSIS');
+   const prevScenarioIdRef = useRef<string | undefined>(caseItem.depoActiveScenario);
+
+  // --- One-time cleanup of old depoChat field ---
+  useEffect(() => {
+      if ((caseItem as any).depoChat) {
+         console.log('🔄 Migrating old depoChat field to new depoChats structure...');
+         const { depoChat, ...cleanedCase } = caseItem as any;
+         onUpdateCase({
+            ...cleanedCase,
+            depoChats,
+            depoStage,
+            depoActiveScenario: activeScenarioId
+         });
+      }
+   }, []); // Run only once on mount
+
+  // --- Immediate Persistence for Chat History (no debounce) ---
+  useEffect(() => {
+      const currentChatsStr = JSON.stringify(depoChats);
+      
+      if (currentChatsStr !== prevDepoChatsRef.current || 
+          depoStage !== prevDepoStageRef.current ||
+          activeScenarioId !== prevScenarioIdRef.current) {
+         
+         prevDepoChatsRef.current = currentChatsStr;
+         prevDepoStageRef.current = depoStage;
+         prevScenarioIdRef.current = activeScenarioId;
+         
+         console.log('💾 Persisting depo data:', {
+            activeScenarioId,
+            depoStage,
+            chatCounts: Object.keys(depoChats).reduce((acc, key) => {
+               acc[key] = depoChats[key].length;
+               return acc;
+            }, {} as Record<string, number>)
+         });
+         
+         onUpdateCase({
+            ...caseItem,
+            depoChats,
+            depoStage,
+            depoActiveScenario: activeScenarioId
+         });
+      }
+   }, [depoChats, depoStage, activeScenarioId, caseItem, onUpdateCase]);
+
    // --- Enhanced Persistence with All Tab States ---
    useEffect(() => {
       const timer = setTimeout(() => {
@@ -253,7 +391,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
             JSON.stringify(chronologyData) !== JSON.stringify(caseItem.chronologyData) ||
             JSON.stringify(researchResults) !== JSON.stringify(caseItem.researchResults) ||
             JSON.stringify(researchGaps) !== JSON.stringify(caseItem.researchGaps) ||
-            JSON.stringify(caseItem.reportComments) !== JSON.stringify(caseItem.reportComments) ||
             reportTemplate !== caseItem.reportTemplate;
 
          if (hasChanges) {
@@ -265,11 +402,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                chronologyData: chronologyData || undefined,
                additionalContext,
                researchResults,
-               researchGaps,
-               reportTemplate,
-               // Preserve existing comments
-               reportComments: caseItem.reportComments || []
-            });
+              researchGaps,
+              reportTemplate,
+              // Preserve existing comments (depo data handled by dedicated useEffect)
+              reportComments: caseItem.reportComments || []
+           });
          }
       }, 1500); // Debounce for 1.5 seconds
       return () => clearTimeout(timer);
@@ -277,21 +414,44 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
    // --- Sync State from Case Data (when case changes externally) ---
    useEffect(() => {
-      // Update local state if case data has been modified externally
       if (caseItem.researchResults && JSON.stringify(caseItem.researchResults) !== JSON.stringify(researchResults)) {
-         // console.log('🔄 Syncing research results from case data...');
          setResearchResults(caseItem.researchResults);
       }
       if (caseItem.researchGaps && JSON.stringify(caseItem.researchGaps) !== JSON.stringify(researchGaps)) {
-         // console.log('🔄 Syncing research gaps from case data...');
          setResearchGaps(caseItem.researchGaps);
       }
-   }, [caseItem.id]); // Only run when case ID changes (switching cases)
+      
+      const newChatsStr = JSON.stringify(caseItem.depoChats || {});
+      if (newChatsStr !== prevDepoChatsRef.current) {
+         console.log('🔄 Syncing depo chats from Firebase:', {
+            chatCounts: Object.keys(caseItem.depoChats || {}).reduce((acc, key) => {
+               acc[key] = (caseItem.depoChats![key] || []).length;
+               return acc;
+            }, {} as Record<string, number>)
+         });
+         setDepoChats(caseItem.depoChats || {});
+         prevDepoChatsRef.current = newChatsStr;
+      }
+      
+      if (caseItem.depoStage !== depoStage) {
+         setDepoStage(caseItem.depoStage || 'ANALYSIS');
+         prevDepoStageRef.current = caseItem.depoStage || 'ANALYSIS';
+      }
+      
+      if (caseItem.depoActiveScenario !== activeScenarioId) {
+         setActiveScenarioId(caseItem.depoActiveScenario);
+         prevScenarioIdRef.current = caseItem.depoActiveScenario;
+      }
+   }, [caseItem.id]);
 
    // --- Handlers: Source Navigation & Linking ---
    const handleJumpToSource = (annotationId: string) => {
       const ann = annotations.find(a => a.id === annotationId);
       if (ann) {
+         // Don't show preview for manual notes (no PDF document)
+         if (ann.documentId === 'manual-notes') {
+            return;
+         }
          setPreviewSource({ documentId: ann.documentId, page: ann.page, annotationId: ann.id });
          return;
       }
@@ -394,8 +554,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
          if (extractedFacts && extractedFacts.length > 0) {
             extractedFacts.forEach(fact => {
-               // Check if this fact already exists to prevent duplicates
-               const exists = annotations.some(a => a.text === fact.text);
+               // Check if this fact already exists to prevent duplicates (check against localAnnotations to catch in-session duplicates)
+               const exists = localAnnotations.some(a => a.text === fact.text);
                if (!exists) {
                   const newId = Math.random().toString(36).substr(2, 9);
                   const newAnn: any = {
@@ -480,9 +640,88 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    };
 
    const handleVoiceTranscriptionWriter = (text: string) => {
-      // For Legal Writer in 'continuous' mode, replace the entire content
-      // This allows real-time preview of the full dictation
-      setReportContent(text);
+      // Insert voice text at cursor position instead of appending to end
+      setReportContent(prev => {
+         if (!prev) return text;
+         
+         // Get cursor position from ref (updated on click/keyup)
+         const cursorPos = cursorPositionRef.current;
+         
+         // Split content at cursor position
+         const before = prev.substring(0, cursorPos);
+         const after = prev.substring(cursorPos);
+         
+         // Determine separator: add space if needed before insertion
+         const needsSpaceBefore = before.length > 0 && !before.endsWith(' ') && !before.endsWith('\n');
+         const needsSpaceAfter = after.length > 0 && !after.startsWith(' ') && !after.startsWith('\n');
+         
+         const separator = needsSpaceBefore ? ' ' : '';
+         const separatorAfter = needsSpaceAfter ? ' ' : '';
+         
+         // Insert voice text at cursor with proper spacing
+         const newContent = before + separator + text + separatorAfter + after;
+         
+         // Update cursor position to after inserted text
+         const newCursorPos = before.length + separator.length + text.length + separatorAfter.length;
+         cursorPositionRef.current = newCursorPos;
+         
+         // Restore cursor position in textarea after React updates
+         setTimeout(() => {
+            if (textareaRef.current) {
+               textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+               textareaRef.current.focus();
+            }
+         }, 0);
+         
+         return newContent;
+      });
+   };
+
+   // --- Undo/Redo Handlers ---
+   const handleUndo = () => {
+      if (undoStack.length === 0) return;
+      
+      const previousState = undoStack[undoStack.length - 1];
+      const newUndoStack = undoStack.slice(0, -1);
+      
+      // Push current state to redo stack
+      setRedoStack(prev => [...prev, reportContent]);
+      setUndoStack(newUndoStack);
+      setReportContent(previousState);
+      lastContentRef.current = previousState;
+   };
+
+   const handleRedo = () => {
+      if (redoStack.length === 0) return;
+      
+      const nextState = redoStack[redoStack.length - 1];
+      const newRedoStack = redoStack.slice(0, -1);
+      
+      // Push current state to undo stack
+      setUndoStack(prev => [...prev, reportContent]);
+      setRedoStack(newRedoStack);
+      setReportContent(nextState);
+      lastContentRef.current = nextState;
+   };
+
+   // Debounced history update - only save to undo stack after 500ms of no changes
+   const pushToUndoStack = (content: string) => {
+      if (historyTimerRef.current) {
+         clearTimeout(historyTimerRef.current);
+      }
+      
+      historyTimerRef.current = setTimeout(() => {
+         if (content !== lastContentRef.current && lastContentRef.current) {
+            setUndoStack(prev => {
+               const newStack = [...prev, lastContentRef.current];
+               // Limit history to 50 states to prevent memory issues
+               return newStack.length > 50 ? newStack.slice(-50) : newStack;
+            });
+            // Clear redo stack when new changes are made
+            setRedoStack([]);
+         }
+         lastContentRef.current = content;
+      }, 500);
    };
 
    // --- Handlers: Research (Updated Flow) ---
@@ -524,7 +763,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
    const handleAcceptCitation = () => {
       if (activeCitationProposal) {
+         // Push current state to undo stack before accepting citation
+         setUndoStack(prev => [...prev, reportContent].slice(-50));
+         setRedoStack([]);
          setReportContent(activeCitationProposal.proposed);
+         lastContentRef.current = activeCitationProposal.proposed;
          setActiveCitationProposal(null);
          alert("Citation inserted and bibliography updated.");
       }
@@ -570,7 +813,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    };
 
    const handleApplySuggestion = (suggestion: EditorSuggestion) => {
+      // Push current state to undo stack before applying suggestion
+      setUndoStack(prev => [...prev, reportContent].slice(-50));
+      setRedoStack([]);
       setReportContent(suggestion.proposed);
+      lastContentRef.current = suggestion.proposed;
       setEditorHistory(prev => prev.map(item =>
          item.suggestion?.id === suggestion.id
             ? { ...item, text: "Change applied successfully.", suggestion: undefined }
@@ -649,14 +896,247 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       if (!reportContent.trim()) return;
       setIsGenerating(true);
       try {
+         // Push current state to undo stack before finalizing
+         setUndoStack(prev => [...prev, reportContent].slice(-50));
+         setRedoStack([]);
+         
          const finalized = await finalizeLegalReport(reportContent);
+         
+         // Create version snapshot
+         const newVersion = {
+            id: Date.now().toString(),
+            date: new Date().toISOString(),
+            content: finalized,
+            status: 'finalized' as const,
+            author: currentUser.name,
+            label: 'Finalized Draft'
+         };
+         
+         // Update case with new version
+         onUpdateCase({
+            ...caseItem,
+            reportContent: finalized,
+            draftVersions: [...(caseItem.draftVersions || []), newVersion].slice(-20) // Keep last 20 versions
+         });
+         
          setReportContent(finalized);
+         lastContentRef.current = finalized;
          setWriterViewMode('FINAL');
+         // Show export modal after finalizing
+         setShowExportModal(true);
       } catch (error) {
          console.error("Failed to finalize report:", error);
          alert("Failed to finalize report. Please try again.");
       } finally {
          setIsGenerating(false);
+      }
+   };
+
+   // --- Export Functions ---
+   const trackExport = (format: 'pdf' | 'word' | 'text' | 'clipboard', fileName?: string) => {
+      const exportRecord = {
+         id: Date.now().toString(),
+         date: new Date().toISOString(),
+         format,
+         user: currentUser.name,
+         fileName
+      };
+      
+      onUpdateCase({
+         ...caseItem,
+         exportHistory: [...(caseItem.exportHistory || []), exportRecord]
+      });
+   };
+
+   const exportAsPDF = () => {
+      try {
+         const fileName = `${caseItem.title.replace(/[^a-z0-9]/gi, '_')}_Report.pdf`;
+         trackExport('pdf', fileName);
+         
+         // Create a printable HTML version
+         const printWindow = window.open('', '_blank');
+         if (!printWindow) {
+            alert('Please allow popups to export PDF');
+            return;
+         }
+
+         const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+   <meta charset="UTF-8">
+   <title>${caseItem.title} - Medical-Legal Report</title>
+   <style>
+      /* US Legal Document Format - Letter size with 1 inch margins */
+      @page { 
+         size: letter;
+         margin: 1in; 
+      }
+      
+      body {
+         font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
+         font-size: 12pt;
+         line-height: 2.0;  /* Double-spaced as per legal standards */
+         color: #000;
+         margin: 0;
+         padding: 0;
+         background: white;
+      }
+      
+      /* Heading styles - bold, minimal spacing */
+      h1, h2, h3, h4, h5, h6 { 
+         font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
+         font-weight: bold; 
+         margin-top: 12pt; 
+         margin-bottom: 6pt;
+         page-break-after: avoid;
+         line-height: 1.2;
+      }
+      h1 { font-size: 14pt; text-align: center; }
+      h2 { font-size: 13pt; }
+      h3 { font-size: 12pt; }
+      
+      /* Paragraph styles - justified text, minimal spacing */
+      p { 
+         margin: 0; 
+         text-align: justify;
+         orphans: 3;
+         widows: 3;
+      }
+      
+      /* Preserve formatting for structured content */
+      pre { 
+         white-space: pre-wrap; 
+         font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
+         font-size: 12pt;
+         line-height: 2.0;
+         margin: 0;
+      }
+      
+      /* List spacing */
+      ul, ol {
+         margin: 6pt 0;
+      }
+      
+      li {
+         margin: 3pt 0;
+      }
+   </style>
+</head>
+<body>
+   <pre>${reportContent}</pre>
+   <script>
+      window.onload = () => {
+         window.print();
+         setTimeout(() => window.close(), 100);
+      };
+   </script>
+</body>
+</html>`;
+
+         printWindow.document.write(htmlContent);
+         printWindow.document.close();
+      } catch (error) {
+         console.error('PDF export error:', error);
+         alert('Failed to export PDF. Please try again.');
+      }
+   };
+
+   const exportAsWord = () => {
+      try {
+         const fileName = `${caseItem.title.replace(/[^a-z0-9]/gi, '_')}_Report.doc`;
+         trackExport('word', fileName);
+         
+         // Create HTML content for Word
+         const htmlContent = `
+<!DOCTYPE html>
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+   <meta charset="UTF-8">
+   <title>${caseItem.title} - Medical-Legal Report</title>
+   <style>
+      body {
+         font-family: 'Times New Roman', Times, serif;
+         font-size: 12pt;
+         line-height: 1.8;
+      }
+      h1, h2, h3 { font-weight: bold; }
+      p { margin: 12px 0; text-align: justify; }
+      pre { white-space: pre-wrap; font-family: inherit; }
+   </style>
+</head>
+<body>
+   <pre>${reportContent}</pre>
+</body>
+</html>`;
+
+         // Create blob and download
+         const blob = new Blob([htmlContent], { type: 'application/msword' });
+         const url = URL.createObjectURL(blob);
+         const link = document.createElement('a');
+         link.href = url;
+         link.download = `${caseItem.title.replace(/[^a-z0-9]/gi, '_')}_Report.doc`;
+         document.body.appendChild(link);
+         link.click();
+         document.body.removeChild(link);
+         URL.revokeObjectURL(url);
+      } catch (error) {
+         console.error('Word export error:', error);
+         alert('Failed to export Word document. Please try again.');
+      }
+   };
+
+   const exportAsText = () => {
+      try {
+         const fileName = `${caseItem.title.replace(/[^a-z0-9]/gi, '_')}_Report.txt`;
+         trackExport('text', fileName);
+         
+         const blob = new Blob([reportContent], { type: 'text/plain' });
+         const url = URL.createObjectURL(blob);
+         const link = document.createElement('a');
+         link.href = url;
+         link.download = fileName;
+         document.body.appendChild(link);
+         link.click();
+         document.body.removeChild(link);
+         URL.revokeObjectURL(url);
+      } catch (error) {
+         console.error('Text export error:', error);
+         alert('Failed to export text file. Please try again.');
+      }
+   };
+
+   const copyReportToClipboard = async () => {
+      try {
+         trackExport('clipboard');
+         await navigator.clipboard.writeText(reportContent);
+         alert('Report copied to clipboard!');
+      } catch (error) {
+         console.error('Copy error:', error);
+         alert('Failed to copy to clipboard. Please try again.');
+      }
+   };
+
+   const handleRestoreVersion = (version: any) => {
+      if (window.confirm(`Restore this version from ${new Date(version.date).toLocaleString()}? Current draft will be saved as a version.`)) {
+         // Save current as a version before restoring
+         const currentVersion = {
+            id: Date.now().toString(),
+            date: new Date().toISOString(),
+            content: reportContent,
+            status: 'draft' as const,
+            author: currentUser.name,
+            label: 'Saved before restore'
+         };
+         
+         onUpdateCase({
+            ...caseItem,
+            reportContent: version.content,
+            draftVersions: [...(caseItem.draftVersions || []), currentVersion].slice(-20)
+         });
+         
+         setReportContent(version.content);
+         setShowVersionHistory(false);
       }
    };
 
@@ -680,11 +1160,61 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    };
 
    const handleStartDepo = (scenario: any) => {
+      const scenarioId = scenario.title;
+      const existingChat = depoChats[scenarioId];
+      
+      console.log('🎯 Starting deposition for:', scenarioId);
+      console.log('   Existing chat messages:', existingChat?.length || 0);
+      console.log('   All chats:', Object.keys(depoChats));
+      
+      setActiveScenarioId(scenarioId);
       setDepoStage('SIMULATION');
       setCurrentFeedback(null);
-      setChatHistory([{
-         id: 'init', role: 'model', text: scenario.firstQuestion, timestamp: Date.now()
-      }]);
+      
+      // If no chat exists for this scenario, create initial message
+      if (!existingChat || existingChat.length === 0) {
+         console.log('   ✨ Creating new chat for', scenarioId);
+         const initialMessage = {
+            id: 'init-' + Date.now(), 
+            role: 'model' as const, 
+            text: scenario.firstQuestion, 
+            timestamp: Date.now()
+         };
+         setDepoChats(prev => {
+            const updated = { ...prev, [scenarioId]: [initialMessage] };
+            console.log('   New depoChats state:', Object.keys(updated));
+            return updated;
+         });
+      } else {
+         console.log('   ♻️ Resuming existing chat with', existingChat.length, 'messages');
+      }
+   };
+
+   const handleClearChatHistory = () => {
+      if (activeScenarioId) {
+         // Clear only the current scenario's chat
+         if (window.confirm(`Clear chat history for this scenario? This cannot be undone.`)) {
+            console.log('🗑️ Clearing chat for scenario:', activeScenarioId);
+            
+            const { [activeScenarioId]: _, ...remainingChats } = depoChats;
+            
+            setDepoChats(remainingChats);
+            setDepoStage('ANALYSIS');
+            setActiveScenarioId(undefined);
+            setCurrentFeedback(null);
+            
+            console.log('   Remaining chats:', Object.keys(remainingChats));
+         }
+      } else {
+         // If no active scenario, clear all chats
+         if (window.confirm('Clear all deposition chat history? This cannot be undone.')) {
+            console.log('🗑️ Clearing ALL deposition chats');
+            
+            setDepoChats({});
+            setDepoStage('ANALYSIS');
+            setCurrentFeedback(null);
+         }
+      }
    };
 
    const handleMicClick = () => {
@@ -704,61 +1234,69 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
    const handleDepoSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!chatInput.trim()) return;
+      if (!chatInput.trim() || !activeScenarioId) return;
 
       const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', text: chatInput, timestamp: Date.now() };
-      const historyWithUser = [...chatHistory, userMsg];
-      setChatHistory(historyWithUser);
+      const currentChat = depoChats[activeScenarioId] || [];
+      const updatedChat = [...currentChat, userMsg];
+      
+      console.log('💬 Adding user message to', activeScenarioId);
+      console.log('   Previous count:', currentChat.length, '→ New count:', updatedChat.length);
+      
+      setDepoChats(prev => {
+         const updated = { ...prev, [activeScenarioId]: updatedChat };
+         console.log('   Updated depoChats keys:', Object.keys(updated));
+         return updated;
+      });
       setChatInput('');
       setIsChatting(true);
       setCurrentFeedback(null);
 
       try {
-         const result = await chatWithDepositionCoach(historyWithUser, userMsg.text, reportContent || caseItem.description);
+         const result = await chatWithDepositionCoach(updatedChat, userMsg.text, reportContent || caseItem.description);
 
          if (result && result.coaching) {
-            const historyWithFeedback = historyWithUser.map(msg =>
+            const chatWithFeedback = updatedChat.map(msg =>
                msg.id === userMsg.id ? { ...msg, coaching: result.coaching } : msg
             );
-            setChatHistory(historyWithFeedback);
+            setDepoChats(prev => ({ ...prev, [activeScenarioId]: chatWithFeedback }));
             setCurrentFeedback(result.coaching);
-         } else {
-            // If coaching is still null despite our service fallback
-            console.error("Coaching analysis failed to return valid data");
-            alert("The AI coached had trouble analyzing that specific response. Please try again or rephrase.");
          }
       } catch (error) {
-         console.error("Critical error in handleDepoSubmit:", error);
-         alert("A critical error occurred. Please refresh the page or try again.");
+         console.error("Error in handleDepoSubmit:", error);
       } finally {
          setIsChatting(false);
       }
    };
 
    const handleProceedToNextQuestion = async () => {
+      if (!activeScenarioId) return;
+      
       setIsChatting(true);
       setCurrentFeedback(null);
       try {
-         const result = await chatWithDepositionCoach(chatHistory, "Proceed", reportContent || "");
-         setChatHistory(prev => [...prev, {
+         const currentChat = depoChats[activeScenarioId] || [];
+         const result = await chatWithDepositionCoach(currentChat, "Proceed", reportContent || "");
+         const newMessage = {
             id: Date.now().toString(),
-            role: 'model',
+            role: 'model' as const,
             text: result.nextQuestion,
             timestamp: Date.now()
-         }]);
+         };
+         setDepoChats(prev => ({ ...prev, [activeScenarioId]: [...currentChat, newMessage] }));
       } catch (error) {
-         console.error("Error in handleProceedToNextQuestion:", error);
-         alert("Could not load the next question. Please try again.");
+         console.error("Error:", error);
       } finally {
          setIsChatting(false);
       }
    };
 
    const handleRetryAnswer = () => {
-      setChatHistory(prev => prev.slice(0, -1));
+      if (!activeScenarioId) return;
+      const currentChat = depoChats[activeScenarioId] || [];
+      setDepoChats(prev => ({ ...prev, [activeScenarioId]: currentChat.slice(0, -1) }));
       setCurrentFeedback(null);
-      setChatInput(chatHistory[chatHistory.length - 1]?.text || "");
-      setChatInput("");
+      setChatInput(currentChat[currentChat.length - 1]?.text || "");
    };
 
    // --- Render ---
@@ -903,6 +1441,49 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                @keyframes loading {
                   0% { transform: translateX(-100%); }
                   100% { transform: translateX(300%); }
+               }
+               
+               /* Print styles for PDF export - US Legal Document Format */
+               @media print {
+                  @page {
+                     size: letter;
+                     margin: 1in;
+                  }
+                  
+                  body {
+                     font-family: 'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif;
+                     font-size: 12pt;
+                     line-height: 2;
+                     color: #000;
+                  }
+                  
+                  /* Hide UI elements */
+                  .no-print, button, nav, aside {
+                     display: none !important;
+                  }
+                  
+                  /* Ensure proper page breaks */
+                  h1, h2, h3, h4, h5, h6 {
+                     page-break-after: avoid;
+                     page-break-inside: avoid;
+                     font-family: 'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif;
+                     font-weight: bold;
+                     margin-top: 12pt;
+                     margin-bottom: 6pt;
+                  }
+                  
+                  p {
+                     orphans: 3;
+                     widows: 3;
+                     margin: 0;
+                     text-align: justify;
+                  }
+                  
+                  /* Remove shadows and borders for print */
+                  * {
+                     box-shadow: none !important;
+                     border: none !important;
+                  }
                }
             `}} />
 
@@ -1050,19 +1631,23 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                   </div>
 
                   {/* Preview Panel */}
-                  {previewSource && (
-                     <PreviewPanel
-                        doc={docs.find(d => d.id === previewSource.documentId)!}
-                        page={previewSource.page}
-                        annotations={annotations.filter(a => a.documentId === previewSource.documentId)}
-                        highlightAnnotationId={previewSource.annotationId}
-                        onClose={() => setPreviewSource(null)}
-                        onOpenFullView={() => {
-                           onNavigateToSource(previewSource.documentId, previewSource.page);
-                           setPreviewSource(null);
-                        }}
-                     />
-                  )}
+                  {previewSource && (() => {
+                     const previewDoc = docs.find(d => d.id === previewSource.documentId);
+                     if (!previewDoc) return null;
+                     return (
+                        <PreviewPanel
+                           doc={previewDoc}
+                           page={previewSource.page}
+                           annotations={annotations.filter(a => a.documentId === previewSource.documentId)}
+                           highlightAnnotationId={previewSource.annotationId}
+                           onClose={() => setPreviewSource(null)}
+                           onOpenFullView={() => {
+                              onNavigateToSource(previewSource.documentId, previewSource.page);
+                              setPreviewSource(null);
+                           }}
+                        />
+                     );
+                  })()}
                </div>
             )}
 
@@ -1152,19 +1737,24 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                   </div>
 
                   {/* Right: Live Evidence Feed OR Preview Panel */}
-                  {previewSource ? (
-                     <PreviewPanel
-                        doc={docs.find(d => d.id === previewSource.documentId)!}
-                        page={previewSource.page}
-                        annotations={annotations.filter(a => a.documentId === previewSource.documentId)}
-                        highlightAnnotationId={previewSource.annotationId}
-                        onClose={() => setPreviewSource(null)}
-                        onOpenFullView={() => {
-                           onNavigateToSource(previewSource.documentId, previewSource.page);
-                           setPreviewSource(null);
-                        }}
-                     />
-                  ) : (
+                  {previewSource && (() => {
+                     const previewDoc = docs.find(d => d.id === previewSource.documentId);
+                     if (!previewDoc) return null;
+                     return (
+                        <PreviewPanel
+                           doc={previewDoc}
+                           page={previewSource.page}
+                           annotations={annotations.filter(a => a.documentId === previewSource.documentId)}
+                           highlightAnnotationId={previewSource.annotationId}
+                           onClose={() => setPreviewSource(null)}
+                           onOpenFullView={() => {
+                              onNavigateToSource(previewSource.documentId, previewSource.page);
+                              setPreviewSource(null);
+                           }}
+                        />
+                     );
+                  })()}
+                  {!previewSource && (
                      <div className="w-1/2 p-8 overflow-y-auto bg-slate-50 flex flex-col">
                         <div className="flex items-center justify-between mb-6">
                            <div className="flex items-center gap-3">
@@ -1210,17 +1800,26 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        (ann.eventDate && ann.eventDate.toLowerCase().includes(query)) ||
                                        ann.author.toLowerCase().includes(query);
                                  })
-                                 .sort((a, b) => (b.eventDate ? new Date(b.eventDate).getTime() : 0) - (a.eventDate ? new Date(a.eventDate).getTime() : 0))
-                                 .map((ann, i) => (
+                                 .sort((a, b) => {
+                                    const getTime = (ann: Annotation) => {
+                                       if (!ann.eventDate) return 0;
+                                       return new Date(`${ann.eventDate}T${ann.eventTime || '00:00'}`).getTime();
+                                    };
+                                    return getTime(b) - getTime(a);
+                                 })
+                                 .map((ann) => (
                                     <div
-                                       key={i}
+                                       key={ann.id}
                                        onClick={() => handleJumpToSource(ann.id)}
                                        className="group p-4 bg-white rounded-xl border border-slate-200 shadow-sm hover:border-indigo-200 transition-all relative cursor-pointer"
                                     >
                                        <div className="flex justify-between items-start mb-2">
                                           <div className="flex items-center gap-2">
                                              {ann.eventDate ? (
-                                                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded font-mono">{ann.eventDate}</span>
+                                                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded font-mono flex items-center gap-1">
+                                                   {ann.eventDate}
+                                                   {ann.eventTime && <span className="opacity-75 border-l border-indigo-200 pl-1 ml-1">{ann.eventTime}</span>}
+                                                </span>
                                              ) : (
                                                 <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">UNDATED</span>
                                              )}
@@ -1414,11 +2013,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
             {/* === TAB: WRITER (Google Docs Workflow) === */}
             {activeTab === 'WRITER' && (
-               <div className="h-full flex overflow-hidden bg-slate-100/50">
+               <div className="h-full flex overflow-hidden bg-slate-50">
                   {/* Left: Document Workspace */}
-                  <div className="flex-1 overflow-y-auto p-12 flex flex-col items-center">
+                  <div className="flex-1 flex flex-col">
                      {/* Floating Action Bar (Top of Workspace) */}
-                     <div className="w-[8.5in] mb-6 flex justify-between items-center bg-white/80 backdrop-blur-md px-6 py-3 rounded-2xl border border-slate-200 shadow-sm shrink-0">
+                     <div className="w-full flex justify-between items-center bg-white/95 backdrop-blur-sm px-6 py-3 border-b border-slate-200 shadow-sm shrink-0 sticky top-0 z-10">
                         <div className="flex items-center gap-3">
                            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-md">
                               <FileTextIcon className="w-4 h-4" />
@@ -1429,21 +2028,58 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            </div>
                         </div>
                         <div className="flex items-center gap-3">
-                           <button
-                              onClick={() => setIsTemplateModalOpen(true)}
-                              className="flex items-center gap-2 px-3 py-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 rounded-xl transition-all text-xs font-bold"
-                              title="Upload or Paste Template"
-                           >
-                              <LayoutIcon className="w-4 h-4" />
-                              Templates
-                           </button>
-
-                           <div className="h-4 w-px bg-slate-200 mx-1" />
+                           <div className="relative">
+                              <button
+                                 ref={(el) => moreButtonRef.current = el}
+                                 onClick={() => setShowHeaderMenu(s => !s)}
+                                 className="p-2 rounded-lg text-slate-500 hover:bg-slate-50"
+                                 title="More"
+                              >
+                                 <MoreHorizontalIcon className="w-4 h-4" />
+                              </button>
+                              {showHeaderMenu && menuPosition && ReactDOM.createPortal(
+                                 <div
+                                    style={{
+                                       position: 'fixed',
+                                       left: `${menuPosition.left}px`,
+                                       top: `${menuPosition.top}px`,
+                                       width: 220
+                                    }}
+                                    className="bg-white border border-slate-200 rounded-md shadow-lg z-50"
+                                 >
+                                    <button
+                                       onClick={() => { setIsTemplateModalOpen(true); setShowHeaderMenu(false); }}
+                                       className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm"
+                                    >
+                                       Templates
+                                    </button>
+                                    <button
+                                       onClick={() => { setShowVersionHistory(true); setShowHeaderMenu(false); }}
+                                       className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm"
+                                    >
+                                       History ({(caseItem.draftVersions || []).length})
+                                    </button>
+                                   
+                                    <button
+                                       onClick={() => { setShowExportModal(true); setShowHeaderMenu(false); }}
+                                       className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm"
+                                    >
+                                       Export...
+                                    </button>
+                                 </div>,
+                                 document.body
+                              )}
+                           </div>
 
                            <button
                               onClick={async () => {
                                  setIsGenerating(true);
                                  try {
+                                    // Push current state to undo stack before generating new report
+                                    if (reportContent.trim()) {
+                                       setUndoStack(prev => [...prev, reportContent].slice(-50));
+                                       setRedoStack([]);
+                                    }
                                     const generatedReport = await draftMedicalLegalReport(
                                        { ...caseItem, reportTemplate },
                                        docs,
@@ -1451,7 +2087,26 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        additionalContext,
                                        currentUser.qualifications
                                     );
+                                    
+                                    // Create version snapshot for AI-generated draft
+                                    const newVersion = {
+                                       id: Date.now().toString(),
+                                       date: new Date().toISOString(),
+                                       content: generatedReport,
+                                       status: 'generated' as const,
+                                       author: 'AI Assistant',
+                                       label: 'AI Generated Draft'
+                                    };
+                                    
+                                    // Update case with new version
+                                    onUpdateCase({
+                                       ...caseItem,
+                                       reportContent: generatedReport,
+                                       draftVersions: [...(caseItem.draftVersions || []), newVersion].slice(-20)
+                                    });
+                                    
                                     setReportContent(generatedReport);
+                                    lastContentRef.current = generatedReport;
                                     setWriterViewMode('EDIT');
                                  } catch (error) {
                                     console.error("Failed to generate report:", error);
@@ -1509,10 +2164,20 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            {/* Voice Input Button */}
                            <VoiceInputButton
                               isActive={isVoiceActiveWriter}
-                              onToggle={() => setIsVoiceActiveWriter(!isVoiceActiveWriter)}
+                              onToggle={() => {
+                                 // When activating voice, capture current cursor position
+                                 // When deactivating, no action needed
+                                 if (!isVoiceActiveWriter) {
+                                    // Capture cursor position from textarea
+                                    if (textareaRef.current) {
+                                       cursorPositionRef.current = textareaRef.current.selectionStart;
+                                    }
+                                 }
+                                 setIsVoiceActiveWriter(!isVoiceActiveWriter);
+                              }}
                               onTranscription={handleVoiceTranscriptionWriter}
                               size="md"
-                              mode="continuous"
+                              mode="append"
                            />
 
                            {isVoiceActiveWriter && (
@@ -1527,33 +2192,59 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         </div>
                      </div>
 
-                     {/* The Page Container - Unified Editable Workspace */}
-                     <div className="w-[8.5in] min-h-[8in] bg-white shadow-2xl shadow-slate-200/50 rounded-sm border border-slate-200 flex flex-col transition-all relative group mb-20 overflow-hidden">
-                        {writerViewMode === 'EDIT' ? (
-                           <textarea
-                              ref={textareaRef}
-                              className="flex-1 resize-none outline-none p-16 w-full h-full bg-transparent font-serif text-lg leading-[2] text-slate-800"
-                              value={reportContent}
-                              onChange={(e) => setReportContent(e.target.value)}
-                              onSelect={handleTextSelect}
-                              placeholder={isVoiceActiveWriter ? "🎤 Listening... Speak to dictate your report" : "Start typing your professional medical-legal report here..."}
-                           />
-                        ) : (
-                           <div
-                              className="flex-1 p-16 w-full h-full bg-transparent font-serif text-lg leading-[2] text-slate-800 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-black overflow-y-auto"
-                              dangerouslySetInnerHTML={{ __html: parse(reportContent) }}
-                           />
-                        )}
-                        {isGenerating && (
-                           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4">
-                              <div className="w-12 h-12 border-4 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
-                              <p className="text-sm font-serif italic text-indigo-600 font-bold">Synthesizing clinical evidence...</p>
+                     {/* Scrollable Content Area */}
+                     <div className="flex-1 overflow-y-auto">
+                        <div className="min-h-full py-8 px-4 md:py-12 md:px-8 flex justify-center">
+                           {/* The Page Container - Unified Editable Workspace */}
+                           <div className="w-full max-w-[8.5in] min-h-[11in] bg-white shadow-lg border border-slate-200 flex flex-col transition-all relative group">
+                              {writerViewMode === 'EDIT' ? (
+                                 <textarea
+                                    ref={textareaRef}
+                                    className="w-full min-h-[11in] resize-none outline-none px-[1in] py-[1in] bg-transparent font-serif text-[12pt] leading-[2] text-slate-900"
+                                    style={{ fontFamily: "'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif" }}
+                                    value={reportContent}
+                                    onChange={(e) => {
+                                       const newContent = e.target.value;
+                                       setReportContent(newContent);
+                                       pushToUndoStack(newContent);
+                                    }}
+                                    onSelect={handleTextSelect}
+                                    onClick={(e) => {
+                                       // Track cursor position for voice input
+                                       const target = e.target as HTMLTextAreaElement;
+                                       cursorPositionRef.current = target.selectionStart;
+                                    }}
+                                    onKeyDown={(e) => {
+                                       // Handle Ctrl+Z (Undo) and Ctrl+Y (Redo)
+                                       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+                                          e.preventDefault();
+                                          handleUndo();
+                                       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+                                          e.preventDefault();
+                                          handleRedo();
+                                       }
+                                    }}
+                                    onKeyUp={(e) => {
+                                       // Track cursor position as user types or moves cursor
+                                       const target = e.target as HTMLTextAreaElement;
+                                       cursorPositionRef.current = target.selectionStart;
+                                    }}
+                                    placeholder={isVoiceActiveWriter ? "🎤 Listening... Speak to dictate your report" : "Start typing your professional medical-legal report here..."}
+                                 />
+                              ) : (
+                                 <div
+                                    className="w-full min-h-[11in] px-[1in] py-[1in] bg-transparent font-serif text-[12pt] leading-[2] text-slate-900 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:my-0"
+                                    style={{ fontFamily: "'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif" }}
+                                    dangerouslySetInnerHTML={{ __html: parse(reportContent) }}
+                                 />
+                              )}
+                              {isGenerating && (
+                                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-4">
+                                    <div className="w-12 h-12 border-4 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
+                                    <p className="text-sm font-serif italic text-indigo-600 font-bold">Synthesizing clinical evidence...</p>
+                                 </div>
+                              )}
                            </div>
-                        )}
-
-                        {/* Page Indicators */}
-                        <div className="absolute -left-12 top-20 flex flex-col gap-4">
-                           <div className="w-1.5 h-32 bg-indigo-100 rounded-full group-hover:bg-indigo-200 transition-colors" />
                         </div>
                      </div>
                   </div>
@@ -1756,7 +2447,10 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                 onClick={() => handleStartDepo(scenario)}
                                                 className="text-[10px] font-black uppercase tracking-widest bg-slate-900 text-white px-6 py-2.5 rounded-xl hover:bg-black flex items-center gap-2 transition-all shadow-lg shadow-slate-200"
                                              >
-                                                <TerminalIcon className="w-4 h-4" /> Simulate Cross-Exam
+                                                <TerminalIcon className="w-4 h-4" /> 
+                                                {activeScenarioId === scenario.title && depoChats[scenario.title]?.length > 0 
+                                                   ? `Resume (${depoChats[scenario.title].length} msgs)` 
+                                                   : 'Simulate Cross-Exam'}
                                              </button>
                                           </div>
 
@@ -1808,12 +2502,191 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         onSubmit={handleDepoSubmit}
                         onRetry={handleRetryAnswer}
                         onNext={handleProceedToNextQuestion}
+                        onClearHistory={handleClearChatHistory}
+                        onBackToAnalysis={() => {
+                           setDepoStage('ANALYSIS');
+                           setCurrentFeedback(null);
+                        }}
                         chatScrollRef={chatScrollRef}
                      />
                   )}
                </div>
             )}
          </div>
+
+         {/* Version History Modal */}
+         {showVersionHistory && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+               <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-300">
+                  <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+                     <div>
+                        <h3 className="text-2xl font-serif font-black text-slate-900">Version History</h3>
+                        <p className="text-sm text-slate-500 mt-1">View and restore previous drafts</p>
+                     </div>
+                     <button
+                        onClick={() => setShowVersionHistory(false)}
+                        className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors"
+                     >
+                        <XIcon className="w-5 h-5" />
+                     </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-6">
+                     {(caseItem.draftVersions || []).length === 0 ? (
+                        <div className="text-center py-12">
+                           <ClockIcon className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                           <p className="text-slate-500">No version history yet</p>
+                           <p className="text-xs text-slate-400 mt-1">Versions are created when you regenerate or finalize drafts</p>
+                        </div>
+                     ) : (
+                        <div className="space-y-3">
+                           {[...(caseItem.draftVersions || [])].reverse().map((version, idx) => (
+                              <div
+                                 key={version.id}
+                                 className="p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all group"
+                              >
+                                 <div className="flex items-start justify-between mb-2">
+                                    <div className="flex-1">
+                                       <div className="flex items-center gap-2 mb-1">
+                                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                                             version.status === 'finalized' ? 'bg-emerald-100 text-emerald-700' :
+                                             version.status === 'generated' ? 'bg-indigo-100 text-indigo-700' :
+                                             'bg-slate-200 text-slate-700'
+                                          }`}>
+                                             {version.status.toUpperCase()}
+                                          </span>
+                                          <span className="text-xs text-slate-500 font-medium">
+                                             {new Date(version.date).toLocaleString()}
+                                          </span>
+                                       </div>
+                                       <p className="text-sm font-bold text-slate-700">{version.label}</p>
+                                       <p className="text-xs text-slate-500">By {version.author}</p>
+                                       <p className="text-xs text-slate-400 mt-1">
+                                          {version.content.substring(0, 100)}...
+                                       </p>
+                                    </div>
+                                    <button
+                                       onClick={() => handleRestoreVersion(version)}
+                                       className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 opacity-0 group-hover:opacity-100 transition-all"
+                                    >
+                                       Restore
+                                    </button>
+                                 </div>
+                              </div>
+                           ))}
+                        </div>
+                     )}
+                  </div>
+
+                  <div className="p-4 border-t border-slate-200 bg-slate-50">
+                     <p className="text-xs text-slate-500 text-center">
+                        Last {(caseItem.draftVersions || []).length} versions • Max 20 versions stored
+                     </p>
+                  </div>
+               </div>
+            </div>
+         )}
+
+         {/* Export Modal */}
+         {showExportModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+               <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                  <div className="flex items-center justify-between mb-6">
+                     <div>
+                        <h3 className="text-2xl font-serif font-black text-slate-900">Export Report</h3>
+                        <p className="text-sm text-slate-500 mt-1">Choose your preferred format to download</p>
+                     </div>
+                     <button
+                        onClick={() => setShowExportModal(false)}
+                        className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-colors"
+                     >
+                        <XIcon className="w-5 h-5" />
+                     </button>
+                  </div>
+
+                  <div className="space-y-3">
+                     {/* PDF Export */}
+                     <button
+                        onClick={() => {
+                           exportAsPDF();
+                           setShowExportModal(false);
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gradient-to-r from-red-50 to-red-100 hover:from-red-100 hover:to-red-200 border border-red-200 rounded-2xl transition-all group"
+                     >
+                        <div className="p-3 bg-red-500 text-white rounded-xl group-hover:scale-110 transition-transform">
+                           <FileTextIcon className="w-6 h-6" />
+                        </div>
+                        <div className="flex-1 text-left">
+                           <h4 className="font-bold text-slate-900">Export as PDF</h4>
+                           <p className="text-xs text-slate-600">Print-ready document format</p>
+                        </div>
+                        <ArrowRightIcon className="w-5 h-5 text-red-600" />
+                     </button>
+
+                     {/* Word Export */}
+                     <button
+                        onClick={() => {
+                           exportAsWord();
+                           setShowExportModal(false);
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gradient-to-r from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-200 border border-blue-200 rounded-2xl transition-all group"
+                     >
+                        <div className="p-3 bg-blue-500 text-white rounded-xl group-hover:scale-110 transition-transform">
+                           <FileTextIcon className="w-6 h-6" />
+                        </div>
+                        <div className="flex-1 text-left">
+                           <h4 className="font-bold text-slate-900">Export as Word</h4>
+                           <p className="text-xs text-slate-600">Editable .doc format</p>
+                        </div>
+                        <ArrowRightIcon className="w-5 h-5 text-blue-600" />
+                     </button>
+
+                     {/* Text Export */}
+                     <button
+                        onClick={() => {
+                           exportAsText();
+                           setShowExportModal(false);
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gradient-to-r from-slate-50 to-slate-100 hover:from-slate-100 hover:to-slate-200 border border-slate-200 rounded-2xl transition-all group"
+                     >
+                        <div className="p-3 bg-slate-500 text-white rounded-xl group-hover:scale-110 transition-transform">
+                           <FileTextIcon className="w-6 h-6" />
+                        </div>
+                        <div className="flex-1 text-left">
+                           <h4 className="font-bold text-slate-900">Export as Text</h4>
+                           <p className="text-xs text-slate-600">Plain text .txt file</p>
+                        </div>
+                        <ArrowRightIcon className="w-5 h-5 text-slate-600" />
+                     </button>
+
+                     {/* Copy to Clipboard */}
+                     <button
+                        onClick={() => {
+                           copyReportToClipboard();
+                           setShowExportModal(false);
+                        }}
+                        className="w-full flex items-center gap-4 p-4 bg-gradient-to-r from-emerald-50 to-emerald-100 hover:from-emerald-100 hover:to-emerald-200 border border-emerald-200 rounded-2xl transition-all group"
+                     >
+                        <div className="p-3 bg-emerald-500 text-white rounded-xl group-hover:scale-110 transition-transform">
+                           <CopyIcon className="w-6 h-6" />
+                        </div>
+                        <div className="flex-1 text-left">
+                           <h4 className="font-bold text-slate-900">Copy to Clipboard</h4>
+                           <p className="text-xs text-slate-600">Quick copy for pasting elsewhere</p>
+                        </div>
+                        <ArrowRightIcon className="w-5 h-5 text-emerald-600" />
+                     </button>
+                  </div>
+
+                  <button
+                     onClick={() => setShowExportModal(false)}
+                     className="w-full mt-6 py-3 text-slate-500 hover:text-slate-700 font-semibold text-sm transition-colors"
+                  >
+                     Cancel
+                  </button>
+               </div>
+            </div>
+         )}
       </div >
    );
 };

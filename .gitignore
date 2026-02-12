@@ -15,6 +15,7 @@ stats.html
 
 # Environment files - NEVER commit these!
 .env
+.env.example
 .env.local
 .env.*.local
 .env.development.local

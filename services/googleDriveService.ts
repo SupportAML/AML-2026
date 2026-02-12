@@ -1,6 +1,3 @@
-
-import { GOOGLE_CONFIG } from '../config';
-
 export interface DriveFolder {
   id: string;
   name: string;

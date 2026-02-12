@@ -8,15 +8,17 @@ import {
   where,
   deleteDoc,
   orderBy,
-  getDocs
+  getDocs,
+  getDoc
 } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { Case, Annotation, Document, AuthorizedUser, UserRole } from "../types";
+import { deleteFile } from "./fileService";
 
 const COLL_CASES = "cases";
 const COLL_ANNOTATIONS = "annotations";
 const COLL_DOCUMENTS = "documents";
-const COLL_USERS = "users";
+const COLL_USERS = "authorizedUsers";
 
 // --- Offline / Demo Mode State ---
 let isDemoMode = false;
@@ -156,7 +158,24 @@ export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: str
   // But assignedUserIds is also needed.
 
   return onSnapshot(collection(db, COLL_CASES), (snapshot) => {
-    let allCases = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Case));
+    let allCases = snapshot.docs.map(d => {
+      const caseData = { ...d.data(), id: d.id } as Case;
+      
+      // Debug logging for depo chat
+      if (caseData.depoChats || caseData.depoStage) {
+        console.log('📥 Received case from Firestore:', {
+          id: caseData.id,
+          title: caseData.title,
+          depoChats: caseData.depoChats ? Object.keys(caseData.depoChats).reduce((acc, key) => {
+            acc[key] = caseData.depoChats![key].length;
+            return acc;
+          }, {} as Record<string, number>) : {},
+          depoStage: caseData.depoStage
+        });
+      }
+      
+      return caseData;
+    });
 
     // Filter by user access if not an admin
     if (role !== 'ADMIN' && userId) {
@@ -167,21 +186,22 @@ export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: str
     }
 
     callback(allCases);
+  }, (error) => {
+    console.error("❌ Error subscribing to cases:", error);
+    // Don't crash, just callback with empty or handle globally
   });
 };
 
 export const subscribeToAnnotations = (caseId: string, callback: (anns: Annotation[]) => void) => {
   if (isDemoMode) {
+    // ... (demo implementation unused in this context)
     const filterAndNotify = () => {
       const filtered = mockStore.annotations.filter(a => a.caseId === caseId);
       callback([...filtered]);
     };
-
     filterAndNotify();
-
-    const listener = () => filterAndNotify(); // Re-run filter on any update
+    const listener = () => filterAndNotify();
     listeners.annotations.push(listener);
-
     return () => {
       listeners.annotations = listeners.annotations.filter(l => l !== listener);
     };
@@ -190,21 +210,21 @@ export const subscribeToAnnotations = (caseId: string, callback: (anns: Annotati
   const q = query(collection(db, COLL_ANNOTATIONS), where("caseId", "==", caseId));
   return onSnapshot(q, (snapshot) => {
     callback(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Annotation)));
+  }, (error) => {
+    console.error("❌ Error subscribing to annotations:", error);
   });
 };
 
 export const subscribeToDocuments = (caseId: string, callback: (docs: Document[]) => void) => {
   if (isDemoMode) {
+    // ... (demo implementation redundant)
     const filterAndNotify = () => {
       const filtered = mockStore.documents.filter(d => d.caseId === caseId);
       callback([...filtered]);
     };
-
     filterAndNotify();
-
     const listener = () => filterAndNotify();
     listeners.documents.push(listener);
-
     return () => {
       listeners.documents = listeners.documents.filter(l => l !== listener);
     };
@@ -213,6 +233,8 @@ export const subscribeToDocuments = (caseId: string, callback: (docs: Document[]
   const q = query(collection(db, COLL_DOCUMENTS), where("caseId", "==", caseId));
   return onSnapshot(q, (snapshot) => {
     callback(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Document)));
+  }, (error) => {
+    console.error("❌ Error subscribing to documents:", error);
   });
 };
 
@@ -227,12 +249,99 @@ export const subscribeToUsers = (callback: (users: AuthorizedUser[]) => void) =>
   }
   return onSnapshot(collection(db, COLL_USERS), (snapshot) => {
     callback(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as AuthorizedUser)));
+  }, (error) => {
+    console.error("❌ Error subscribing to users:", error);
   });
 };
 
 // --- Operations ---
 
+// ... (upsert/delete functions remain same)
+
+/**
+ * Ensures that support@apexmedlaw.com exists as an ADMIN user
+ * Call this on app initialization
+ */
+export const ensureAdminUser = async (currentUserEmail: string, uid: string) => {
+  console.log('🔍 ensureAdminUser called with email:', currentUserEmail, 'UID:', uid);
+
+  if (isDemoMode) return;
+
+  const adminEmail = 'support@apexmedlaw.com';
+
+  // Only proceed if the current user is the support account
+  if (currentUserEmail.toLowerCase() !== adminEmail.toLowerCase()) return;
+
+  console.log('✅ Support account detected - proceeding with admin sync');
+
+  try {
+    const usersRef = collection(db, COLL_USERS);
+
+    // 1. Check for ANY existing records for this email (Manual entry, legacy ID, etc.)
+    const q = query(usersRef, where('email', '==', adminEmail));
+    const snapshot = await getDocs(q);
+
+    let targetDocExists = false;
+
+    // Process existing docs
+    for (const d of snapshot.docs) {
+      if (d.id === uid) {
+        targetDocExists = true;
+
+        // Ensure role is ADMIN
+        if (d.data().role !== 'ADMIN') {
+          await setDoc(doc(db, COLL_USERS, uid), { role: 'ADMIN' }, { merge: true });
+        }
+      } else {
+        // Found a duplicate or legacy ID (e.g. 'support-admin' or 'auto-generated-id')
+        // Since we are the super admin, we should consolidate this.
+        // If data is valuable, copy it.
+        console.log(`⚠️ Cleaning up legacy/duplicate admin doc: ${d.id}`);
+        const data = d.data();
+        await deleteDoc(doc(db, COLL_USERS, d.id));
+
+        // If the UID doc didn't exist, use this data to create it
+        if (!targetDocExists) {
+          await setDoc(doc(db, COLL_USERS, uid), { ...data, id: uid, role: 'ADMIN' }, { merge: true });
+          targetDocExists = true;
+        }
+      }
+    }
+
+    // 2. If no doc exists at all after cleanup, create it fresh
+    if (!targetDocExists) {
+      const adminUser: AuthorizedUser = {
+        id: uid,
+        email: adminEmail,
+        name: 'Support Admin',
+        role: 'ADMIN',
+        status: 'active',
+        addedAt: new Date().toISOString(),
+        avatarColor: 'bg-purple-600'
+      };
+      console.log('💾 Creating fresh admin document with ID:', uid);
+      await setDoc(doc(db, COLL_USERS, uid), cleanData(adminUser), { merge: true });
+    }
+
+    console.log('✅ Admin user sync complete!');
+  } catch (error) {
+    console.error('❌ Error ensuring admin user:', error);
+  }
+};
+
+// --- Operations ---
+
 export const upsertCase = async (caseItem: Case) => {
+  console.log('🔧 upsertCase called with:', {
+    id: caseItem.id,
+    title: caseItem.title,
+    depoChats: caseItem.depoChats ? Object.keys(caseItem.depoChats).reduce((acc, key) => {
+      acc[key] = caseItem.depoChats![key].length;
+      return acc;
+    }, {} as Record<string, number>) : {},
+    depoStage: caseItem.depoStage
+  });
+  
   if (isDemoMode) {
     const index = mockStore.cases.findIndex(c => c.id === caseItem.id);
     if (index >= 0) {
@@ -242,9 +351,27 @@ export const upsertCase = async (caseItem: Case) => {
     }
     // Trigger updates
     listeners.cases.forEach(l => l([...mockStore.cases]));
+    console.log('✅ Demo mode: Case updated in memory');
     return;
   }
-  await setDoc(doc(db, COLL_CASES, caseItem.id), cleanData(caseItem), { merge: true });
+  
+  try {
+    const cleanedData = cleanData(caseItem);
+    console.log('📝 Writing to Firestore:', {
+      caseId: caseItem.id,
+      depoChats: cleanedData.depoChats ? Object.keys(cleanedData.depoChats).reduce((acc, key) => {
+        acc[key] = (cleanedData.depoChats as any)[key].length;
+        return acc;
+      }, {} as Record<string, number>) : {},
+      depoStage: cleanedData.depoStage
+    });
+    
+    await setDoc(doc(db, COLL_CASES, caseItem.id), cleanedData, { merge: true });
+    console.log('✅ Successfully wrote case to Firestore');
+  } catch (error) {
+    console.error('❌ Error writing case to Firestore:', error);
+    throw error;
+  }
 };
 
 export const deleteCaseFromStore = async (caseId: string) => {
@@ -253,7 +380,35 @@ export const deleteCaseFromStore = async (caseId: string) => {
     listeners.cases.forEach(l => l([...mockStore.cases]));
     return;
   }
-  await deleteDoc(doc(db, COLL_CASES, caseId));
+  
+  console.log('🗑️ Cascade deleting case and all related data:', caseId);
+  
+  try {
+    // 1. Delete all documents for this case (also deletes Storage files)
+    const docsQuery = query(collection(db, COLL_DOCUMENTS), where("caseId", "==", caseId));
+    const docsSnapshot = await getDocs(docsQuery);
+    console.log('   📄 Deleting', docsSnapshot.size, 'documents...');
+    for (const docSnap of docsSnapshot.docs) {
+      await deleteDocumentFromStore(docSnap.id);
+    }
+    
+    // 2. Delete all annotations for this case
+    const annsQuery = query(collection(db, COLL_ANNOTATIONS), where("caseId", "==", caseId));
+    const annsSnapshot = await getDocs(annsQuery);
+    console.log('   📝 Deleting', annsSnapshot.size, 'annotations...');
+    for (const annSnap of annsSnapshot.docs) {
+      await deleteDoc(doc(db, COLL_ANNOTATIONS, annSnap.id));
+    }
+    
+    // 3. Delete the case document itself
+    console.log('   🗂️ Deleting case document...');
+    await deleteDoc(doc(db, COLL_CASES, caseId));
+    
+    console.log('✅ Successfully deleted case and all related data');
+  } catch (error) {
+    console.error('❌ Error during cascade delete:', error);
+    throw error;
+  }
 };
 
 export const upsertDocument = async (document: Document) => {
@@ -277,6 +432,26 @@ export const deleteDocumentFromStore = async (docId: string) => {
     listeners.documents.forEach(l => l());
     return;
   }
+  // First, attempt to delete the associated storage object (if present)
+  try {
+    const docRef = doc(db, COLL_DOCUMENTS, docId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const docData = snap.data() as Document;
+      if (docData && (docData as any).storagePath) {
+        // deleteFile removes the object from Firebase Storage
+        try {
+          await deleteFile((docData as any).storagePath);
+        } catch (storageErr) {
+          console.warn('Failed to delete storage object for document', docId, storageErr);
+          // proceed to delete metadata anyway
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Error while attempting to remove storage object for document', docId, err);
+  }
+
   await deleteDoc(doc(db, COLL_DOCUMENTS, docId));
 };
 
@@ -327,85 +502,4 @@ export const deleteUserFromStore = async (userId: string) => {
   await deleteDoc(doc(db, COLL_USERS, userId));
 };
 
-/**
- * Ensures that support@apexmedlaw.com exists as an ADMIN user
- * Call this on app initialization
- */
-export const ensureAdminUser = async (currentUserEmail: string) => {
-  console.log('🔍 ensureAdminUser called with email:', currentUserEmail);
 
-  if (isDemoMode) {
-    console.log('⏭️ Skipping - Demo mode is active');
-    return;
-  }
-
-  const adminEmail = 'support@apexmedlaw.com';
-
-  // Only proceed if the current user is the support account
-  if (currentUserEmail.toLowerCase() !== adminEmail.toLowerCase()) {
-    console.log('⏭️ Skipping - Not the support account');
-    return;
-  }
-
-  console.log('✅ Support account detected - proceeding with admin check');
-
-  try {
-    const usersRef = collection(db, COLL_USERS);
-    console.log('📂 Querying users collection:', COLL_USERS);
-
-    const q = query(usersRef, where('email', '==', adminEmail));
-    const snapshot = await getDocs(q);
-
-    console.log('📊 Query results - Empty:', snapshot.empty, 'Count:', snapshot.docs.length);
-
-    if (snapshot.empty) {
-      // Create the admin user
-      console.log('📝 Creating new admin user:', adminEmail);
-      const adminUser: AuthorizedUser = {
-        id: 'support-admin',
-        email: adminEmail,
-        name: 'Support Admin',
-        role: 'ADMIN',
-        status: 'active',
-        addedAt: new Date().toISOString(),
-        avatarColor: 'bg-purple-600'
-      };
-
-      console.log('💾 Writing to Firestore:', adminUser);
-      await setDoc(doc(db, COLL_USERS, 'support-admin'), cleanData(adminUser));
-      console.log('✅ Admin user created successfully!');
-      console.log('🔄 Please wait a moment for the role to sync...');
-    } else {
-      // User exists, ensure they have ADMIN role
-      const userDoc = snapshot.docs[0];
-      const userData = userDoc.data() as AuthorizedUser;
-
-      console.log('👤 Existing user found:', {
-        id: userDoc.id,
-        email: userData.email,
-        role: userData.role,
-        status: userData.status
-      });
-
-      if (userData.role !== 'ADMIN') {
-        console.log('⬆️ Updating user to ADMIN role...');
-        await setDoc(doc(db, COLL_USERS, userDoc.id), {
-          ...userData,
-          role: 'ADMIN',
-          status: 'active'
-        });
-        console.log('✅ User role updated to ADMIN!');
-        console.log('🔄 Please wait a moment for the role to sync...');
-      } else {
-        console.log('✅ User already has ADMIN role - no update needed');
-      }
-    }
-  } catch (error) {
-    console.error('❌ Error ensuring admin user:', error);
-    console.error('📋 Error details:', {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      code: (error as any)?.code,
-      stack: error instanceof Error ? error.stack : undefined
-    });
-  }
-};

@@ -11,10 +11,13 @@ import {
     ActivityIcon,
     CopyIcon,
     CheckIcon,
-    ExternalLinkIcon
+    ExternalLinkIcon,
+    XIcon
 } from 'lucide-react';
 import { AuthorizedUser, UserRole, UserProfile } from '../types';
 import { sendInvitationEmail } from '../services/emailService';
+import { createInvitationToken } from '../services/invitationService';
+import { SignupRequestsPanel } from './SignupRequestsPanel';
 
 interface TeamAdminProps {
     authorizedUsers: AuthorizedUser[];
@@ -38,6 +41,12 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
     const [emailSent, setEmailSent] = useState(false);
     const [emailError, setEmailError] = useState('');
 
+    const closeInviteModal = () => {
+        setInviteSuccess(false);
+        setEmailError('');
+        setEmailSent(false);
+    };
+
     const handleInvite = async () => {
         if (!newUserEmail || !newUserName) {
             alert("Please provide both name and email.");
@@ -50,24 +59,32 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
         setEmailError('');
 
         try {
-            // Generate a secure invitation token link
-            const invitationId = Math.random().toString(36).substr(2, 9);
-            const inviteUrl = `${window.location.origin}/join?invite=${invitationId}`;
+            // 1. Create secure invitation token in database
+            const tokenResult = await createInvitationToken(
+                newUserEmail,
+                newUserName,
+                newUserRole,
+                currentUser.id,
+                currentUser.name
+            );
 
-            // 1. Save to database immediately
+            if (!tokenResult.success || !tokenResult.token) {
+                throw new Error(tokenResult.error || 'Failed to create invitation token');
+            }
+
+            const inviteUrl = `${window.location.origin}?invite=${tokenResult.token.id}`;
+
+            // 2. Also add to authorizedUsers with 'invited' status
             await onInviteUser(newUserEmail, newUserRole, newUserName);
-            // console.log("✅ User added to database");
 
-            // 2. Dispatch REAL email via Brevo
+            // 3. Send email via Brevo
             try {
-                const result = await sendInvitationEmail(newUserEmail, newUserName, inviteUrl, currentUser.name);
-                // console.log("✅ Email sent successfully:", result);
+                await sendInvitationEmail(newUserEmail, newUserName, inviteUrl, currentUser.name);
                 setEmailSent(true);
             } catch (emailError) {
                 console.error("❌ Email service error:", emailError);
                 const errorMessage = emailError instanceof Error ? emailError.message : 'Unknown email error';
                 setEmailError(errorMessage);
-                // Continue - user is registered, can use Copy Link fallback
             }
 
             setLastInviteLink(inviteUrl);
@@ -76,8 +93,8 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
             setNewUserEmail('');
 
         } catch (error) {
-            console.error("❌ Failed to register invitation:", error);
-            alert("Failed to register invitation. Please try again.");
+            console.error("❌ Failed to create invitation:", error);
+            alert("Failed to create invitation. Please try again.");
         } finally {
             setIsInviting(false);
         }
@@ -126,6 +143,11 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                         </div>
                     </div>
                 </div>
+            </div>
+
+            {/* Signup Requests Panel */}
+            <div className="mb-8">
+                <SignupRequestsPanel currentUserUid={currentUser.id} />
             </div>
 
             <div className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden mb-8">
@@ -202,7 +224,14 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
             {/* Success Modal Overlay - Fixed Position */}
             {inviteSuccess && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-300">
-                    <div className="bg-white rounded-3xl p-8 shadow-2xl max-w-md w-full mx-4 animate-in zoom-in slide-in-from-bottom-4 duration-300">
+                    <div className="bg-white rounded-3xl p-8 shadow-2xl max-w-md w-full mx-4 animate-in zoom-in slide-in-from-bottom-4 duration-300 relative">
+                        <button
+                            onClick={closeInviteModal}
+                            className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+                        >
+                            <XIcon className="w-5 h-5" />
+                        </button>
+
                         <div className="flex flex-col items-center gap-4 text-center">
                             <div className={`w-16 h-16 ${emailSent ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'} rounded-full flex items-center justify-center shadow-lg`}>
                                 <CheckIcon className="w-8 h-8" />
@@ -254,7 +283,6 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
 
             {/* Refined Invitation Section */}
             <div className="bg-white border border-slate-200 rounded-3xl p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
-
                 <div className="flex-1">
                     <h3 className="text-xl font-serif font-bold text-slate-900 mb-1 flex items-center gap-2">
                         <UserPlusIcon className="w-5 h-5 text-cyan-600" />

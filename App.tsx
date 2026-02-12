@@ -6,6 +6,7 @@ import { Case, Document, Annotation, ViewMode, UserProfile, AuthorizedUser, Revi
 import Sidebar from './components/Sidebar';
 const CaseList = React.lazy(() => import('./components/CaseList'));
 const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
+const SignUpPage = React.lazy(() => import('./components/SignUpPage'));
 
 // Lazy load major components for code splitting
 const DocumentViewer = React.lazy(() => import('./components/DocumentViewer'));
@@ -16,6 +17,7 @@ const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup'
 const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
+import { NewCaseModal } from './components/NewCaseModal';
 import { uploadFile } from './services/fileService';
 import {
   subscribeToCases,
@@ -50,12 +52,23 @@ const App: React.FC = () => {
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
   const [focusedAnnotationId, setFocusedAnnotationId] = useState<string | null>(null);
   const [isEditingAnnotation, setIsEditingAnnotation] = useState(false);
-  const [allDocuments, setAllDocuments] = useState<Document[]>([]);
-  const [allAnnotations, setAllAnnotations] = useState<Annotation[]>([]);
+  const [showNewCaseModal, setShowNewCaseModal] = useState(false);
+  const [editingCase, setEditingCase] = useState<Case | undefined>(undefined);
+
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      // Check if we're in the middle of signup authorization check
+      const isCheckingAuth = sessionStorage.getItem('isCheckingAuthorization') === 'true';
+      
       if (user) {
+        // If checking authorization, wait before setting current user to prevent UI flash
+        if (isCheckingAuth) {
+          console.log('⏸️ Authorization check in progress - delaying main UI render');
+          setLoading(true); // Keep loading state active
+          return; // Don't set currentUser yet - wait for auth check to complete
+        }
+        
         setCurrentUser({
           id: user.uid,
           name: user.displayName || user.email?.split('@')[0] || "Expert User",
@@ -65,7 +78,7 @@ const App: React.FC = () => {
 
         // Ensure support@apexmedlaw.com is an admin
         if (user.email) {
-          await ensureAdminUser(user.email);
+          await ensureAdminUser(user.email, user.uid);
         }
       } else {
         // Only clear if we aren't in explicit demo mode
@@ -88,32 +101,7 @@ const App: React.FC = () => {
     };
   }, [currentUser]);
 
-  // Subscribe to all documents and annotations for admin dashboard
-  useEffect(() => {
-    if (!currentUser || cases.length === 0) return;
 
-    const unsubscribers: (() => void)[] = [];
-    const docsMap = new Map<string, Document>();
-    const annsMap = new Map<string, Annotation>();
-
-    cases.forEach(caseItem => {
-      const unsubDocs = subscribeToDocuments(caseItem.id, (docs) => {
-        docs.forEach(doc => docsMap.set(doc.id, doc));
-        setAllDocuments(Array.from(docsMap.values()));
-      });
-
-      const unsubAnns = subscribeToAnnotations(caseItem.id, (anns) => {
-        anns.forEach(ann => annsMap.set(ann.id, ann));
-        setAllAnnotations(Array.from(annsMap.values()));
-      });
-
-      unsubscribers.push(unsubDocs, unsubAnns);
-    });
-
-    return () => {
-      unsubscribers.forEach(unsub => unsub());
-    };
-  }, [currentUser, cases]);
 
   // Sync user role and profile from authorizedUsers
   useEffect(() => {
@@ -133,6 +121,60 @@ const App: React.FC = () => {
       }
     }
   }, [cases, activeCase]);
+
+  // 1. Initial Load / URL Sync on Mount or Cases Update
+  useEffect(() => {
+    if (cases.length === 0) return; // Wait for cases to load
+
+    const params = new URLSearchParams(window.location.search);
+    const caseIdFromUrl = params.get('caseId');
+
+    // If URL has caseId but we aren't viewing a case, try to restore it
+    if (caseIdFromUrl && !activeCase) {
+      const found = cases.find(c => c.id === caseIdFromUrl);
+      if (found) {
+        setActiveCase(found);
+        setViewMode(ViewMode.CASE_VIEW);
+      }
+    }
+  }, [cases]);
+
+  // 2. Sync State -> URL (Push State)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlCaseId = params.get('caseId');
+
+    if (activeCase && viewMode === ViewMode.CASE_VIEW) {
+      if (urlCaseId !== activeCase.id) {
+        window.history.pushState({ caseId: activeCase.id }, '', `?caseId=${activeCase.id}`);
+      }
+    } else if (viewMode === ViewMode.DASHBOARD && urlCaseId) {
+      // If we went back to dashboard but URL still has caseId, clear it
+      window.history.pushState({}, '', '/');
+    }
+  }, [activeCase, viewMode]);
+
+  // 3. Sync URL -> State (PopState / Back Button)
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const caseId = params.get('caseId');
+
+      if (caseId) {
+        const found = cases.find(c => c.id === caseId);
+        if (found) {
+          setActiveCase(found);
+          setViewMode(ViewMode.CASE_VIEW);
+        }
+      } else {
+        setActiveCase(null);
+        setViewMode(ViewMode.DASHBOARD);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [cases]);
 
   useEffect(() => {
     if (!activeCase) {
@@ -175,21 +217,65 @@ const App: React.FC = () => {
 
   const handleCreateCase = () => {
     if (!currentUser) return;
-    const newCase: Case = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: 'New Clinical Matter',
-      clients: [],
-      description: 'Case description...',
-      createdAt: new Date().toISOString().split('T')[0],
-      status: 'active',
-      ownerId: currentUser.id,
-      ownerName: currentUser.name,
-      assignedUserIds: [],
-      reportStatus: 'idle'
-    };
-    upsertCase(newCase);
-    setActiveCase(newCase);
-    setViewMode(ViewMode.CASE_VIEW);
+    setEditingCase(undefined);
+    setShowNewCaseModal(true);
+  };
+
+  const handleEditCase = (caseItem: Case) => {
+    if (!currentUser) return;
+    setEditingCase(caseItem);
+    setShowNewCaseModal(true);
+  };
+
+  const handleSaveNewCase = (caseData: Partial<Case>, clientName: string) => {
+    if (!currentUser) return;
+
+    // If editing, merge with existing case
+    if (editingCase) {
+      const updatedCase: Case = {
+        ...editingCase,
+        ...caseData,
+        // Update client name if changed and clients exist, or add new if none
+        clients: clientName
+          ? (editingCase.clients && editingCase.clients.length > 0
+            ? editingCase.clients.map((c, i) => i === 0 ? { ...c, name: clientName } : c)
+            : [{ id: Math.random().toString(36).substr(2, 9), name: clientName, email: '', phone: '', role: 'Plaintiff' }])
+          : editingCase.clients
+      };
+      upsertCase(updatedCase);
+      // Update active case if we're editing the currently active one
+      if (activeCase?.id === updatedCase.id) {
+        setActiveCase(updatedCase);
+      }
+    } else {
+      // Create new case
+      const newCase: Case = {
+        id: Math.random().toString(36).substr(2, 9),
+        title: caseData.title || 'New Clinical Matter',
+        description: caseData.description || '',
+        createdAt: caseData.createdAt || new Date().toISOString().split('T')[0],
+        status: 'active',
+        ownerId: currentUser.id,
+        ownerName: currentUser.name,
+        primaryLawyer: caseData.primaryLawyer || '',
+        clients: clientName ? [{
+          id: Math.random().toString(36).substr(2, 9),
+          name: clientName,
+          email: '',
+          phone: '',
+          role: 'Plaintiff'
+        }] : [],
+        assignedUserIds: [],
+        reportStatus: 'idle',
+        ...caseData
+      } as Case;
+
+      upsertCase(newCase);
+      setActiveCase(newCase);
+      setViewMode(ViewMode.CASE_VIEW);
+    }
+    setShowNewCaseModal(false);
+    setEditingCase(undefined);
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
@@ -213,15 +299,58 @@ const App: React.FC = () => {
         }
       }
 
+      // Smart path detection based on filename
+      const detectPath = (filename: string): string => {
+        const lower = filename.toLowerCase();
+
+        // Medical Records categories
+        if (lower.includes('surgery') || lower.includes('surgical') || lower.includes('operation')) {
+          return 'Medical Records/Surgery';
+        }
+        if (lower.includes('nursing') || lower.includes('nurse')) {
+          return 'Medical Records/Nursing';
+        }
+        if (lower.includes('radiology') || lower.includes('xray') || lower.includes('x-ray') || lower.includes('mri') || lower.includes('ct scan')) {
+          return 'Medical Records/Radiology';
+        }
+        if (lower.includes('lab') || lower.includes('pathology') || lower.includes('blood')) {
+          return 'Medical Records/Laboratory';
+        }
+        if (lower.includes('discharge') || lower.includes('admission')) {
+          return 'Medical Records/Hospital Records';
+        }
+        if (lower.includes('prescription') || lower.includes('medication') || lower.includes('pharmacy')) {
+          return 'Medical Records/Pharmacy';
+        }
+
+        // Legal Documents
+        if (lower.includes('deposition') || lower.includes('testimony')) {
+          return 'Legal Documents/Depositions';
+        }
+        if (lower.includes('contract') || lower.includes('agreement')) {
+          return 'Legal Documents/Contracts';
+        }
+        if (lower.includes('correspondence') || lower.includes('letter')) {
+          return 'Legal Documents/Correspondence';
+        }
+
+        // Default fallback
+        return 'Medical Records/General';
+      };
+
       const newDoc: Document = {
         id: Math.random().toString(36).substr(2, 9),
         caseId,
         name: fileData.name,
         type: 'pdf',
         url: fileData.url,
-        uploadDate: new Date().toISOString().split('T')[0],
+        // storagePath returned by uploadFile (may be undefined in demo fallback)
+        storagePath: (fileData as any).storagePath || undefined,
+        // store full ISO timestamp so UI can format user-friendly date/time
+        uploadDate: new Date().toISOString(),
         size: fileData.size,
-        reviewStatus: 'pending'
+        reviewStatus: 'pending',
+        path: detectPath(fileData.name)
       };
       await upsertDocument(newDoc);
     } catch (e) {
@@ -275,7 +404,7 @@ const App: React.FC = () => {
 
   const handleInviteUser = (email: string, role: UserRole, name: string) => {
     const newUser: AuthorizedUser = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: email.toLowerCase(),
       name,
       email,
       role,
@@ -319,15 +448,27 @@ const App: React.FC = () => {
     </div>
   );
 
-  if (!currentUser) return (
-    <React.Suspense fallback={
-      <div className="h-screen flex items-center justify-center bg-slate-50">
-        <Loader2Icon className="w-8 h-8 text-indigo-500 animate-spin" />
-      </div>
-    }>
-      <LoginScreen onDemoLogin={handleDemoLogin} />
-    </React.Suspense>
-  );
+  if (!currentUser) {
+    // Check if URL has invitation token, signup param, or access request param
+    const params = new URLSearchParams(window.location.search);
+    const hasInvite = params.get('invite');
+    const isSignup = params.get('signup') === 'true';
+    const isAccessRequest = params.get('access') === 'request';
+    
+    return (
+      <React.Suspense fallback={
+        <div className="h-screen flex items-center justify-center bg-slate-50">
+          <Loader2Icon className="w-8 h-8 text-indigo-500 animate-spin" />
+        </div>
+      }>
+        {hasInvite || isSignup ? (
+          <SignUpPage onBackToLogin={() => window.location.href = '/'} />
+        ) : (
+          <LoginScreen onDemoLogin={handleDemoLogin} autoShowRequestAccess={isAccessRequest} />
+        )}
+      </React.Suspense>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-50">
@@ -375,7 +516,15 @@ const App: React.FC = () => {
               </div>
             }>
               {viewMode === ViewMode.DASHBOARD && (
-                <CaseList cases={cases} onSelect={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }} onCreate={handleCreateCase} currentUser={currentUser} onDeleteCase={deleteCaseFromStore} onUpdateCase={upsertCase} />
+                <CaseList
+                  cases={cases}
+                  onSelect={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }}
+                  onCreate={handleCreateCase}
+                  onEdit={handleEditCase}
+                  currentUser={currentUser}
+                  onDeleteCase={deleteCaseFromStore}
+                  onUpdateCase={upsertCase}
+                />
               )}
               {viewMode === ViewMode.CASE_VIEW && activeCase && (
                 <CaseDetails
@@ -431,7 +580,7 @@ const App: React.FC = () => {
                 />
               )}
               {viewMode === ViewMode.CLIENTS && (
-                <ClientDirectory cases={cases} currentUser={currentUser} />
+                <ClientDirectory cases={cases} currentUser={currentUser} onUpdateCase={upsertCase} />
               )}
               {viewMode === ViewMode.ORIENTATION && (
                 <Orientation />
@@ -470,8 +619,6 @@ const App: React.FC = () => {
                 <AdminInsights
                   cases={cases}
                   authorizedUsers={authorizedUsers}
-                  allAnnotations={allAnnotations}
-                  allDocuments={allDocuments}
                 />
               )}
               {viewMode === ViewMode.SETTINGS && (
@@ -481,6 +628,13 @@ const App: React.FC = () => {
           </div>
         </main>
       </div>
+
+      <NewCaseModal
+        isOpen={showNewCaseModal}
+        onClose={() => setShowNewCaseModal(false)}
+        onCreate={handleSaveNewCase}
+        initialData={editingCase}
+      />
     </div>
   );
 };

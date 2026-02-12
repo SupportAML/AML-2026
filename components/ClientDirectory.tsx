@@ -14,9 +14,10 @@ import { Client, Case, UserProfile } from '../types';
 interface ClientDirectoryProps {
   cases: Case[];
   currentUser: UserProfile;
+  onUpdateCase: (c: Case) => void;
 }
 
-const ClientDirectory: React.FC<ClientDirectoryProps> = ({ cases, currentUser }) => {
+const ClientDirectory: React.FC<ClientDirectoryProps> = ({ cases, currentUser, onUpdateCase }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterUser, setFilterUser] = useState<string>('ALL');
 
@@ -59,6 +60,66 @@ const ClientDirectory: React.FC<ClientDirectoryProps> = ({ cases, currentUser })
       }
     };
     input.click();
+  };
+
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editClient, setEditClient] = useState<Partial<Client> | null>(null);
+  const [editClientOriginalCaseId, setEditClientOriginalCaseId] = useState<string | null>(null);
+
+  const openEditModal = (client: any) => {
+    setEditClient({ id: client.id, name: client.name, email: client.email, phone: client.phone, role: client.role });
+    setEditClientOriginalCaseId(client.caseId);
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = () => {
+    if (!editClient || !editClient.id) return;
+    const targetCaseId = (editClient as any).caseId || editClientOriginalCaseId;
+    // If associated case changed, move client between cases
+    const originalCaseId = editClientOriginalCaseId;
+    const updatedCases = cases.map(c => {
+      // clone
+      const clone = { ...c, clients: (c.clients || []).slice() };
+      if (c.id === originalCaseId) {
+        clone.clients = clone.clients.filter(cli => cli.id !== editClient.id);
+      }
+      return clone;
+    });
+
+    const targetCase = updatedCases.find(c => c.id === targetCaseId);
+    if (targetCase) {
+      const updatedClient: Client = {
+        id: editClient.id!,
+        name: editClient.name || '',
+        email: editClient.email || '',
+        phone: editClient.phone || '',
+        role: editClient.role as any || 'Other'
+      };
+      // if client exists in target, replace, else push
+      const existsIdx = (targetCase.clients || []).findIndex(cli => cli.id === updatedClient.id);
+      if (existsIdx >= 0) {
+        targetCase.clients![existsIdx] = updatedClient;
+      } else {
+        targetCase.clients = [...(targetCase.clients || []), updatedClient];
+      }
+      onUpdateCase(targetCase);
+    }
+
+    // If original case was different, also update it via onUpdateCase
+    if (originalCaseId && originalCaseId !== targetCaseId) {
+      const orig = updatedCases.find(c => c.id === originalCaseId);
+      if (orig) onUpdateCase(orig);
+    }
+
+    setShowEditModal(false);
+    setEditClient(null);
+    setEditClientOriginalCaseId(null);
+  };
+
+  const handleCancelEdit = () => {
+    setShowEditModal(false);
+    setEditClient(null);
+    setEditClientOriginalCaseId(null);
   };
 
   return (
@@ -115,6 +176,7 @@ const ClientDirectory: React.FC<ClientDirectoryProps> = ({ cases, currentUser })
                   <th className="px-6 py-4">Role</th>
                   <th className="px-6 py-4">Associated Case</th>
                   {currentUser.role === 'ADMIN' && <th className="px-6 py-4">Physician</th>}
+                  <th className="px-6 py-4">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
@@ -159,6 +221,18 @@ const ClientDirectory: React.FC<ClientDirectoryProps> = ({ cases, currentUser })
                           {client.caseOwnerName || 'Unknown'}
                         </td>
                       )}
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => openEditModal(client)}
+                            title="Edit client"
+                            className="p-2 rounded hover:bg-slate-100 text-slate-500"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            <span className="sr-only">Edit</span>
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -167,6 +241,52 @@ const ClientDirectory: React.FC<ClientDirectoryProps> = ({ cases, currentUser })
           </div>
         </div>
       </div>
+      {showEditModal && editClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold">Edit Client</h3>
+              <button onClick={handleCancelEdit} className="text-slate-400 hover:text-slate-600">
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Name</label>
+                <input className="w-full p-2 border rounded" value={editClient.name || ''} onChange={e => setEditClient(prev => ({ ...(prev||{}), name: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Email</label>
+                <input className="w-full p-2 border rounded" value={editClient.email || ''} onChange={e => setEditClient(prev => ({ ...(prev||{}), email: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Phone</label>
+                <input className="w-full p-2 border rounded" value={editClient.phone || ''} onChange={e => setEditClient(prev => ({ ...(prev||{}), phone: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Role</label>
+                <select className="w-full p-2 border rounded" value={editClient.role || 'Other'} onChange={e => setEditClient(prev => ({ ...(prev||{}), role: e.target.value as any }))}>
+                  <option value="Plaintiff">Plaintiff</option>
+                  <option value="Defendant">Defendant</option>
+                  <option value="Lawyer">Lawyer</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Associated Case</label>
+                <select className="w-full p-2 border rounded" value={editClientOriginalCaseId || ''} onChange={e => setEditClient(prev => ({ ...(prev||{}), caseId: e.target.value }))}>
+                  <option value="">Select case</option>
+                  {cases.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 mt-4">
+                <button onClick={handleCancelEdit} className="px-4 py-2 text-slate-600 rounded bg-slate-50">Cancel</button>
+                <button onClick={handleSaveEdit} className="px-4 py-2 bg-indigo-600 text-white rounded">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

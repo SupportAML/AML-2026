@@ -1,0 +1,17 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper function to check if user is authorized
+    function isAuthorized() {
+      return request.auth != null && 
+             firestore.exists(/databases/(default)/documents/authorizedUsers/$(request.auth.uid));
+    }
+    
+    // All files require authorization
+    match /{allPaths=**} {
+      allow read: if isAuthorized();
+      allow write: if isAuthorized();
+    }
+  }
+}

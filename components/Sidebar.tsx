@@ -59,7 +59,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [draggedCaseId, setDraggedCaseId] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [collapsedUsers, setCollapsedUsers] = useState<Set<string>>(new Set());
-  const [isManagingTeam, setIsManagingTeam] = useState(false);
+  // team management moved to full Team Admin view
 
   // New User State
   const [newUserName, setNewUserName] = useState('');
@@ -144,100 +144,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside className="w-64 bg-white border-r flex flex-col h-full shrink-0 relative">
-      {/* Team Management Modal Overlay */}
-      {isManagingTeam && (
-        <div className="absolute left-64 top-4 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 animate-in slide-in-from-left-4 duration-200 overflow-hidden ring-1 ring-black/5">
-          <div className="bg-slate-50 p-4 border-b flex items-center justify-between">
-            <h3 className="font-bold text-slate-800 flex items-center gap-2">
-              <UsersIcon className="w-4 h-4 text-cyan-600" />
-              Manage Access
-            </h3>
-            <button onClick={() => setIsManagingTeam(false)} className="text-slate-400 hover:text-slate-600">
-              <XIcon className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="p-4 border-b bg-white">
-            <p className="text-[10px] text-slate-400 uppercase font-bold mb-3">Invite New Member</p>
-            <div className="space-y-2">
-              <input
-                placeholder="Full Name (Optional)"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:outline-none focus:border-cyan-500 bg-slate-50"
-                value={newUserName}
-                onChange={e => setNewUserName(e.target.value)}
-              />
-              <input
-                placeholder="Email Address"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:outline-none focus:border-cyan-500 bg-slate-50"
-                value={newUserEmail}
-                onChange={e => setNewUserEmail(e.target.value)}
-              />
-              <div className="flex gap-2">
-                <select
-                  className="flex-1 text-xs px-2 py-2 border rounded-lg bg-slate-50 text-slate-600"
-                  value={newUserRole}
-                  onChange={(e) => setNewUserRole(e.target.value as UserRole)}
-                >
-                  <option value="USER">Physician</option>
-                  <option value="ADMIN">Admin</option>
-                </select>
-                <button
-                  onClick={handleInvite}
-                  disabled={!newUserEmail}
-                  className="px-4 py-2 bg-cyan-600 text-white rounded-lg text-xs font-bold disabled:opacity-50 hover:bg-cyan-700 transition-colors"
-                >
-                  Send Invite
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="max-h-64 overflow-auto p-2 bg-slate-50/50">
-            <p className="text-[10px] text-slate-400 uppercase font-bold px-2 py-2">Current Team</p>
-            {authorizedUsers.map(user => (
-              <div key={user.id} className="flex items-center justify-between p-2 hover:bg-white hover:shadow-sm rounded-lg group transition-all">
-                <div className="flex items-center gap-3 overflow-hidden">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm ${user.avatarColor || 'bg-slate-400'}`}>
-                    {user.name ? user.name.charAt(0) : user.email.charAt(0)}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-slate-700 truncate">{user.name || 'Pending...'}</p>
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-[10px] text-slate-400 truncate">{user.email}</p>
-                      {user.status === 'invited' && (
-                        <span className="text-[9px] bg-amber-100 text-amber-700 px-1 rounded flex items-center gap-0.5">
-                          <MailIcon className="w-2 h-2" /> Invited
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${user.role === 'ADMIN' ? 'bg-purple-50 text-purple-600 border-purple-100' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
-                    {user.role}
-                  </span>
-                  {user.id !== currentUser.id && (
-                    <div className="flex items-center gap-1">
-                      {onImpersonate && (
-                        <button
-                          onClick={() => onImpersonate(user.id)}
-                          className="text-slate-300 hover:text-cyan-600 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                          title="Impersonate User"
-                        >
-                          <EyeIcon className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <button onClick={() => onDeleteUser(user.id)} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
-                        <Trash2Icon className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      
 
       <div className="p-6 pb-2">
         <div className="flex items-center gap-2 mb-6">
@@ -386,8 +293,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Firm Access</span>
               </div>
               <button
-                onClick={() => setIsManagingTeam(!isManagingTeam)}
-                className={`p-1 rounded hover:bg-slate-100 transition-colors ${isManagingTeam ? 'text-cyan-600 bg-cyan-50' : 'text-slate-400'}`}
+                onClick={() => setView(ViewMode.TEAM_ADMIN)}
+                className="p-1 rounded hover:bg-slate-100 transition-colors text-slate-400"
                 title="Manage Team"
               >
                 <UserPlusIcon className="w-4 h-4" />
