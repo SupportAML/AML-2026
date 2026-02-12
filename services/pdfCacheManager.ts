@@ -1,23 +1,24 @@
 /**
- * PDF Cache Manager - Reduces Firebase Storage egress
+ * PDF Cache Manager - Reduces Firebase Storage egress to near zero
+ * Uses ArrayBuffer (not Blob/URL) so PDF.js never triggers ANY network fetch
  * Two-tier cache: Memory (fast) + IndexedDB (persistent)
  */
 
 interface CachedPDFItem {
   key: string;
-  blob: Blob;
+  data: ArrayBuffer;
   size: number;
   timestamp: number;
   metadata?: Record<string, string>;
 }
 
 class PDFCacheManager {
-  private memoryCache = new Map<string, Blob>();
-  private maxMemoryItems = 5;
+  private memoryCache = new Map<string, ArrayBuffer>();
+  private maxMemoryItems = 10;
   private dbName = 'pdf_cache_db';
-  private storeName = 'pdfs';
-  private maxCacheSize = 100 * 1024 * 1024; // 100MB limit
-  private maxCacheItems = 20;
+  private storeName = 'pdfs_v2';
+  private maxCacheSize = 150 * 1024 * 1024; // 150MB
+  private maxCacheItems = 25;
   private db: IDBDatabase | null = null;
   private initPromise: Promise<void> | null = null;
 
@@ -25,7 +26,7 @@ class PDFCacheManager {
     if (this.db) return;
     if (this.initPromise) return this.initPromise;
     this.initPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, 1);
+      const request = indexedDB.open(this.dbName, 3);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         this.db = request.result;
@@ -44,129 +45,120 @@ class PDFCacheManager {
   }
 
   /**
-   * Get a cached PDF blob if available.
-   * @param cacheKey - Stable key (e.g. pdf_${docId})
-   * @returns Blob if cached, null if cache miss
+   * Get cached PDF as ArrayBuffer. When found, PDF.js uses { data } - ZERO network.
    */
-  async getCachedPDF(cacheKey: string): Promise<Blob | null> {
-    // Check memory cache first
+  async getCachedPDF(cacheKey: string): Promise<ArrayBuffer | null> {
     if (this.memoryCache.has(cacheKey)) {
       console.log(`[PDF Cache HIT - Memory] ${cacheKey}`);
-      const blob = this.memoryCache.get(cacheKey)!;
-      // LRU: move to end (delete + re-add)
+      const buf = this.memoryCache.get(cacheKey)!;
       this.memoryCache.delete(cacheKey);
-      this.addToMemoryCache(cacheKey, blob);
-      return blob;
+      this.addToMemoryCache(cacheKey, buf);
+      return buf;
     }
 
-    // Check IndexedDB
     const cached = await this.getFromIndexedDB(cacheKey);
     if (cached) {
       console.log(`[PDF Cache HIT - IndexedDB] ${cacheKey}`);
-      this.addToMemoryCache(cacheKey, cached.blob);
-      return cached.blob;
+      this.addToMemoryCache(cacheKey, cached.data);
+      return cached.data;
     }
 
     console.log(`[PDF Cache MISS] ${cacheKey}`);
     return null;
   }
 
-  /**
-   * Store a PDF blob in the cache.
-   */
-  async cachePDF(cacheKey: string, blob: Blob, metadata: Record<string, string> = {}): Promise<void> {
-    this.addToMemoryCache(cacheKey, blob);
-    await this.addToIndexedDB(cacheKey, blob, metadata);
+  async cachePDF(cacheKey: string, data: ArrayBuffer, metadata: Record<string, string> = {}): Promise<void> {
+    this.addToMemoryCache(cacheKey, data);
+    await this.addToIndexedDB(cacheKey, data, metadata);
     await this.enforceCacheLimits();
   }
 
-  private addToMemoryCache(key: string, blob: Blob): void {
-    // Evict oldest if at capacity
+  private addToMemoryCache(key: string, data: ArrayBuffer): void {
     if (this.memoryCache.size >= this.maxMemoryItems && !this.memoryCache.has(key)) {
       const firstKey = this.memoryCache.keys().next().value;
-      if (firstKey !== undefined) {
-        this.memoryCache.delete(firstKey);
-      }
+      if (firstKey !== undefined) this.memoryCache.delete(firstKey);
     }
-    this.memoryCache.set(key, blob);
+    this.memoryCache.set(key, data);
   }
 
   private async getFromIndexedDB(key: string): Promise<CachedPDFItem | null> {
-    await this.initDB();
-    if (!this.db) return null;
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readonly');
-      const store = transaction.objectStore(this.storeName);
-      const request = store.get(key);
-      request.onsuccess = () => resolve(request.result ?? null);
-      request.onerror = () => reject(request.error);
-    });
+    try {
+      await this.initDB();
+      if (!this.db) return null;
+      return await new Promise((resolve, reject) => {
+        const tx = this.db!.transaction([this.storeName], 'readonly');
+        const request = tx.objectStore(this.storeName).get(key);
+        request.onsuccess = () => resolve(request.result ?? null);
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.warn('[PDF Cache] IndexedDB read failed:', e);
+      return null;
+    }
   }
 
-  private async addToIndexedDB(key: string, blob: Blob, metadata: Record<string, string> = {}): Promise<void> {
-    await this.initDB();
-    if (!this.db) return;
-    const data: CachedPDFItem = {
-      key,
-      blob,
-      size: blob.size,
-      timestamp: Date.now(),
-      metadata
-    };
-    return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      const request = store.put(data);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+  private async addToIndexedDB(key: string, data: ArrayBuffer, metadata: Record<string, string> = {}): Promise<void> {
+    try {
+      await this.initDB();
+      if (!this.db) return;
+      const item: CachedPDFItem = {
+        key,
+        data,
+        size: data.byteLength,
+        timestamp: Date.now(),
+        metadata
+      };
+      await new Promise<void>((resolve, reject) => {
+        const tx = this.db!.transaction([this.storeName], 'readwrite');
+        const request = tx.objectStore(this.storeName).put(item);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.warn('[PDF Cache] IndexedDB write failed:', e);
+    }
   }
 
   private async enforceCacheLimits(): Promise<void> {
     if (!this.db) return;
-
-    const allItems: CachedPDFItem[] = await new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readonly');
-      const store = transaction.objectStore(this.storeName);
-      const index = store.index('timestamp');
-      const request = index.getAll();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-
-    if (allItems.length === 0) return;
-
-    // Sort by timestamp (oldest first)
-    allItems.sort((a, b) => a.timestamp - b.timestamp);
-
-    let totalSize = allItems.reduce((sum, item) => sum + item.size, 0);
-    let itemCount = allItems.length;
-
-    // Remove oldest items if over limits
-    const toDelete: string[] = [];
-    for (const item of allItems) {
-      if (itemCount <= this.maxCacheItems && totalSize <= this.maxCacheSize) break;
-      toDelete.push(item.key);
-      totalSize -= item.size;
-      itemCount--;
+    try {
+      const allItems: CachedPDFItem[] = await new Promise((resolve, reject) => {
+        const tx = this.db!.transaction([this.storeName], 'readonly');
+        const request = tx.objectStore(this.storeName).index('timestamp').getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      if (allItems.length === 0) return;
+      allItems.sort((a, b) => a.timestamp - b.timestamp);
+      let totalSize = allItems.reduce((s, i) => s + i.size, 0);
+      let count = allItems.length;
+      const toDelete: string[] = [];
+      for (const item of allItems) {
+        if (count <= this.maxCacheItems && totalSize <= this.maxCacheSize) break;
+        toDelete.push(item.key);
+        totalSize -= item.size;
+        count--;
+      }
+      if (toDelete.length === 0) return;
+      await new Promise<void>((resolve, reject) => {
+        const tx = this.db!.transaction([this.storeName], 'readwrite');
+        const store = tx.objectStore(this.storeName);
+        toDelete.forEach((k) => store.delete(k));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('[PDF Cache] enforceCacheLimits failed:', e);
     }
-
-    if (toDelete.length === 0) return;
-
-    await new Promise<void>((resolve, reject) => {
-      const transaction = this.db!.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      toDelete.forEach((key) => store.delete(key));
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
   }
 
   clearCache(): void {
     this.memoryCache.clear();
     if (this.db) {
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
-      transaction.objectStore(this.storeName).clear();
+      try {
+        const tx = this.db.transaction([this.storeName], 'readwrite');
+        tx.objectStore(this.storeName).clear();
+      } catch {}
     }
   }
 }

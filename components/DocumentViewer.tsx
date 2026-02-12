@@ -540,8 +540,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [pendingTime, setPendingTime] = useState('');
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [cacheStatus, setCacheStatus] = useState<'idle' | 'cached' | 'downloading'>('idle');
-
-  const blobUrlRef = useRef<string | null>(null);
+  const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   const estimatedHeightPerPage = (ESTIMATED_PAGE_HEIGHT * (scale / 1.2)) + PAGE_GAP;
 
   const jumpToPage = (targetPage: number, smooth = true) => {
@@ -631,10 +630,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       setError(null);
       setCacheStatus('idle');
 
-      // Revoke previous blob URL to prevent memory leaks
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
+      if (pdfDocRef.current) {
+        try { pdfDocRef.current.destroy(); } catch {}
+        pdfDocRef.current = null;
+        setPdfDoc(null);
       }
 
       try {
@@ -646,31 +645,30 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           fetchUrl = doc.url.replace('https://firebasestorage.googleapis.com', '/storage-proxy');
         }
 
-        const cacheKey = `pdf_${doc.id.replace(/[\/\.]/g, '_')}`;
+        const cacheKey = `pdf_${String(doc.id).replace(/[\/\.]/g, '_')}`;
+        let arrayBuffer: ArrayBuffer;
 
-        // Try cache first
-        let blob = await pdfCacheManager.getCachedPDF(cacheKey);
-        const wasFromCache = !!blob;
+        const cached = await pdfCacheManager.getCachedPDF(cacheKey);
+        const wasFromCache = !!cached;
 
-        if (blob) {
+        if (cached) {
           setCacheStatus('cached');
+          arrayBuffer = cached;
         } else {
           setCacheStatus('downloading');
           const response = await fetch(fetchUrl);
           if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
-          blob = await response.blob();
-          await pdfCacheManager.cachePDF(cacheKey, blob, {
+          arrayBuffer = await response.arrayBuffer();
+          await pdfCacheManager.cachePDF(cacheKey, arrayBuffer, {
             path: (doc as any).storagePath || doc.url,
             docName: doc.name,
             downloadedAt: new Date().toISOString()
           });
         }
 
-        const blobUrl = URL.createObjectURL(blob);
-        blobUrlRef.current = blobUrl;
-
+        // Pass raw data - PDF.js makes ZERO network requests
         const loadingTask = pdfjsLib.getDocument({
-          url: blobUrl,
+          data: arrayBuffer,
           cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
           cMapPacked: true,
           disableAutoFetch: true,
@@ -678,7 +676,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         });
 
         const loadedPdf = await loadingTask.promise;
-
+        pdfDocRef.current = loadedPdf;
         setPdfDoc(loadedPdf);
         setNumPages(loadedPdf.numPages);
         setLoading(false);
@@ -696,11 +694,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       }
     };
     loadPdf();
-
     return () => {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
+      if (pdfDocRef.current) {
+        try { pdfDocRef.current.destroy(); } catch {}
+        pdfDocRef.current = null;
       }
     };
   }, [doc.id, doc.url]);
