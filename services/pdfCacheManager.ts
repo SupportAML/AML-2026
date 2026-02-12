@@ -51,16 +51,16 @@ class PDFCacheManager {
     if (this.memoryCache.has(cacheKey)) {
       console.log(`[PDF Cache HIT - Memory] ${cacheKey}`);
       const buf = this.memoryCache.get(cacheKey)!;
-      this.memoryCache.delete(cacheKey);
-      this.addToMemoryCache(cacheKey, buf);
-      return buf;
+      // PDF.js DETACHES the buffer when used - always return a fresh copy
+      return buf.slice(0);
     }
 
     const cached = await this.getFromIndexedDB(cacheKey);
     if (cached) {
       console.log(`[PDF Cache HIT - IndexedDB] ${cacheKey}`);
-      this.addToMemoryCache(cacheKey, cached.data);
-      return cached.data;
+      const copy = cached.data.slice(0);
+      this.addToMemoryCache(cacheKey, copy);
+      return copy;
     }
 
     console.log(`[PDF Cache MISS] ${cacheKey}`);

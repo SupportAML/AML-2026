@@ -658,17 +658,19 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           setCacheStatus('downloading');
           const response = await fetch(fetchUrl);
           if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
-          arrayBuffer = await response.arrayBuffer();
-          await pdfCacheManager.cachePDF(cacheKey, arrayBuffer, {
+          const fetched = await response.arrayBuffer();
+          await pdfCacheManager.cachePDF(cacheKey, fetched.slice(0), {
             path: (doc as any).storagePath || doc.url,
             docName: doc.name,
             downloadedAt: new Date().toISOString()
           });
+          arrayBuffer = fetched;
         }
 
-        // Pass raw data - PDF.js makes ZERO network requests
+        // Pass data - use copy for PDF.js since it may detach the buffer
+        const dataForPdf = arrayBuffer.slice(0);
         const loadingTask = pdfjsLib.getDocument({
-          data: arrayBuffer,
+          data: dataForPdf,
           cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
           cMapPacked: true,
           disableAutoFetch: true,
