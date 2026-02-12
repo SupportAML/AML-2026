@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
 import { processAnnotationInput } from '../services/claudeService';
+import { pdfCacheManager } from '../services/pdfCacheManager';
 import { VoiceTranscriptionOverlay } from './VoiceTranscriptionOverlay';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.mjs`;
@@ -538,7 +539,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [pendingDate, setPendingDate] = useState('');
   const [pendingTime, setPendingTime] = useState('');
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [cacheStatus, setCacheStatus] = useState<'idle' | 'cached' | 'downloading'>('idle');
 
+  const blobUrlRef = useRef<string | null>(null);
   const estimatedHeightPerPage = (ESTIMATED_PAGE_HEIGHT * (scale / 1.2)) + PAGE_GAP;
 
   const jumpToPage = (targetPage: number, smooth = true) => {
@@ -626,8 +629,15 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     const loadPdf = async () => {
       setLoading(true);
       setError(null);
+      setCacheStatus('idle');
+
+      // Revoke previous blob URL to prevent memory leaks
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+
       try {
-        // Use proxy in development to bypass CORS if needed
         let fetchUrl = doc.url;
         const isFirebaseStorage = doc.url.includes('firebasestorage.googleapis.com');
         const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -636,8 +646,31 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           fetchUrl = doc.url.replace('https://firebasestorage.googleapis.com', '/storage-proxy');
         }
 
+        const cacheKey = `pdf_${doc.id.replace(/[\/\.]/g, '_')}`;
+
+        // Try cache first
+        let blob = await pdfCacheManager.getCachedPDF(cacheKey);
+        const wasFromCache = !!blob;
+
+        if (blob) {
+          setCacheStatus('cached');
+        } else {
+          setCacheStatus('downloading');
+          const response = await fetch(fetchUrl);
+          if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
+          blob = await response.blob();
+          await pdfCacheManager.cachePDF(cacheKey, blob, {
+            path: (doc as any).storagePath || doc.url,
+            docName: doc.name,
+            downloadedAt: new Date().toISOString()
+          });
+        }
+
+        const blobUrl = URL.createObjectURL(blob);
+        blobUrlRef.current = blobUrl;
+
         const loadingTask = pdfjsLib.getDocument({
-          url: fetchUrl,
+          url: blobUrl,
           cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
           cMapPacked: true,
           disableAutoFetch: true,
@@ -648,11 +681,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
         setPdfDoc(loadedPdf);
         setNumPages(loadedPdf.numPages);
-
-        // Immediately show the UI - don't wait for all pages to be ready
         setLoading(false);
-
-        // After a brief moment, expand the render window
+        if (!wasFromCache) setCacheStatus('idle');
         setTimeout(() => setIsInitialLoad(false), 1000);
       } catch (err: any) {
         console.error("PDF Load Error:", err);
@@ -662,10 +692,18 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           isCors
         });
         setLoading(false);
+        setCacheStatus('idle');
       }
     };
     loadPdf();
-  }, [doc.url]);
+
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, [doc.id, doc.url]);
 
   const handleCommitPending = (manualText?: string, manualDate?: string, manualTime?: string) => {
     const textToUse = manualText !== undefined ? manualText : pendingText;
@@ -884,7 +922,19 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
               )}
             </div>
           ) : (
-            <h2 className="font-bold text-slate-700 truncate max-w-[200px]">{doc.name}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-slate-700 truncate max-w-[200px]">{doc.name}</h2>
+              {cacheStatus === 'cached' && (
+                <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded" title="Loaded from cache - no network download">
+                  📦 Cached
+                </span>
+              )}
+              {cacheStatus === 'downloading' && loading && (
+                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                  ⬇️ Downloading
+                </span>
+              )}
+            </div>
           )}
 
           {onOpenClinicalWorkspace && (
