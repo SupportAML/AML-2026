@@ -60,9 +60,11 @@ import { DepositionSimulation } from './DepositionSimulation';
 import { ClinicalDocumentPreview } from './ClinicalDocumentPreview';
 import PreviewPanel from './PreviewPanel';
 import WriterCommentSidebar from './WriterCommentSidebar';
+import { SkeletonLoader } from './SkeletonLoader';
 import { VoiceInputButton } from './VoiceInputButton';
 import {
    draftMedicalLegalReport,
+   draftMedicalLegalReportStream,
    runFullCaseStrategy,
    chatWithDepositionCoach,
    cleanupChronology,
@@ -1154,9 +1156,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    // --- Handlers: Deposition ---
    const handleRunStrategy = async () => {
       setIsGenerating(true);
-      const s = await runFullCaseStrategy(reportContent || caseItem.description);
-      if (s) setStrategyData(s);
-      setIsGenerating(false);
+      try {
+         const s = await runFullCaseStrategy(reportContent || caseItem.description);
+         if (s) setStrategyData(s);
+      } finally {
+         setIsGenerating(false);
+      }
    };
 
    const handleStartDepo = (scenario: any) => {
@@ -1504,7 +1509,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         </div>
 
                         <div className="flex-1 overflow-y-auto space-y-12 pb-20 no-scrollbar">
-                           {(!liveChronology || (liveChronology.years.length === 0 && liveChronology.irrelevantFacts.length === 0)) ? (
+                           {isGenerating && (!liveChronology || (liveChronology.years.length === 0 && liveChronology.irrelevantFacts.length === 0)) ? (
+                              <div className="py-8">
+                                 <SkeletonLoader type="timeline" />
+                              </div>
+                           ) : (!liveChronology || (liveChronology.years.length === 0 && liveChronology.irrelevantFacts.length === 0)) ? (
                               <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-white/50">
                                  <CalendarIcon className="w-12 h-12 text-slate-200 mx-auto mb-3" />
                                  <p className="text-slate-400 font-bold mb-1">Timeline is empty.</p>
@@ -1999,6 +2008,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                  </div>
                               </div>
                            ))}
+                           {isGenerating && researchResults.length === 0 && (
+                              <div className="py-6">
+                                 <SkeletonLoader type="research" />
+                              </div>
+                           )}
                            {researchResults.length === 0 && !isGenerating && !researchGaps.length && (
                               <div className="text-center py-20 opacity-50">
                                  <BookOpenIcon className="w-12 h-12 mx-auto mb-2 text-slate-400" />
@@ -2030,7 +2044,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         <div className="flex items-center gap-3">
                            <div className="relative">
                               <button
-                                 ref={(el) => moreButtonRef.current = el}
+                                 ref={moreButtonRef}
                                  onClick={() => setShowHeaderMenu(s => !s)}
                                  className="p-2 rounded-lg text-slate-500 hover:bg-slate-50"
                                  title="More"
@@ -2075,20 +2089,21 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               onClick={async () => {
                                  setIsGenerating(true);
                                  try {
-                                    // Push current state to undo stack before generating new report
                                     if (reportContent.trim()) {
                                        setUndoStack(prev => [...prev, reportContent].slice(-50));
                                        setRedoStack([]);
                                     }
-                                    const generatedReport = await draftMedicalLegalReport(
+                                    const generatedReport = await draftMedicalLegalReportStream(
                                        { ...caseItem, reportTemplate },
                                        docs,
                                        annotations,
                                        additionalContext,
-                                       currentUser.qualifications
+                                       currentUser.qualifications || '',
+                                       (chunk) => {
+                                          setReportContent(chunk);
+                                          lastContentRef.current = chunk;
+                                       }
                                     );
-                                    
-                                    // Create version snapshot for AI-generated draft
                                     const newVersion = {
                                        id: Date.now().toString(),
                                        date: new Date().toISOString(),
@@ -2097,14 +2112,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        author: 'AI Assistant',
                                        label: 'AI Generated Draft'
                                     };
-                                    
-                                    // Update case with new version
                                     onUpdateCase({
                                        ...caseItem,
                                        reportContent: generatedReport,
                                        draftVersions: [...(caseItem.draftVersions || []), newVersion].slice(-20)
                                     });
-                                    
                                     setReportContent(generatedReport);
                                     lastContentRef.current = generatedReport;
                                     setWriterViewMode('EDIT');
@@ -2419,7 +2431,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               </button>
                            </div>
 
-                           {!strategyData || !strategyData.scenarios ? (
+                           {isGenerating && (!strategyData || !strategyData.scenarios) ? (
+                              <div className="py-8">
+                                 <SkeletonLoader type="strategy" />
+                              </div>
+                           ) : !strategyData || !strategyData.scenarios ? (
                               <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-white/50">
                                  <ShieldAlertIcon className="w-16 h-16 text-slate-300 mx-auto mb-4" />
                                  <h3 className="text-lg font-bold text-slate-500">No Strategy Generated Yet</h3>

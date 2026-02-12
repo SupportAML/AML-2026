@@ -1,6 +1,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { Annotation, Case, Document, ChatMessage, StrategyAnalysis, StructuredChronology, DepoFeedback } from "../types";
+import { aiCache } from "./aiCacheManager";
 
 // ============================================================================
 // CLAUDE API CONFIGURATION
@@ -384,6 +385,44 @@ const callClaude = async (
 };
 
 /**
+ * Stream text response from Claude - shows first words in 2-3s
+ */
+export const callClaudeStream = async (
+    systemPrompt: string,
+    userPrompt: string,
+    onChunk: (text: string) => void,
+    options: { model?: string; maxTokens?: number } = {}
+): Promise<string> => {
+    const modelToUse = options.model || MODELS.DEFAULT || DEFAULT_CLAUDE_MODEL;
+    try {
+        const stream = (anthropic as any).messages?.stream
+            ? await (anthropic as any).messages.stream({
+                model: modelToUse,
+                max_tokens: options.maxTokens || 8000,
+                system: systemPrompt,
+                messages: [{ role: "user", content: userPrompt }]
+            })
+            : null;
+        if (!stream) {
+            const full = await callClaude(systemPrompt, userPrompt, { maxTokens: options.maxTokens || 8000 });
+            onChunk(full);
+            return full;
+        }
+        let fullText = '';
+        stream.on('text', (delta: string, snapshot: string) => {
+            fullText = snapshot;
+            onChunk(snapshot);
+        });
+        await stream.finalMessage();
+        return fullText;
+    } catch (e) {
+        const fallback = await callClaude(systemPrompt, userPrompt, { maxTokens: options.maxTokens || 8000 });
+        onChunk(fallback);
+        return fallback;
+    }
+};
+
+/**
  * Helper for structured JSON responses
  */
 const callClaudeJSON = async <T>(
@@ -550,6 +589,73 @@ Format the report professionally with proper sections and clinical terminology.
 };
 
 /**
+ * Draft Medical-Legal Report with STREAMING - first words in 2-3s
+ */
+export const draftMedicalLegalReportStream = async (
+    caseData: Case,
+    docs: Document[],
+    annotations: Annotation[],
+    additionalContext: string,
+    qualifications: string,
+    onChunk: (text: string) => void
+): Promise<string> => {
+    const systemPrompt = "You are a Physician Expert drafting a formal Medical-Legal Report. Your tone is authoritative, clinical, and precise.";
+    const groupedAnnotations = annotations.reduce((acc, ann) => {
+        const key = ann.documentId === 'research-notes' ? 'Research' : 'Medical Records';
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(`- [${ann.category}] ${ann.text} ${ann.eventDate ? `(Date: ${ann.eventDate})` : ''}`);
+        return acc;
+    }, {} as Record<string, string[]>);
+    const userPrompt = `
+You are drafting a professional Medical-Legal Report for litigation purposes.
+
+**CASE INFORMATION:**
+- Title: "${caseData.title}"
+- Description: ${caseData.description || 'No description provided'}
+
+**EXPERT CREDENTIALS:**
+${qualifications || 'Medical Expert'}
+
+**DOCUMENTS REVIEWED:**
+${docs.map((d, i) => `${i + 1}. ${d.name}`).join('\n') || 'No documents listed'}
+
+**CLINICAL EVIDENCE:**
+${Object.entries(groupedAnnotations).map(([category, items]) => `\n### ${category}\n${items.join('\n')}`).join('\n') || 'No annotations available'}
+
+**ADDITIONAL CONTEXT:**
+${additionalContext || 'None provided'}
+
+---
+
+**TASK:** Generate a complete, professional Medical-Legal Report.
+
+**REPORT STRUCTURE/TEMPLATE:**
+${caseData.reportTemplate || `
+1. HEADER: Case name, date, and expert identification.
+2. INTRODUCTION: Brief case overview and purpose of the report.
+3. DOCUMENTS REVIEWED: Detailed list of all materials examined.
+4. PATIENT HISTORY & TIMELINE: Chronological clinical summary.
+5. MEDICAL ANALYSIS: Clinical findings, standard of care, and causation.
+6. PROFESSIONAL OPINION: Final conclusions and recommendations.
+`}
+
+Format the report professionally with proper sections and clinical terminology.
+`;
+    try {
+        const result = await callClaudeStream(systemPrompt, userPrompt, onChunk, {
+            model: getModelForTask('critical'),
+            maxTokens: 8000
+        });
+        return result?.trim() || "Error: Empty response from AI.";
+    } catch (error: any) {
+        console.error("draftMedicalLegalReportStream error:", error);
+        const fallback = await draftMedicalLegalReport(caseData, docs, annotations, additionalContext, qualifications);
+        onChunk(fallback);
+        return fallback;
+    }
+};
+
+/**
  * Organizes annotations into a structured timeline.
  * Uses SONNET for complex medical chronology organization
  */
@@ -583,12 +689,15 @@ You MUST respond with valid JSON matching this exact structure:
   ]
 }`;
 
-    // Include all annotations (dated and undated). The model will place undated facts into irrelevantFacts.
-    const input = annotations.map(a => ({
-        id: a.id,
-        text: a.text,
-        date: a.eventDate || null
-    }));
+    const input = annotations.map(a => ({ id: a.id, text: a.text, date: a.eventDate || null }));
+    const caseId = annotations.length ? annotations[0].caseId : 'default';
+    const cacheKey = aiCache.getCacheKey('chronology', caseId, {
+        count: input.length,
+        notes: userNotes?.slice(0, 200)
+    });
+    const cached = aiCache.get<StructuredChronology>(cacheKey);
+    if (cached) return cached;
+
     console.log(`cleanupChronology: sending ${input.length} annotations to AI (dated=${input.filter(i=>i.date).length})`);
 
     const userPrompt = `
@@ -603,10 +712,12 @@ INSTRUCTIONS:
 `;
 
     try {
-        return await callClaudeJSON<StructuredChronology>(systemPrompt, userPrompt, { 
+        const result = await callClaudeJSON<StructuredChronology>(systemPrompt, userPrompt, { 
             model: getModelForTask('critical'),
             temperature: 0.3 
         });
+        if (result) aiCache.set(cacheKey, result);
+        return result;
     } catch (e) {
         console.error("cleanupChronology error:", e);
         return null;
@@ -659,13 +770,19 @@ Required JSON structure:
 Create 3-4 key scenarios. Keep each field concise.`;
 
     const userPrompt = `Deposition Strategy Analysis. CONTEXT: ${context}\n\nGenerate battlefield analysis with 3-4 critical scenarios.`;
+    const contextHash = context.slice(0, 500);
+    const cacheKey = aiCache.getCacheKey('strategy', contextHash, {});
+    const cached = aiCache.get<StrategyAnalysis>(cacheKey);
+    if (cached) return cached;
 
     try {
-        return await callClaudeJSON<StrategyAnalysis>(systemPrompt, userPrompt, {
+        const result = await callClaudeJSON<StrategyAnalysis>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 12000, // Increased to prevent truncation of complex strategy analysis
             timeoutMs: LONG_REQUEST_TIMEOUT_MS
         });
+        if (result) aiCache.set(cacheKey, result);
+        return result;
     } catch (e) {
         console.error("runFullCaseStrategy error:", e);
         return null;
@@ -922,6 +1039,10 @@ Return JSON array format:
   }
 ]`;
 
+        const cacheKey = aiCache.getCacheKey('research', query, { ctx: context?.slice(0, 100) });
+        const cached = aiCache.get<Array<{ title: string; source: string; summary: string; url: string; citation: string }>>(cacheKey);
+        if (cached) return cached;
+
         const result = await callClaudeJSON<Array<{
             title: string;
             source: string;
@@ -936,6 +1057,7 @@ Return JSON array format:
         });
 
         console.log(`✅ Found ${result.length} research articles`);
+        if (result.length) aiCache.set(cacheKey, result);
         return result;
     } catch (error) {
         console.error('searchMedicalResearch error:', error);

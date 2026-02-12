@@ -18,6 +18,7 @@ const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
 import { NewCaseModal } from './components/NewCaseModal';
+import { UploadProgress } from './components/UploadProgress';
 import { uploadFile } from './services/fileService';
 import {
   subscribeToCases,
@@ -54,6 +55,9 @@ const App: React.FC = () => {
   const [isEditingAnnotation, setIsEditingAnnotation] = useState(false);
   const [showNewCaseModal, setShowNewCaseModal] = useState(false);
   const [editingCase, setEditingCase] = useState<Case | undefined>(undefined);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
 
 
   useEffect(() => {
@@ -279,20 +283,23 @@ const App: React.FC = () => {
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
+    setIsUploading(true);
+    setUploadFileName(file.name);
+    setUploadProgress(0);
     try {
-      // In demo mode, uploadFile still tries to hit storage. 
-      // We should mock this too if we want full offline, but fileService is separate.
-      // For now, let's catch the error and fallback to a mock URL if offline.
       let fileData;
       try {
-        fileData = await uploadFile(caseId, file);
+        fileData = await uploadFile(caseId, file, (data) => {
+          setUploadProgress(data.progress);
+        });
       } catch (e) {
         if (isDemoUser) {
           console.warn("Demo upload simulation");
           fileData = {
-            url: URL.createObjectURL(file), // Local blob URL for demo
+            url: URL.createObjectURL(file),
             name: file.name,
-            size: (file.size / (1024 * 1024)).toFixed(2) + " MB"
+            size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+            storagePath: undefined
           };
         } else {
           throw e;
@@ -355,6 +362,10 @@ const App: React.FC = () => {
       await upsertDocument(newDoc);
     } catch (e) {
       alert("Failed to upload file. Ensure Firebase Storage is configured or use Demo mode.");
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+      setUploadFileName('');
     }
   };
 
@@ -634,6 +645,12 @@ const App: React.FC = () => {
         onClose={() => setShowNewCaseModal(false)}
         onCreate={handleSaveNewCase}
         initialData={editingCase}
+      />
+
+      <UploadProgress
+        progress={uploadProgress}
+        fileName={uploadFileName}
+        isUploading={isUploading}
       />
     </div>
   );
