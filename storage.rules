@@ -2,13 +2,18 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     
-    // Helper function to check if user is authorized
+    // Helper function - must match Firestore isAuthorized logic
+    // (authorizedUsers can be keyed by UID or email)
     function isAuthorized() {
-      return request.auth != null && 
-             firestore.exists(/databases/(default)/documents/authorizedUsers/$(request.auth.uid));
+      return request.auth != null && (
+             firestore.exists(/databases/(default)/documents/authorizedUsers/$(request.auth.uid)) ||
+             firestore.exists(/databases/(default)/documents/authorizedUsers/$(request.auth.token.email.lower())) ||
+             request.auth.token.email.lower() == 'support@apexmedlaw.com' ||
+             request.auth.uid == 'UjyoIcIzesNXrAwjzXtjV7V2uFs2'
+      );
     }
     
-    // All files require authorization
+    // All files require authorization (1GB+ supported via resumable upload)
     match /{allPaths=**} {
       allow read: if isAuthorized();
       allow write: if isAuthorized();

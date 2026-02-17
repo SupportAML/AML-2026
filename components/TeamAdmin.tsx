@@ -22,7 +22,7 @@ import { SignupRequestsPanel } from './SignupRequestsPanel';
 interface TeamAdminProps {
     authorizedUsers: AuthorizedUser[];
     onInviteUser: (email: string, role: UserRole, name: string) => void;
-    onDeleteUser: (id: string) => void;
+    onDeleteUser: (id: string, action?: 'keep' | 'reassign' | 'delete', reassignToId?: string) => void | Promise<void>;
     currentUser: UserProfile;
 }
 
@@ -40,6 +40,12 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
     const [inviteSuccess, setInviteSuccess] = useState(false);
     const [emailSent, setEmailSent] = useState(false);
     const [emailError, setEmailError] = useState('');
+
+    // Delete user modal state
+    const [deleteTarget, setDeleteTarget] = useState<AuthorizedUser | null>(null);
+    const [deleteAction, setDeleteAction] = useState<'keep' | 'reassign' | 'delete'>('keep');
+    const [reassignToId, setReassignToId] = useState<string>('');
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const closeInviteModal = () => {
         setInviteSuccess(false);
@@ -208,7 +214,7 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                                 <td className="px-6 py-4 text-right">
                                     {user.id !== currentUser.id && (
                                         <button
-                                            onClick={() => onDeleteUser(user.id)}
+                                            onClick={() => { setDeleteTarget(user); setDeleteAction('keep'); setReassignToId(''); }}
                                             className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                                         >
                                             <Trash2Icon className="w-4 h-4" />
@@ -220,6 +226,97 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                     </tbody>
                 </table>
             </div>
+
+            {/* Delete User Confirmation Modal */}
+            {deleteTarget && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                    <div className="bg-white rounded-3xl p-8 shadow-2xl max-w-md w-full mx-4 relative">
+                        <button onClick={() => setDeleteTarget(null)} className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all">
+                            <XIcon className="w-5 h-5" />
+                        </button>
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center">
+                                <Trash2Icon className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <h4 className="text-lg font-bold text-slate-900">Remove {deleteTarget.name}</h4>
+                                <p className="text-xs text-slate-500">{deleteTarget.email}</p>
+                            </div>
+                        </div>
+
+                        <p className="text-sm text-slate-600 mb-4">What should happen to this user's cases and data?</p>
+
+                        <div className="space-y-2 mb-6">
+                            <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${deleteAction === 'keep' ? 'border-cyan-500 bg-cyan-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                                <input type="radio" name="deleteAction" checked={deleteAction === 'keep'} onChange={() => setDeleteAction('keep')} className="mt-0.5" />
+                                <div>
+                                    <p className="text-sm font-bold text-slate-800">Revoke access only</p>
+                                    <p className="text-xs text-slate-500">Remove login access but keep all cases and data in place.</p>
+                                </div>
+                            </label>
+                            <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${deleteAction === 'reassign' ? 'border-cyan-500 bg-cyan-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                                <input type="radio" name="deleteAction" checked={deleteAction === 'reassign'} onChange={() => setDeleteAction('reassign')} className="mt-0.5" />
+                                <div className="flex-1">
+                                    <p className="text-sm font-bold text-slate-800">Reassign cases to another user</p>
+                                    <p className="text-xs text-slate-500 mb-2">Transfer ownership of all their cases to a team member.</p>
+                                    {deleteAction === 'reassign' && (
+                                        <select
+                                            value={reassignToId}
+                                            onChange={e => setReassignToId(e.target.value)}
+                                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+                                        >
+                                            <option value="">Select team member...</option>
+                                            {authorizedUsers
+                                                .filter(u => u.id !== deleteTarget.id && u.id !== currentUser.id ? true : u.id === currentUser.id)
+                                                .filter(u => u.id !== deleteTarget.id)
+                                                .map(u => (
+                                                    <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+                                                ))
+                                            }
+                                        </select>
+                                    )}
+                                </div>
+                            </label>
+                            <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${deleteAction === 'delete' ? 'border-red-500 bg-red-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                                <input type="radio" name="deleteAction" checked={deleteAction === 'delete'} onChange={() => setDeleteAction('delete')} className="mt-0.5" />
+                                <div>
+                                    <p className="text-sm font-bold text-red-700">Delete all their cases</p>
+                                    <p className="text-xs text-red-500">Permanently remove all cases, documents, and annotations they own.</p>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setDeleteTarget(null)}
+                                className="flex-1 py-3 border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    if (deleteAction === 'reassign' && !reassignToId) {
+                                        alert('Please select a team member to reassign cases to.');
+                                        return;
+                                    }
+                                    setIsDeleting(true);
+                                    try {
+                                        await onDeleteUser(deleteTarget.id, deleteAction, reassignToId || undefined);
+                                    } catch (e) {
+                                        console.error('Error deleting user:', e);
+                                    }
+                                    setIsDeleting(false);
+                                    setDeleteTarget(null);
+                                }}
+                                disabled={isDeleting}
+                                className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all disabled:opacity-50"
+                            >
+                                {isDeleting ? 'Removing...' : 'Remove User'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Success Modal Overlay - Fixed Position */}
             {inviteSuccess && (

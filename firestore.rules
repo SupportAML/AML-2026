@@ -15,45 +15,82 @@ service cloud.firestore {
     // Helper function to check if user is admin
     function isAdmin() {
       return request.auth != null && (
-             (exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)) && 
+             (exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)) &&
               get(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)).data.role in ['ADMIN', 'OWNER']) ||
-             (exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())) && 
+             (exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())) &&
               get(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())).data.role in ['ADMIN', 'OWNER']) ||
              request.auth.token.email.lower() == 'support@apexmedlaw.com' ||
              request.auth.uid == 'UjyoIcIzesNXrAwjzXtjV7V2uFs2'
       );
     }
-    
-    // Cases - only authorized users can access
+
+    // Check if user is assigned to this specific case (by UID or email)
+    function isCaseAssigned(caseId) {
+      return request.auth != null && (
+        // Check assignedUserIds array for UID match
+        (resource.data.assignedUserIds != null &&
+         request.auth.uid in resource.data.assignedUserIds) ||
+        // Check assignedUserEmails array for email match
+        (resource.data.assignedUserEmails != null &&
+         request.auth.token.email.lower() in resource.data.assignedUserEmails)
+      );
+    }
+
+    // Check if user owns this specific case
+    function isCaseOwner(caseId) {
+      return request.auth != null &&
+             resource.data.ownerId == request.auth.uid;
+    }
+
+    // Look up case and check if user has access (for documents/annotations)
+    function canAccessCaseData(caseId) {
+      let caseDoc = get(/databases/$(database)/documents/cases/$(caseId));
+      return request.auth != null && (
+        // Case owner
+        caseDoc.data.ownerId == request.auth.uid ||
+        // Assigned by UID
+        (caseDoc.data.assignedUserIds != null &&
+         request.auth.uid in caseDoc.data.assignedUserIds) ||
+        // Assigned by email
+        (caseDoc.data.assignedUserEmails != null &&
+         request.auth.token.email.lower() in caseDoc.data.assignedUserEmails)
+      );
+    }
+
+    // Cases - authorized users OR case-assigned users can access
     match /cases/{caseId} {
-      allow read: if isAuthorized();
+      allow read: if isAuthorized() || isCaseAssigned(caseId);
       allow create: if isAuthorized();
-      allow update: if isAuthorized();
-      allow delete: if isAdmin();
+      allow update: if isAuthorized() || isCaseOwner(caseId);
+      allow delete: if isAdmin() || (isAuthorized() && resource.data.ownerId == request.auth.uid);
       
-      // Documents within cases
+      // Documents within cases - accessible to case-assigned users
       match /documents/{documentId} {
-        allow read: if isAuthorized();
+        allow read: if isAuthorized() || isCaseAssigned(caseId);
         allow write: if isAuthorized();
       }
-      
-      // Annotations within cases
+
+      // Annotations within cases - accessible to case-assigned users
       match /annotations/{annotationId} {
-        allow read: if isAuthorized();
+        allow read: if isAuthorized() || isCaseAssigned(caseId);
         allow write: if isAuthorized();
       }
     }
-    
-    // Documents collection (top-level)
+
+    // Documents collection (top-level) - check case access if caseId present
     match /documents/{documentId} {
-      allow read: if isAuthorized();
-      allow write: if isAuthorized();
+      allow read: if isAuthorized() ||
+                     (resource.data.caseId != null && canAccessCaseData(resource.data.caseId));
+      allow create, update: if isAuthorized();
+      allow delete: if isAdmin() || (isAuthorized() && resource.data.caseId != null);
     }
-    
-    // Annotations collection (top-level)
+
+    // Annotations collection (top-level) - check case access if caseId present
     match /annotations/{annotationId} {
-      allow read: if isAuthorized();
-      allow write: if isAuthorized();
+      allow read: if isAuthorized() ||
+                     (resource.data.caseId != null && canAccessCaseData(resource.data.caseId));
+      allow create, update: if isAuthorized();
+      allow delete: if isAdmin() || (isAuthorized() && resource.data.caseId != null);
     }
     
     // Authorized users - MUST be readable by authenticated users for login check
@@ -87,6 +124,11 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read: if isAuthorized();
       allow write: if isAdmin();
+    }
+    
+    // User profiles - users can read/write own profile only
+    match /profiles/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

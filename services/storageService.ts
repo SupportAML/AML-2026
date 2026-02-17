@@ -19,6 +19,7 @@ const COLL_CASES = "cases";
 const COLL_ANNOTATIONS = "annotations";
 const COLL_DOCUMENTS = "documents";
 const COLL_USERS = "authorizedUsers";
+const COLL_PROFILES = "profiles";
 
 // --- Offline / Demo Mode State ---
 let isDemoMode = false;
@@ -131,11 +132,14 @@ const cleanData = <T>(data: T): T => {
 
 // --- Subscriptions ---
 
-export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: string, role?: UserRole) => {
+export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: string, userEmail?: string, role?: UserRole) => {
   if (isDemoMode) {
     const filterFn = (c: Case) => {
       if (!userId || role === 'ADMIN') return true;
-      return c.ownerId === userId || c.assignedUserIds?.includes(userId);
+      const emailLower = userEmail?.toLowerCase();
+      return c.ownerId === userId ||
+             c.assignedUserIds?.includes(userId) ||
+             (emailLower && c.assignedUserEmails?.includes(emailLower));
     };
 
     // Initial call
@@ -160,28 +164,16 @@ export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: str
   return onSnapshot(collection(db, COLL_CASES), (snapshot) => {
     let allCases = snapshot.docs.map(d => {
       const caseData = { ...d.data(), id: d.id } as Case;
-      
-      // Debug logging for depo chat
-      if (caseData.depoChats || caseData.depoStage) {
-        console.log('📥 Received case from Firestore:', {
-          id: caseData.id,
-          title: caseData.title,
-          depoChats: caseData.depoChats ? Object.keys(caseData.depoChats).reduce((acc, key) => {
-            acc[key] = caseData.depoChats![key].length;
-            return acc;
-          }, {} as Record<string, number>) : {},
-          depoStage: caseData.depoStage
-        });
-      }
-      
       return caseData;
     });
 
     // Filter by user access if not an admin
     if (role !== 'ADMIN' && userId) {
+      const emailLower = userEmail?.toLowerCase();
       allCases = allCases.filter(c =>
         c.ownerId === userId ||
-        c.assignedUserIds?.includes(userId)
+        c.assignedUserIds?.includes(userId) ||
+        (emailLower && c.assignedUserEmails?.includes(emailLower))
       );
     }
 
@@ -329,49 +321,69 @@ export const ensureAdminUser = async (currentUserEmail: string, uid: string) => 
   }
 };
 
+// --- User Profile (qualifications, bio) ---
+const demoProfiles: Record<string, { name?: string; qualifications?: string; bio?: string }> = {};
+
+export const getProfile = async (userId: string): Promise<{ name?: string; qualifications?: string; bio?: string }> => {
+  if (isDemoMode) {
+    return demoProfiles[userId] ?? {};
+  }
+  try {
+    const snap = await getDoc(doc(db, COLL_PROFILES, userId));
+    return (snap.data() as any) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+export const upsertProfile = async (
+  userId: string,
+  data: { name?: string; qualifications?: string; bio?: string }
+): Promise<void> => {
+  if (isDemoMode) {
+    demoProfiles[userId] = { ...(demoProfiles[userId] ?? {}), ...data };
+    return;
+  }
+  await setDoc(doc(db, COLL_PROFILES, userId), cleanData(data), { merge: true });
+};
+
 // --- Operations ---
 
 export const upsertCase = async (caseItem: Case) => {
-  console.log('🔧 upsertCase called with:', {
-    id: caseItem.id,
-    title: caseItem.title,
-    depoChats: caseItem.depoChats ? Object.keys(caseItem.depoChats).reduce((acc, key) => {
-      acc[key] = caseItem.depoChats![key].length;
-      return acc;
-    }, {} as Record<string, number>) : {},
-    depoStage: caseItem.depoStage
-  });
-  
+  // Auto-stamp lastActivityAt on every case write
+  const stamped = { ...caseItem, lastActivityAt: new Date().toISOString() };
   if (isDemoMode) {
-    const index = mockStore.cases.findIndex(c => c.id === caseItem.id);
+    const index = mockStore.cases.findIndex(c => c.id === stamped.id);
     if (index >= 0) {
-      mockStore.cases[index] = { ...mockStore.cases[index], ...caseItem };
+      mockStore.cases[index] = { ...mockStore.cases[index], ...stamped };
     } else {
-      mockStore.cases.push(caseItem);
+      mockStore.cases.push(stamped);
     }
-    // Trigger updates
     listeners.cases.forEach(l => l([...mockStore.cases]));
-    console.log('✅ Demo mode: Case updated in memory');
     return;
   }
-  
+
   try {
-    const cleanedData = cleanData(caseItem);
-    console.log('📝 Writing to Firestore:', {
-      caseId: caseItem.id,
-      depoChats: cleanedData.depoChats ? Object.keys(cleanedData.depoChats).reduce((acc, key) => {
-        acc[key] = (cleanedData.depoChats as any)[key].length;
-        return acc;
-      }, {} as Record<string, number>) : {},
-      depoStage: cleanedData.depoStage
-    });
     
-    await setDoc(doc(db, COLL_CASES, caseItem.id), cleanedData, { merge: true });
-    console.log('✅ Successfully wrote case to Firestore');
+    const cleanedData = cleanData(stamped);
+    
+    await setDoc(doc(db, COLL_CASES, stamped.id), cleanedData, { merge: true });
   } catch (error) {
     console.error('❌ Error writing case to Firestore:', error);
     throw error;
   }
+};
+
+/** Touch the lastActivityAt timestamp on a case (used after doc/annotation changes) */
+const touchCaseActivity = async (caseId: string) => {
+  if (isDemoMode) {
+    const c = mockStore.cases.find(x => x.id === caseId);
+    if (c) { c.lastActivityAt = new Date().toISOString(); listeners.cases.forEach(l => l([...mockStore.cases])); }
+    return;
+  }
+  try {
+    await setDoc(doc(db, COLL_CASES, caseId), { lastActivityAt: new Date().toISOString() }, { merge: true });
+  } catch { /* non-critical */ }
 };
 
 export const deleteCaseFromStore = async (caseId: string) => {
@@ -380,30 +392,29 @@ export const deleteCaseFromStore = async (caseId: string) => {
     listeners.cases.forEach(l => l([...mockStore.cases]));
     return;
   }
-  
+
   console.log('🗑️ Cascade deleting case and all related data:', caseId);
-  
+
   try {
-    // 1. Delete all documents for this case (also deletes Storage files)
-    const docsQuery = query(collection(db, COLL_DOCUMENTS), where("caseId", "==", caseId));
-    const docsSnapshot = await getDocs(docsQuery);
+    // Fetch all related data in parallel
+    const [docsSnapshot, annsSnapshot] = await Promise.all([
+      getDocs(query(collection(db, COLL_DOCUMENTS), where("caseId", "==", caseId))),
+      getDocs(query(collection(db, COLL_ANNOTATIONS), where("caseId", "==", caseId)))
+    ]);
+
     console.log('   📄 Deleting', docsSnapshot.size, 'documents...');
-    for (const docSnap of docsSnapshot.docs) {
-      await deleteDocumentFromStore(docSnap.id);
-    }
-    
-    // 2. Delete all annotations for this case
-    const annsQuery = query(collection(db, COLL_ANNOTATIONS), where("caseId", "==", caseId));
-    const annsSnapshot = await getDocs(annsQuery);
     console.log('   📝 Deleting', annsSnapshot.size, 'annotations...');
-    for (const annSnap of annsSnapshot.docs) {
-      await deleteDoc(doc(db, COLL_ANNOTATIONS, annSnap.id));
-    }
-    
-    // 3. Delete the case document itself
-    console.log('   🗂️ Deleting case document...');
-    await deleteDoc(doc(db, COLL_CASES, caseId));
-    
+
+    // Delete all in parallel for maximum performance
+    await Promise.all([
+      // Delete all documents
+      ...docsSnapshot.docs.map(docSnap => deleteDocumentFromStore(docSnap.id)),
+      // Delete all annotations
+      ...annsSnapshot.docs.map(annSnap => deleteDoc(doc(db, COLL_ANNOTATIONS, annSnap.id))),
+      // Delete the case document itself
+      deleteDoc(doc(db, COLL_CASES, caseId))
+    ]);
+
     console.log('✅ Successfully deleted case and all related data');
   } catch (error) {
     console.error('❌ Error during cascade delete:', error);
@@ -419,11 +430,13 @@ export const upsertDocument = async (document: Document) => {
     } else {
       mockStore.documents.push(document);
     }
-    // Notify document listeners
-    listeners.documents.forEach(l => l()); // Listeners re-filter themselves
+    listeners.documents.forEach(l => l());
+    touchCaseActivity(document.caseId);
     return;
   }
+  
   await setDoc(doc(db, COLL_DOCUMENTS, document.id), cleanData(document), { merge: true });
+  touchCaseActivity(document.caseId);
 };
 
 export const deleteDocumentFromStore = async (docId: string) => {
@@ -464,9 +477,12 @@ export const upsertAnnotation = async (ann: Annotation) => {
       mockStore.annotations.push(ann);
     }
     listeners.annotations.forEach(l => l());
+    touchCaseActivity(ann.caseId);
     return;
   }
+  
   await setDoc(doc(db, COLL_ANNOTATIONS, ann.id), cleanData(ann), { merge: true });
+  touchCaseActivity(ann.caseId);
 };
 
 export const deleteAnnotationFromStore = async (annId: string) => {
@@ -500,6 +516,76 @@ export const deleteUserFromStore = async (userId: string) => {
     return;
   }
   await deleteDoc(doc(db, COLL_USERS, userId));
+};
+
+/**
+ * Reassign all cases owned by one user to another user
+ */
+export const reassignUserCases = async (fromUserId: string, toUserId: string, toUserName: string) => {
+  if (isDemoMode) {
+    mockStore.cases = mockStore.cases.map(c => {
+      if (c.ownerId === fromUserId) {
+        return { ...c, ownerId: toUserId, ownerName: toUserName };
+      }
+      // Also remove from assignedUserIds and add the new user
+      if (c.assignedUserIds?.includes(fromUserId)) {
+        const filtered = c.assignedUserIds.filter(id => id !== fromUserId);
+        if (!filtered.includes(toUserId)) filtered.push(toUserId);
+        return { ...c, assignedUserIds: filtered };
+      }
+      return c;
+    });
+    listeners.cases.forEach(l => l([...mockStore.cases]));
+    return;
+  }
+
+  const casesSnapshot = await getDocs(collection(db, COLL_CASES));
+  const updates: Promise<void>[] = [];
+
+  for (const caseDoc of casesSnapshot.docs) {
+    const caseData = caseDoc.data() as Case;
+    const patch: Record<string, any> = {};
+
+    if (caseData.ownerId === fromUserId) {
+      patch.ownerId = toUserId;
+      patch.ownerName = toUserName;
+    }
+
+    if (caseData.assignedUserIds?.includes(fromUserId)) {
+      const filtered = caseData.assignedUserIds.filter(id => id !== fromUserId);
+      if (!filtered.includes(toUserId)) filtered.push(toUserId);
+      patch.assignedUserIds = filtered;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      updates.push(setDoc(doc(db, COLL_CASES, caseDoc.id), patch, { merge: true }));
+    }
+  }
+
+  await Promise.all(updates);
+};
+
+/**
+ * Delete all cases owned by a user (cascade delete with docs/annotations)
+ */
+export const deleteUserCases = async (userId: string) => {
+  if (isDemoMode) {
+    const caseIds = mockStore.cases.filter(c => c.ownerId === userId).map(c => c.id);
+    mockStore.cases = mockStore.cases.filter(c => c.ownerId !== userId);
+    mockStore.documents = mockStore.documents.filter(d => !caseIds.includes(d.caseId));
+    mockStore.annotations = mockStore.annotations.filter(a => !caseIds.includes(a.caseId));
+    listeners.cases.forEach(l => l([...mockStore.cases]));
+    return;
+  }
+
+  const casesSnapshot = await getDocs(collection(db, COLL_CASES));
+  const userCaseIds = casesSnapshot.docs
+    .filter(d => (d.data() as Case).ownerId === userId)
+    .map(d => d.id);
+
+  for (const caseId of userCaseIds) {
+    await deleteCaseFromStore(caseId);
+  }
 };
 
 

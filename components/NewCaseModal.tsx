@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { XIcon, BriefcaseIcon, UserIcon, ScaleIcon, CalendarIcon, FileTextIcon } from 'lucide-react';
+import { XIcon, BriefcaseIcon, UserIcon, ScaleIcon, CalendarIcon, FileTextIcon, GavelIcon } from 'lucide-react';
 import { Case } from '../types';
 
 interface NewCaseModalProps {
@@ -13,18 +13,18 @@ interface NewCaseModalProps {
 export const NewCaseModal: React.FC<NewCaseModalProps> = ({ isOpen, onClose, onCreate, initialData }) => {
     const [title, setTitle] = useState(initialData?.title || '');
     const [description, setDescription] = useState(initialData?.description || '');
-    const [clientName, setClientName] = useState(initialData?.clients?.[0]?.name || '');
+    const [startDate, setStartDate] = useState(initialData?.startDate || initialData?.createdAt || new Date().toISOString().split('T')[0]);
+    const [status, setStatus] = useState<string>(initialData?.status || 'active');
     const [primaryLawyer, setPrimaryLawyer] = useState(initialData?.primaryLawyer || '');
-    const [date, setDate] = useState(initialData?.createdAt || new Date().toISOString().split('T')[0]);
 
     // Reset state when modal opens/closes or initialData changes
     React.useEffect(() => {
         if (isOpen) {
             setTitle(initialData?.title || '');
             setDescription(initialData?.description || '');
-            setClientName(initialData?.clients?.[0]?.name || '');
+            setStartDate(initialData?.startDate || initialData?.createdAt || new Date().toISOString().split('T')[0]);
+            setStatus(initialData?.status || 'active');
             setPrimaryLawyer(initialData?.primaryLawyer || '');
-            setDate(initialData?.createdAt || new Date().toISOString().split('T')[0]);
         }
     }, [isOpen, initialData]);
 
@@ -41,14 +41,13 @@ export const NewCaseModal: React.FC<NewCaseModalProps> = ({ isOpen, onClose, onC
         const caseData: Partial<Case> = {
             title,
             description,
-            createdAt: date,
-            primaryLawyer,
-            status: initialData?.status || 'active'
+            startDate: startDate,
+            createdAt: startDate,
+            status: status as any,
+            primaryLawyer: primaryLawyer.trim() || undefined
         };
 
-        onCreate(caseData, clientName);
-
-        // Reset form is handled by useEffect or parent closing modal
+        onCreate(caseData, '');
     };
 
     const isEditing = !!initialData;
@@ -116,30 +115,30 @@ export const NewCaseModal: React.FC<NewCaseModalProps> = ({ isOpen, onClose, onC
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        {/* Client Name */}
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                                Client Name
-                            </label>
-                            <div className="relative">
-                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-                                    <UserIcon className="w-4 h-4" />
-                                </div>
-                                <input
-                                    type="text"
-                                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-cyan-500 transition-all placeholder:text-slate-400"
-                                    placeholder="e.g. John Doe"
-                                    value={clientName}
-                                    onChange={(e) => setClientName(e.target.value)}
-                                />
+                    {/* Attorney Name */}
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                            Attorney Name
+                        </label>
+                        <div className="relative">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                                <ScaleIcon className="w-4 h-4" />
                             </div>
+                            <input
+                                type="text"
+                                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all placeholder:text-slate-400"
+                                placeholder="e.g., Sarah Jenkins, Esq."
+                                value={primaryLawyer}
+                                onChange={(e) => setPrimaryLawyer(e.target.value)}
+                            />
                         </div>
+                    </div>
 
-                        {/* Case Date */}
+                    <div className="grid grid-cols-2 gap-4">
+                        {/* Case Start Date */}
                         <div>
                             <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                                Case Date
+                                Case Start Date
                             </label>
                             <div className="relative">
                                 <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
@@ -148,29 +147,33 @@ export const NewCaseModal: React.FC<NewCaseModalProps> = ({ isOpen, onClose, onC
                                 <input
                                     type="date"
                                     className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-cyan-500 transition-all text-slate-600"
-                                    value={date}
-                                    onChange={(e) => setDate(e.target.value)}
+                                    value={startDate}
+                                    onChange={(e) => setStartDate(e.target.value)}
                                 />
                             </div>
                         </div>
-                    </div>
 
-                    {/* Primary Lawyer */}
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                            Primary Lawyer
-                        </label>
-                        <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-                                <ScaleIcon className="w-4 h-4" />
+                        {/* Case Status */}
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                                Status
+                            </label>
+                            <div className="relative">
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                                    <UserIcon className="w-4 h-4" />
+                                </div>
+                                <select
+                                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-cyan-500 transition-all text-slate-600 appearance-none cursor-pointer"
+                                    value={status}
+                                    onChange={(e) => setStatus(e.target.value)}
+                                >
+                                    <option value="planning">Planning</option>
+                                    <option value="active">Active</option>
+                                    <option value="on_hold">On Hold</option>
+                                    <option value="cancelled">Cancelled</option>
+                                    <option value="archived">Archived</option>
+                                </select>
                             </div>
-                            <input
-                                type="text"
-                                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-cyan-500 transition-all placeholder:text-slate-400"
-                                placeholder="e.g. Attorney Sarah Jenkins"
-                                value={primaryLawyer}
-                                onChange={(e) => setPrimaryLawyer(e.target.value)}
-                            />
                         </div>
                     </div>
 

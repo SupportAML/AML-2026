@@ -16,13 +16,13 @@ import {
   PanelRightIcon,
   SparklesIcon,
   TerminalIcon,
-  PencilIcon,
-  Trash2Icon,
   FileTextIcon,
   ChevronDownIcon,
   CheckIcon,
   LayoutListIcon,
-  SquareIcon
+  SquareIcon,
+  Trash2Icon,
+  HighlighterIcon
 } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
 import { processAnnotationInput } from '../services/claudeService';
@@ -63,6 +63,18 @@ const getAvatarColor = (name: string) => {
   return colors[Math.abs(hash) % colors.length];
 };
 
+// Format date from YYYY-MM-DD to "16/03/2026"
+const formatDisplayDate = (dateStr?: string): string | null => {
+  if (!dateStr) return null;
+  try {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    if (!year || !month || !day) return dateStr;
+    return `${day.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')}/${year}`;
+  } catch {
+    return dateStr;
+  }
+};
+
 const AnnotationPopup: React.FC<any> = ({
   x, y, height, activeCategory, pendingText, setPendingText,
   pendingAuthor, setPendingAuthor, pendingDate, setPendingDate,
@@ -73,6 +85,8 @@ const AnnotationPopup: React.FC<any> = ({
 }) => {
   const [showAuthorMenu, setShowAuthorMenu] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
+  const lastEnterRef = useRef<number>(0);
+  const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleVoiceConfirm = async () => {
     if (!pendingText.trim() || isRefining) return;
@@ -82,17 +96,18 @@ const AnnotationPopup: React.FC<any> = ({
       // 1. Refine with AI
       const result = await processAnnotationInput(pendingText);
       let finalText = result.refinedText || pendingText;
-      let finalDate = pendingDate;
-      let finalTime = pendingTime;
+      let finalDate = pendingDate; // Only use if manually set
+      let finalTime = pendingTime; // Only use if manually set
 
-      if (result.extractedDate) {
+      // Only auto-extract date/time if user hasn't manually set them
+      if (!pendingDate && result.extractedDate) {
         const dateMatch = result.extractedDate.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
         if (dateMatch) {
           finalDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
         }
       }
 
-      if (result.extractedTime) {
+      if (!pendingTime && result.extractedTime) {
         const timeMatch = result.extractedTime.match(/(\d{1,2}):(\d{2})/);
         if (timeMatch) {
           finalTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
@@ -109,67 +124,82 @@ const AnnotationPopup: React.FC<any> = ({
     }
   };
 
-  const handleKeyDown = async (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (activeTool === 'VOICE') {
-        handleVoiceConfirm();
-      } else {
-        // Auto-refine with AI on Enter, then save
-        if (pendingText.trim()) {
-          setIsRefining(true);
-          try {
-            console.log('🔄 Auto-refining on Enter...');
-            const result = await processAnnotationInput(pendingText);
-            console.log('✅ Refinement result:', result);
-            
-            let finalText = result.refinedText || pendingText;
-            let finalDate = pendingDate;
-            let finalTime = pendingTime;
-            
-            if (result.extractedDate) {
-              const dateMatch = result.extractedDate.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
-              if (dateMatch) {
-                finalDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
-                console.log('📅 Extracted date:', finalDate);
-              }
-            }
-            
-            if (result.extractedTime) {
-              const timeMatch = result.extractedTime.match(/(\d{1,2}):(\d{2})/);
-              if (timeMatch) {
-                finalTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
-                console.log('⏰ Extracted time:', finalTime);
-              }
-            }
-            
-            console.log('💾 Committing with refined values:', { finalText, finalDate, finalTime });
-            // Commit directly with refined values (don't update state first)
-            onCommit(finalText, finalDate, finalTime);
-          } catch (err) {
-            console.error("❌ Auto-refine error:", err);
-            // Fall back to saving unrefined on error
-            onCommit();
-          } finally {
-            setIsRefining(false);
-          }
-        } else {
-          onCommit();
+  // AI Save helper - refine with AI then commit
+  const doAiSave = async () => {
+    if (!pendingText.trim() || isRefining) return;
+    setIsRefining(true);
+    try {
+      const result = await processAnnotationInput(pendingText);
+      let finalText = result.refinedText || pendingText;
+      let finalDate = pendingDate;
+      let finalTime = pendingTime;
+
+      if (!pendingDate && result.extractedDate) {
+        const dateMatch = result.extractedDate.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+        if (dateMatch) {
+          finalDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
         }
       }
+      if (!pendingTime && result.extractedTime) {
+        const timeMatch = result.extractedTime.match(/(\d{1,2}):(\d{2})/);
+        if (timeMatch) {
+          finalTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+        }
+      }
+      onCommit(finalText, finalDate, finalTime);
+    } catch (err) {
+      console.error("AI refine error:", err);
+      onCommit();
+    } finally {
+      setIsRefining(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!pendingText.trim() || isRefining) return;
+
+      if (activeTool === 'VOICE') {
+        handleVoiceConfirm();
+        return;
+      }
+
+      const now = Date.now();
+      const timeSinceLastEnter = now - lastEnterRef.current;
+      lastEnterRef.current = now;
+
+      // Double Enter (within 400ms) = Manual Save (no AI)
+      if (timeSinceLastEnter < 400) {
+        // Cancel the pending AI save timer
+        if (enterTimerRef.current) {
+          clearTimeout(enterTimerRef.current);
+          enterTimerRef.current = null;
+        }
+        onCommit(); // Manual save immediately
+        return;
+      }
+
+      // Single Enter = AI Save (with 400ms delay to detect double-enter)
+      enterTimerRef.current = setTimeout(() => {
+        enterTimerRef.current = null;
+        doAiSave();
+      }, 400);
     }
   };
 
   const categories = ['Review', 'Medical', 'Legal', 'Urgent'];
 
-  // If detachPopup is requested, position the popup at a safe fixed location
-  const leftStyle = detachPopup ? '75%' : `${x}%`;
-  const topStyle = detachPopup ? '12%' : `${y + (height || 0)}%`;
+  // If detachPopup is false, render without absolute positioning (for sidebar)
+  const isInSidebar = !detachPopup && x === 0 && y === 0;
 
   return (
     <div
-      className="absolute z-40 w-80 bg-white rounded-2xl shadow-2xl border border-indigo-100 p-4 animate-in zoom-in-95 duration-150"
-      style={{ left: leftStyle, top: topStyle, marginTop: '12px' }}
+      className={isInSidebar
+        ? "w-full bg-white rounded-2xl shadow-lg border border-indigo-200 p-4 animate-in zoom-in-95 duration-150"
+        : "absolute z-40 w-80 bg-white rounded-2xl shadow-2xl border border-indigo-100 p-4 animate-in zoom-in-95 duration-150"
+      }
+      style={isInSidebar ? {} : { left: `${x}%`, top: `${y + (height || 0)}%`, marginTop: '12px' }}
       onClick={(e) => e.stopPropagation()}
       onMouseUp={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
@@ -239,59 +269,39 @@ const AnnotationPopup: React.FC<any> = ({
           />
           <div className="mt-1 flex items-center justify-between text-[9px] text-slate-400 px-1">
             <span className="flex items-center gap-1">
-              <SparklesIcon className="w-3 h-3" />
-              AI refinement on Enter
+              <SparklesIcon className="w-2.5 h-2.5" />
+              Enter = AI Save
             </span>
-            <span>Shift+Enter for new line</span>
+            <span>2x Enter = Manual | Shift+Enter = New line</span>
           </div>
         </div>
       </div>
 
       <div className="flex flex-col gap-2">
-        <button
-          disabled={!pendingText.trim() || isRefining}
-          onClick={async (e) => {
-            e.preventDefault();
-            // Trigger the same auto-refine logic as Enter key
-            if (pendingText.trim()) {
-              setIsRefining(true);
-              try {
-                console.log('🔄 Auto-refining on button click...');
-                const result = await processAnnotationInput(pendingText);
-                console.log('✅ Refinement result:', result);
-                
-                let finalText = result.refinedText || pendingText;
-                let finalDate = pendingDate;
-                let finalTime = pendingTime;
-                
-                if (result.extractedDate) {
-                  const dateMatch = result.extractedDate.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
-                  if (dateMatch) {
-                    finalDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}`;
-                  }
-                }
-                
-                if (result.extractedTime) {
-                  const timeMatch = result.extractedTime.match(/(\d{1,2}):(\d{2})/);
-                  if (timeMatch) {
-                    finalTime = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
-                  }
-                }
-                
-                onCommit(finalText, finalDate, finalTime);
-              } catch (err) {
-                console.error("❌ Auto-refine error:", err);
-                onCommit();
-              } finally {
-                setIsRefining(false);
-              }
-            }
-          }}
-          className="py-2.5 bg-indigo-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-indigo-700 disabled:opacity-50 shadow-lg shadow-indigo-100 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
-        >
-          {isRefining && <Loader2Icon className="w-3 h-3 animate-spin" />}
-          {isRefining ? 'Refining...' : 'Save Note'}
-        </button>
+        <div className="flex gap-2">
+          {/* Manual Save - no AI processing */}
+          <button
+            disabled={!pendingText.trim() || isRefining}
+            onClick={(e) => {
+              e.preventDefault();
+              onCommit();
+            }}
+            className="flex-1 py-2.5 bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-50 shadow-lg shadow-slate-100 transition-all active:scale-[0.98] flex items-center justify-center gap-1.5"
+          >
+            Manual Save
+          </button>
+          {/* AI Save - with refinement and extraction */}
+          <button
+            disabled={!pendingText.trim() || isRefining}
+            onClick={(e) => {
+              e.preventDefault();
+              doAiSave();
+            }}
+            className="flex-1 py-2.5 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 disabled:opacity-50 shadow-lg shadow-indigo-100 transition-all active:scale-[0.98] flex items-center justify-center gap-1.5"
+          >
+            {isRefining ? <><Loader2Icon className="w-3 h-3 animate-spin" /> Refining...</> : <><SparklesIcon className="w-3 h-3" /> AI Save</>}
+          </button>
+        </div>
         <button
           onClick={onCancel}
           className="py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:bg-slate-50 transition-colors"
@@ -306,7 +316,7 @@ const AnnotationPopup: React.FC<any> = ({
 const PDFPage: React.FC<any> = ({
   pageNumber, pdfDoc, scale, annotations, onPageClick, activeTool, pendingAnnotation, isPendingOnThisPage, onCancelPending, onCommitPending,
   pendingText, setPendingText, pendingAuthor, setPendingAuthor, pendingDate, setPendingDate, pendingTime, setPendingTime, availableAuthors, activeCategory, onCycleCategory, getCategoryColor, setActiveCategory,
-  focusedAnnotationId, onEditExisting, onVisible, shouldRender = true
+  focusedAnnotationId, onEditExisting, onVisible, shouldRender = true, onTextHighlight
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -369,9 +379,9 @@ const PDFPage: React.FC<any> = ({
     return () => { active = false; };
   }, [pdfDoc, pageNumber, scale]);
 
-  // Render content (heavy)
+  // Render canvas content (heavy)
   useEffect(() => {
-    if (!shouldRender || !dimensions) return; // Don't render if off-screen
+    if (!shouldRender || !dimensions) return;
 
     let active = true;
     let renderTask: any = null;
@@ -393,25 +403,8 @@ const PDFPage: React.FC<any> = ({
         canvas.height = viewport.height;
         canvas.width = viewport.width;
 
-        // Render PDF
         renderTask = page.render({ canvasContext: context, viewport });
         await renderTask.promise;
-
-        if (!active) return;
-
-        // Skip text layer for performance - only render if needed for text selection
-        // if (textLayerRef.current && activeTool === 'TEXT') {
-        //   const textContent = await page.getTextContent();
-        //   textLayerRef.current.innerHTML = '';
-        //   textLayerRef.current.style.height = `${viewport.height}px`;
-        //   textLayerRef.current.style.width = `${viewport.width}px`;
-
-        //   await (pdfjsLib as any).renderTextLayer({
-        //     textContentSource: textContent,
-        //     container: textLayerRef.current,
-        //     viewport
-        //   }).promise;
-        // }
 
         if (active) setIsRendering(false);
       } catch (err: any) {
@@ -428,9 +421,107 @@ const PDFPage: React.FC<any> = ({
       active = false;
       if (renderTask) renderTask.cancel();
     };
-  }, [pdfDoc, pageNumber, scale, shouldRender, dimensions]); // Depend on shouldRender
+  }, [pdfDoc, pageNumber, scale, shouldRender, dimensions]);
+
+  // Render text layer separately - only when TEXT (highlight) tool is active
+  useEffect(() => {
+    if (!shouldRender || !dimensions || !pdfDoc || !textLayerRef.current) return;
+
+    if (activeTool !== 'TEXT') {
+      textLayerRef.current.innerHTML = '';
+      return;
+    }
+
+    let active = true;
+    let textLayerTask: any = null;
+
+    const renderText = async () => {
+      try {
+        const page = await pdfDoc.getPage(pageNumber);
+        if (!active || !textLayerRef.current) return;
+
+        const viewport = page.getViewport({ scale });
+        const textContent = await page.getTextContent();
+        if (!active || !textLayerRef.current) return;
+
+        textLayerRef.current.innerHTML = '';
+
+        textLayerTask = (pdfjsLib as any).renderTextLayer({
+          textContentSource: textContent,
+          container: textLayerRef.current,
+          viewport
+        });
+
+        await textLayerTask.promise;
+        console.log(`✅ Text layer rendered for page ${pageNumber} with ${textContent.items.length} items`);
+      } catch (err: any) {
+        if (active) {
+          console.warn('Text layer render failed, building manually:', err.message);
+          // Fallback: build text layer manually from text content items
+          if (textLayerRef.current) {
+            try {
+              const page = await pdfDoc.getPage(pageNumber);
+              const viewport = page.getViewport({ scale });
+              const textContent = await page.getTextContent();
+              if (!active || !textLayerRef.current) return;
+
+              textLayerRef.current.innerHTML = '';
+
+              for (const item of textContent.items as any[]) {
+                if (!item.str || item.str.trim() === '') continue;
+
+                const tx = (pdfjsLib as any).Util.transform(viewport.transform, item.transform);
+                const fontHeight = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+
+                const span = document.createElement('span');
+                span.textContent = item.str;
+                span.style.left = `${tx[4]}px`;
+                span.style.top = `${tx[5] - fontHeight}px`;
+                span.style.fontSize = `${fontHeight}px`;
+                span.style.fontFamily = item.fontName ? `${item.fontName}, sans-serif` : 'sans-serif';
+
+                if (item.width) {
+                  span.style.width = `${item.width * scale}px`;
+                  span.style.display = 'inline-block';
+                }
+
+                textLayerRef.current.appendChild(span);
+              }
+              console.log(`✅ Manual text layer built for page ${pageNumber}`);
+            } catch (fallbackErr) {
+              console.error('Manual text layer also failed:', fallbackErr);
+            }
+          }
+        }
+      }
+    };
+
+    renderText();
+
+    return () => {
+      active = false;
+      if (textLayerTask?.cancel) textLayerTask.cancel();
+    };
+  }, [pdfDoc, pageNumber, scale, shouldRender, dimensions, activeTool]);
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    if (activeTool === 'TEXT' && dimensions) {
+      // Use a micro-delay to ensure browser has finalized the selection
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      setTimeout(() => {
+        const selection = window.getSelection();
+        const selectedText = selection?.toString().trim();
+        if (selectedText && selectedText.length > 0 && onTextHighlight && wrapperRef.current) {
+          const rect = wrapperRef.current.getBoundingClientRect();
+          const x = ((clientX - rect.left) / rect.width) * 100;
+          const y = ((clientY - rect.top) / rect.height) * 100;
+          onTextHighlight(pageNumber, selectedText, x, y);
+          selection?.removeAllRanges();
+        }
+      }, 10);
+      return;
+    }
     if ((activeTool === 'POINT' || activeTool === 'VOICE') && dimensions) {
       const rect = wrapperRef.current!.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / rect.width) * 100;
@@ -452,15 +543,27 @@ const PDFPage: React.FC<any> = ({
       ref={wrapperRef}
       className="relative bg-white shadow-lg mx-auto transition-all"
       onMouseUp={handleMouseUp}
-      style={{ width: dimensions.width, height: dimensions.height, marginBottom: `${PAGE_GAP}px` }}
+      style={{
+        width: dimensions.width,
+        height: dimensions.height,
+        marginBottom: `${PAGE_GAP}px`,
+        cursor: activeTool === 'TEXT' ? 'text' : 'crosshair'
+      }}
     >
       {shouldRender ? (
         <>
           <canvas ref={canvasRef} className="block" />
-          <div ref={textLayerRef} className="textLayer absolute inset-0" style={{ pointerEvents: activeTool === 'TEXT' ? 'auto' : 'none' }} />
+          <div
+            ref={textLayerRef}
+            className="textLayer"
+            style={{
+              pointerEvents: activeTool === 'TEXT' ? 'auto' : 'none',
+              cursor: activeTool === 'TEXT' ? 'text' : 'default'
+            }}
+          />
           {isRendering && <div className="absolute inset-0 flex items-center justify-center bg-white/50"><Loader2Icon className="w-8 h-8 animate-spin text-indigo-400" /></div>}
 
-          <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 3 }}>
             {annotations.map((ann: any) => {
               const isFocused = ann.id === focusedAnnotationId;
               return (
@@ -475,28 +578,14 @@ const PDFPage: React.FC<any> = ({
               );
             })}
           </div>
+          {/* Annotation popup now rendered in sidebar - show temporary marker on PDF */}
           {isPendingOnThisPage && pendingAnnotation && (
-            <AnnotationPopup
-              x={pendingAnnotation.x}
-              y={pendingAnnotation.y}
-              activeCategory={activeCategory}
-              pendingText={pendingText}
-              setPendingText={setPendingText}
-              pendingAuthor={pendingAuthor}
-              setPendingAuthor={setPendingAuthor}
-              pendingDate={pendingDate}
-              setPendingDate={setPendingDate}
-              pendingTime={pendingTime}
-              setPendingTime={setPendingTime}
-              availableAuthors={availableAuthors}
-              onCycleCategory={onCycleCategory}
-              onCancel={onCancelPending}
-              onCommit={onCommitPending}
-              getCategoryColor={getCategoryColor}
-              activeTool={activeTool}
-              setActiveCategory={setActiveCategory}
-              detachPopup={pendingAnnotation.type === 'point'}
-            />
+            <div
+              className="absolute pointer-events-none z-30"
+              style={{ left: `${pendingAnnotation.x}%`, top: `${pendingAnnotation.y}%` }}
+            >
+              <div className="w-4 h-4 rounded-full bg-indigo-500 border-2 border-white shadow-lg animate-pulse -translate-x-1/2 -translate-y-1/2" />
+            </div>
           )}
         </>
       ) : (
@@ -514,6 +603,11 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   allDocuments = [], onSwitchDocument,
   currentUser
 }) => {
+  // annotations = all case annotations; currentDocAnnotations = for this document only (PDF + Comments)
+  const currentDocAnnotations = React.useMemo(
+    () => annotations.filter(a => a.documentId === doc.id),
+    [annotations, doc.id]
+  );
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [scale, setScale] = useState(1.2);
   const [numPages, setNumPages] = useState(0);
@@ -526,6 +620,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [showDocMenu, setShowDocMenu] = useState(false);
   const [isContinuous, setIsContinuous] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sidebarScrollRef = useRef<HTMLDivElement>(null);
   const visiblePages = useRef(new Map<number, number>());
 
   // Jump to page state
@@ -536,10 +631,11 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [editingAnnotation, setEditingAnnotation] = useState<Annotation | null>(null);
   const [pendingText, setPendingText] = useState('');
   const [pendingAuthor, setPendingAuthor] = useState(currentUser.name);
-  const [pendingDate, setPendingDate] = useState('');
-  const [pendingTime, setPendingTime] = useState('');
+  const [pendingDate, setPendingDate] = useState(''); // Leave empty - user manually sets if needed
+  const [pendingTime, setPendingTime] = useState(''); // Leave empty - user manually sets if needed
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [cacheStatus, setCacheStatus] = useState<'idle' | 'cached' | 'downloading'>('idle');
+  const [saveToast, setSaveToast] = useState<string | null>(null);
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   const estimatedHeightPerPage = (ESTIMATED_PAGE_HEIGHT * (scale / 1.2)) + PAGE_GAP;
 
@@ -609,10 +705,50 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     }
   }, [initialPage, numPages]); // Added numPages to ensure we can jump once doc is loaded
 
+  // Keyboard navigation: Up/Down scroll in both modes; Left/Right change pages in single-page mode
+  useEffect(() => {
+    if (!pdfDoc) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          if (!isContinuous) {
+            e.preventDefault();
+            jumpToPage(currentPage - 1);
+          }
+          break;
+        case 'ArrowRight':
+          if (!isContinuous) {
+            e.preventDefault();
+            jumpToPage(currentPage + 1);
+          }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (scrollRef.current) {
+            scrollRef.current.scrollBy({ top: -120, behavior: 'smooth' });
+          }
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          if (scrollRef.current) {
+            scrollRef.current.scrollBy({ top: 120, behavior: 'smooth' });
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isContinuous, currentPage, pdfDoc, numPages]);
+
   // Handle focused annotation from props
   useEffect(() => {
     if (focusedAnnotationId) {
-      const ann = annotations.find(a => a.id === focusedAnnotationId);
+      const ann = currentDocAnnotations.find(a => a.id === focusedAnnotationId);
       if (ann) {
         if (ann.page !== currentPage) {
           setCurrentPage(ann.page);
@@ -622,7 +758,29 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         }
       }
     }
-  }, [focusedAnnotationId, isEditingFocused, annotations]);
+  }, [focusedAnnotationId, isEditingFocused, currentDocAnnotations]);
+
+  // Auto-scroll sidebar to the focused annotation card
+  useEffect(() => {
+    if (!focusedAnnotationId || !sidebarScrollRef.current) return;
+
+    // Small delay to ensure the DOM has rendered the card
+    const timer = setTimeout(() => {
+      const card = sidebarScrollRef.current?.querySelector(`[data-annotation-id="${focusedAnnotationId}"]`) as HTMLElement | null;
+      if (card && sidebarScrollRef.current) {
+        const container = sidebarScrollRef.current;
+        const cardTop = card.offsetTop - container.offsetTop;
+        const cardHeight = card.offsetHeight;
+        const containerHeight = container.clientHeight;
+
+        // Scroll so the card is centered in the sidebar
+        const scrollTarget = cardTop - (containerHeight / 2) + (cardHeight / 2);
+        container.scrollTo({ top: scrollTarget, behavior: 'smooth' });
+      }
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, [focusedAnnotationId]);
 
   useEffect(() => {
     const loadPdf = async () => {
@@ -637,14 +795,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       }
 
       try {
-        let fetchUrl = doc.url;
-        const isFirebaseStorage = doc.url.includes('firebasestorage.googleapis.com');
-        const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-        if (isFirebaseStorage && isDevelopment) {
-          fetchUrl = doc.url.replace('https://firebasestorage.googleapis.com', '/storage-proxy');
-        }
-
+        // Use doc.url directly - Firebase Storage download URLs include tokens and work cross-origin.
+        // No proxy: avoids 500s in dev and ensures identical behavior in dev + prod.
+        const fetchUrl = doc.url;
         const cacheKey = `pdf_${String(doc.id).replace(/[\/\.]/g, '_')}`;
         let arrayBuffer: ArrayBuffer;
 
@@ -656,8 +809,13 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           arrayBuffer = cached;
         } else {
           setCacheStatus('downloading');
-          const response = await fetch(fetchUrl);
-          if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
+          const response = await fetch(fetchUrl, { mode: 'cors', credentials: 'omit' });
+          if (!response.ok) {
+            const msg = response.status >= 500
+              ? `Document server error (${response.status}). The file may be unavailable.`
+              : `Failed to load document: ${response.status} ${response.statusText}`;
+            throw new Error(msg);
+          }
           const fetched = await response.arrayBuffer();
           await pdfCacheManager.cachePDF(cacheKey, fetched.slice(0), {
             path: (doc as any).storagePath || doc.url,
@@ -704,10 +862,24 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     };
   }, [doc.id, doc.url]);
 
+  // Handle text highlight from PDF - open popup with pre-filled text for user review
+  const handleTextHighlight = (page: number, selectedText: string, x: number, y: number) => {
+    // Open the annotation popup with the highlighted text pre-filled
+    // User can then review, edit, and choose Manual Save or AI Save
+    setPendingAnnotation({ page, x, y, type: 'highlight' });
+    setEditingAnnotation(null);
+    setPendingText(selectedText);
+    setPendingDate('');
+    setPendingTime('');
+    onClearFocus?.();
+  };
+
   const handleCommitPending = (manualText?: string, manualDate?: string, manualTime?: string) => {
     const textToUse = manualText !== undefined ? manualText : pendingText;
-    const dateToUse = manualDate !== undefined ? manualDate : pendingDate;
-    const timeToUse = manualTime !== undefined ? manualTime : pendingTime;
+    const dateVal = manualDate !== undefined ? manualDate : pendingDate;
+    const timeVal = manualTime !== undefined ? manualTime : pendingTime;
+    const dateToUse = dateVal?.trim() ? dateVal.trim() : undefined;
+    const timeToUse = timeVal?.trim() ? timeVal.trim() : undefined;
 
     if (editingAnnotation) {
       onUpdateAnnotation({
@@ -743,6 +915,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       setPendingDate('');
       setPendingTime('');
     }
+    // Show continue-annotating toast
+    setSaveToast('Note saved! Click anywhere on the PDF to continue annotating.');
+    setTimeout(() => setSaveToast(null), 4000);
   };
 
   const handleJumpToAndFocus = (ann: Annotation) => {
@@ -769,6 +944,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     setPendingAnnotation(null);
     setPendingText('');
     setPendingDate('');
+    // Ensure sidebar is open so user can see the focused comment
+    if (!showSidebar) setShowSidebar(true);
     onSetFocus?.(ann.id);
   };
 
@@ -946,6 +1123,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           )}
           <div className="flex bg-slate-100 p-1 rounded-lg">
             <button onClick={() => setActiveTool('POINT')} className={`p-1.5 rounded ${activeTool === 'POINT' ? 'bg-white shadow' : 'text-slate-400'}`} title="Pointer Tool"><MousePointer2Icon className="w-4 h-4" /></button>
+            <button onClick={() => setActiveTool('TEXT')} className={`p-1.5 rounded ${activeTool === 'TEXT' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-200'}`} title="Highlight Text Tool - Select text in PDF to create annotations">
+              <HighlighterIcon className="w-4 h-4" />
+            </button>
             <button onClick={() => setActiveTool('VOICE')} className={`p-1.5 rounded relative ${activeTool === 'VOICE' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-200'}`} title="Voice Annotation">
               <MicIcon className="w-4 h-4" />
               {activeTool === 'VOICE' && (
@@ -954,6 +1134,12 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
             </button>
           </div>
 
+          {activeTool === 'TEXT' && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-amber-50 text-amber-700 rounded-full border border-amber-200 animate-in fade-in slide-in-from-left-2 duration-300">
+              <HighlighterIcon className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-black uppercase tracking-widest">Select text in PDF to create annotation</span>
+            </div>
+          )}
           {activeTool === 'VOICE' && (
             <div className="flex items-center gap-2 px-3 py-1 bg-red-50 text-red-600 rounded-full border border-red-100 animate-in fade-in slide-in-from-left-2 duration-300">
               <div className="w-1.5 h-1.5 bg-red-600 rounded-full animate-pulse" />
@@ -1025,7 +1211,17 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       </div>
       <div className="flex flex-1 overflow-hidden">
-        <div ref={scrollRef} onScroll={handleCoarseScroll} className="flex-1 overflow-auto p-8 bg-slate-200/50">
+        <div
+          ref={scrollRef}
+          onScroll={handleCoarseScroll}
+          onClick={(e) => {
+            if (!focusedAnnotationId) return;
+            const onPage = (e.target as HTMLElement).closest('[id^="pdf-page-"]');
+            if (!onPage) onClearFocus?.();
+          }}
+          className="flex-1 overflow-auto p-8 bg-slate-200/50 cursor-default"
+          style={{ scrollBehavior: 'auto', WebkitOverflowScrolling: 'touch', willChange: 'scroll-position' }}
+        >
           {loading ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400">
               <Loader2Icon className="w-10 h-10 animate-spin mb-4 text-indigo-500" />
@@ -1055,7 +1251,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                         pageNumber={pg}
                         pdfDoc={pdfDoc}
                         scale={scale}
-                        annotations={annotations.filter(a => a.page === pg)}
+                        annotations={currentDocAnnotations.filter(a => a.page === pg)}
                         onPageClick={(p: any, x: any, y: any, t: any) => {
                           setPendingAnnotation({ page: p, x, y, type: t });
                           setEditingAnnotation(null);
@@ -1092,6 +1288,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                         onEditExisting={handleFocusAnnotation}
                         onVisible={handlePageVisible}
                         shouldRender={Math.abs(currentPage - pg) <= VIRTUAL_WINDOW_SIZE}
+                        onTextHighlight={handleTextHighlight}
                       />
                     </div>
                   ))
@@ -1100,7 +1297,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   pageNumber={currentPage}
                   pdfDoc={pdfDoc}
                   scale={scale}
-                  annotations={annotations.filter(a => a.page === currentPage)}
+                  annotations={currentDocAnnotations.filter(a => a.page === currentPage)}
                   onPageClick={(pg: any, x: any, y: any, t: any) => {
                     setPendingAnnotation({ page: pg, x, y, type: t });
                     setEditingAnnotation(null);
@@ -1136,13 +1333,14 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   focusedAnnotationId={focusedAnnotationId}
                   onEditExisting={handleFocusAnnotation}
                   onVisible={handlePageVisible}
+                  onTextHighlight={handleTextHighlight}
                 />
               )}
             </div>
           )}
         </div>
         {showSidebar && (
-          <div className="w-80 bg-white border-l flex flex-col shadow-xl animate-in slide-in-from-right-4 duration-300">
+          <div className="w-96 min-w-[360px] bg-white border-l flex flex-col shadow-xl animate-in slide-in-from-right-4 duration-300 min-h-0">
             <div className="p-4 border-b flex items-center justify-between bg-slate-50 font-bold text-slate-700 text-sm">
               <div className="flex items-center">
                 <MessageSquareIcon className="w-4 h-4 text-indigo-600 mr-2" /> Comments
@@ -1151,76 +1349,145 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 {focusedAnnotationId && (
                   <button onClick={onClearFocus} className="text-[10px] text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 font-bold">Clear Focus</button>
                 )}
-                <span className="bg-white px-2 py-0.5 rounded-full border border-slate-200 text-[10px] text-slate-400">{annotations.length}</span>
+                <span className="bg-white px-2 py-0.5 rounded-full border border-slate-200 text-[10px] text-slate-400">{currentDocAnnotations.length}</span>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {annotations.length === 0 && (
+
+            {/* Active Annotation Form */}
+            {(pendingAnnotation || editingAnnotation) && (
+              <div className="p-4 bg-indigo-50 border-b border-indigo-100">
+                <AnnotationPopup
+                  x={0}
+                  y={0}
+                  height={0}
+                  activeCategory={activeCategory}
+                  pendingText={pendingText}
+                  setPendingText={setPendingText}
+                  pendingAuthor={pendingAuthor}
+                  setPendingAuthor={setPendingAuthor}
+                  pendingDate={pendingDate}
+                  setPendingDate={setPendingDate}
+                  pendingTime={pendingTime}
+                  setPendingTime={setPendingTime}
+                  availableAuthors={[currentUser.name]}
+                  onCycleCategory={() => {
+                    const cats = ['Review', 'Medical', 'Legal', 'Urgent'];
+                    const idx = cats.indexOf(activeCategory);
+                    setActiveCategory(cats[(idx + 1) % cats.length]);
+                  }}
+                  onCancel={() => {
+                    setPendingAnnotation(null);
+                    setEditingAnnotation(null);
+                    setPendingText('');
+                    setPendingDate('');
+                    setPendingTime('');
+                    onClearFocus?.();
+                  }}
+                  onCommit={handleCommitPending}
+                  getCategoryColor={(cat: string) => {
+                    switch (cat) {
+                      case 'Medical': return 'bg-red-500';
+                      case 'Legal': return 'bg-blue-500';
+                      case 'Review': return 'bg-amber-500';
+                      case 'Urgent': return 'bg-rose-500';
+                      default: return 'bg-slate-500';
+                    }
+                  }}
+                  activeTool={activeTool}
+                  setActiveCategory={setActiveCategory}
+                  detachPopup={false}
+                />
+              </div>
+            )}
+
+            <div ref={sidebarScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ WebkitOverflowScrolling: 'touch', willChange: 'scroll-position', overscrollBehavior: 'contain' }}>
+              {currentDocAnnotations.length === 0 && (
                 <div className="text-center py-10 opacity-30">
                   <MessageSquareIcon className="w-8 h-8 mx-auto mb-2" />
                   <p className="text-xs">No comments yet</p>
                 </div>
               )}
-              {annotations.map(ann => (
+              {[...currentDocAnnotations]
+                .sort((a, b) => {
+                  if (a.page !== b.page) return a.page - b.page;
+                  const getTime = (ann: Annotation) => {
+                    if (ann.eventDate && ann.eventTime) {
+                      const t = new Date(`${ann.eventDate}T${ann.eventTime}`).getTime();
+                      if (!isNaN(t)) return t;
+                    }
+                    if (ann.timestamp) {
+                      const t = new Date(ann.timestamp).getTime();
+                      if (!isNaN(t)) return t;
+                    }
+                    return 0;
+                  };
+                  return getTime(a) - getTime(b);
+                })
+                .map(ann => (
                 <div
                   key={ann.id}
+                  data-annotation-id={ann.id}
                   onClick={() => handleFocusAnnotation(ann)}
-                  className={`group p-3 bg-white rounded-xl border transition-all cursor-pointer hover:shadow-md relative ${focusedAnnotationId === ann.id ? 'border-indigo-500 ring-1 ring-indigo-500/20 shadow-md' : 'border-slate-200 shadow-sm hover:border-indigo-200'}`}
+                  className={`group p-4 bg-white rounded-xl border transition-all cursor-pointer hover:shadow-md relative ${focusedAnnotationId === ann.id ? 'border-indigo-500 ring-2 ring-indigo-500/30 shadow-lg bg-indigo-50/30' : 'border-slate-200 shadow-sm hover:border-indigo-200'}`}
                 >
+                  <div className="text-center mb-2 pb-1.5 border-b border-slate-100">
+                    <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100 inline-flex items-center gap-1">
+                      <FileTextIcon className="w-2.5 h-2.5" />
+                      {doc.name}
+                    </span>
+                  </div>
                   <div className="flex items-center justify-between mb-2">
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded text-white ${getCategoryColor(ann.category)}`}>{ann.category}</span>
                     <span className="text-[9px] text-slate-400">Page {ann.page}</span>
                   </div>
-                  <p className="text-xs text-slate-700 leading-relaxed mb-2">"{ann.text}"</p>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400">
-                  <div className="flex items-center gap-1.5">
+                  <p className="text-xs text-slate-700 leading-relaxed mb-3">"{ann.text}"</p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white font-bold ${getAvatarColor(ann.author)}`}>{ann.author.charAt(0)}</div>
                       <span>{ann.author}</span>
                     </div>
-                    {/* Action Buttons - Shown on Hover */}
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleStartEdit(ann); }}
-                        className="p-1 px-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md font-bold flex items-center gap-1 shadow-sm border border-indigo-100"
-                      >
-                        <PencilIcon className="w-2.5 h-2.5" />
-                        Edit
-                      </button>
-                      <button
-                        onClick={async (e) => { 
-                          e.stopPropagation(); 
-                          if (confirm('Delete this annotation? This cannot be undone.')) {
-                            try {
-                              await onDeleteAnnotation(ann.id);
-                              console.log(`✅ Successfully deleted annotation ${ann.id}`);
-                            } catch (error) {
-                              console.error('❌ Failed to delete annotation:', error);
-                              alert('Failed to delete annotation. Please try again.');
+                    <div className="flex items-center gap-3 shrink-0">
+                      {/* Action Buttons - Shown on Hover */}
+                      <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleStartEdit(ann); }}
+                          className="p-1.5 px-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md font-bold text-[10px] shadow-sm border border-indigo-100"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={async (e) => { 
+                            e.stopPropagation(); 
+                            if (confirm('Delete this annotation? This cannot be undone.')) {
+                              try {
+                                await onDeleteAnnotation(ann.id);
+                                console.log(`✅ Successfully deleted annotation ${ann.id}`);
+                              } catch (error) {
+                                console.error('❌ Failed to delete annotation:', error);
+                                alert('Failed to delete annotation. Please try again.');
+                              }
                             }
-                          }
-                        }}
-                        className="p-1 px-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-md font-bold flex items-center"
-                      >
-                        <Trash2Icon className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-4 whitespace-nowrap">
-                      {/* Show time (eventTime or derived from timestamp) and date */}
-                      {(() => {
-                        const timeFromEvent = ann.eventTime;
-                        if (timeFromEvent) return <span className="text-[10px] text-slate-400 flex-shrink-0">{timeFromEvent}</span>;
-                        try {
-                          const d = new Date(ann.timestamp);
-                          if (!isNaN(d.getTime())) {
-                            const hh = String(d.getHours()).padStart(2, '0');
-                            const mm = String(d.getMinutes()).padStart(2, '0');
-                            return <span className="text-[10px] text-slate-400 flex-shrink-0">{`${hh}:${mm}`}</span>;
-                          }
-                        } catch (e) { /* ignore */ }
-                        return null;
-                      })()}
-                      {!ann.eventDate && <span className="text-[10px] text-slate-400 flex-shrink-0">{ann.timestamp.split(',')[0]}</span>}
-                      {ann.eventDate && <span className="text-[10px] text-slate-400 flex-shrink-0">{ann.eventDate}</span>}
+                          }}
+                          className="p-1.5 px-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-md font-bold flex items-center"
+                          title="Delete"
+                        >
+                          <Trash2Icon className="w-3 h-3" />
+                        </button>
+                      </span>
+                      {/* Date and time - no icons */}
+                      {ann.eventDate && (
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          {formatDisplayDate(ann.eventDate)}
+                        </span>
+                      )}
+                      {ann.eventTime && (
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          {ann.eventTime}
+                        </span>
+                      )}
+                      {!ann.eventDate && !ann.eventTime && (
+                        <span className="text-[10px] text-slate-300 italic">No date/time</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1229,6 +1496,18 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
         )}
       </div>
+      {/* Save Toast - continue annotating prompt */}
+      {saveToast && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex items-center gap-3 px-5 py-3 bg-emerald-600 text-white rounded-xl shadow-2xl shadow-emerald-200">
+            <CheckIcon className="w-5 h-5 shrink-0" />
+            <span className="text-sm font-bold">{saveToast}</span>
+            <button onClick={() => setSaveToast(null)} className="p-1 hover:bg-emerald-700 rounded-lg ml-2">
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { PlusIcon, ClockIcon, UsersIcon, FileIcon, SearchIcon, FilterIcon, CalendarIcon, Trash2Icon, PencilIcon } from 'lucide-react';
-import { Case, UserProfile } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { PlusIcon, ClockIcon, UsersIcon, FileIcon, SearchIcon, FilterIcon, CalendarIcon, Trash2Icon, PencilIcon, XIcon, SlidersHorizontalIcon } from 'lucide-react';
+import { Case, UserProfile, AuthorizedUser } from '../types';
 
 interface CaseListProps {
     cases: Case[];
@@ -11,6 +11,7 @@ interface CaseListProps {
     currentUser: UserProfile;
     onDeleteCase: (id: string) => void;
     onUpdateCase: (c: Case) => void;
+    authorizedUsers?: AuthorizedUser[];
 }
 
 type CaseStatus = 'planning' | 'active' | 'on_hold' | 'cancelled' | 'archived';
@@ -31,12 +32,68 @@ const STATUS_COLORS: Record<CaseStatus, string> = {
     archived: 'bg-slate-100 text-slate-700'
 };
 
-const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, currentUser, onDeleteCase, onUpdateCase }) => {
+/** Format ISO or date string to YYYY-MM-DD for display */
+const formatDate = (val: string | undefined): string => {
+    if (!val) return '—';
+    try {
+        const d = new Date(val);
+        if (isNaN(d.getTime())) return '—';
+        return d.toISOString().slice(0, 10);
+    } catch {
+        return val.slice(0, 10) || '—';
+    }
+};
+
+/** Derive last activity date - uses auto-updated lastActivityAt field, falls back to heuristics */
+const getLastActivityDate = (c: Case): string => {
+    // Primary: use the auto-stamped field (updated on every case/doc/annotation change)
+    if (c.lastActivityAt) return formatDate(c.lastActivityAt);
+    // Fallback: derive from embedded data
+    const dates: number[] = [];
+    const add = (s: string | undefined) => {
+        if (!s) return;
+        const t = new Date(s).getTime();
+        if (!isNaN(t)) dates.push(t);
+    };
+    add(c.createdAt);
+    (c.exportHistory || []).forEach(e => add(e.date));
+    (c.draftVersions || []).forEach(d => add(d.date));
+    const walk = (comments: { timestamp: number; replies?: unknown[] }[]) => {
+        comments.forEach(cc => {
+            dates.push(cc.timestamp);
+            if (cc.replies?.length) walk(cc.replies as { timestamp: number; replies?: unknown[] }[]);
+        });
+    };
+    walk(c.reportComments || []);
+    if (dates.length === 0) return formatDate(c.createdAt);
+    return formatDate(new Date(Math.max(...dates)).toISOString());
+};
+
+const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, currentUser, onDeleteCase, onUpdateCase, authorizedUsers = [] }) => {
     const [activeTab, setActiveTab] = useState<CaseStatus>(() => {
         return (localStorage.getItem('apex_dashboard_tab') as CaseStatus) || 'active';
     });
 
     const [searchTerm, setSearchTerm] = useState('');
+    const [showFilters, setShowFilters] = useState(false);
+    const [filterAttorney, setFilterAttorney] = useState('');
+    const [filterPhysician, setFilterPhysician] = useState('');
+    const [filterDateFrom, setFilterDateFrom] = useState('');
+    const [filterDateTo, setFilterDateTo] = useState('');
+    const filterRef = useRef<HTMLDivElement>(null);
+
+    const hasActiveFilters = !!(filterAttorney || filterPhysician || filterDateFrom || filterDateTo);
+
+    const clearFilters = () => {
+        setFilterAttorney('');
+        setFilterPhysician('');
+        setFilterDateFrom('');
+        setFilterDateTo('');
+    };
+
+    // Collect unique attorneys and assigned physicians from cases
+    const uniqueAttorneys = [...new Set(cases.map(c => c.primaryLawyer).filter(Boolean))] as string[];
+    const uniquePhysicians = authorizedUsers.filter(u => u.status === 'active');
 
     useEffect(() => {
         localStorage.setItem('apex_dashboard_tab', activeTab);
@@ -76,7 +133,18 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
         const matchesSearch = c.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
             c.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
             (c.primaryLawyer || '').toLowerCase().includes(searchTerm.toLowerCase());
-        return matchesTab && matchesSearch;
+        // Filter by attorney
+        const matchesAttorney = !filterAttorney || (c.primaryLawyer || '') === filterAttorney;
+        // Filter by assigned physician
+        const matchesPhysician = !filterPhysician ||
+          c.ownerId === filterPhysician ||
+          (c.assignedUserIds || []).includes(filterPhysician) ||
+          (c.assignedUserEmails || []).includes(filterPhysician);
+        // Filter by date range (using startDate or createdAt)
+        const caseDate = c.startDate || c.createdAt || '';
+        const matchesDateFrom = !filterDateFrom || caseDate >= filterDateFrom;
+        const matchesDateTo = !filterDateTo || caseDate <= filterDateTo;
+        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesDateFrom && matchesDateTo;
     });
 
     const handleDelete = (e: React.MouseEvent, c: Case) => {
@@ -90,7 +158,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
     };
 
     return (
-        <div className="p-8 max-w-7xl mx-auto h-full flex flex-col">
+        <div className="p-8 max-w-[1400px] mx-auto w-full h-full flex flex-col">
             <div className="flex items-center justify-between mb-8 shrink-0">
                 <div>
                     <h2 className="text-3xl font-black text-slate-900" style={{ fontFamily: "'Roboto', sans-serif" }}>Cases Dashboard</h2>
@@ -105,7 +173,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                 </button>
             </div>
 
-            <div className="flex flex-col bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex-1 min-h-0">
+            <div className="flex flex-col bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex-1 min-h-0 min-w-0">
                 {/* Toolbar */}
                 <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                     <div className="flex gap-2 bg-slate-200/50 p-1 rounded-lg overflow-x-auto">
@@ -123,28 +191,104 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                         ))}
                     </div>
 
-                    <div className="relative w-64 ml-4">
-                        <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                        <input
-                            className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500 transition-all"
-                            placeholder="Search cases..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
+                    <div className="flex items-center gap-2 ml-4">
+                        <div className="relative w-56">
+                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input
+                                className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500 transition-all"
+                                placeholder="Search cases..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <div className="relative" ref={filterRef}>
+                            <button
+                                onClick={() => setShowFilters(!showFilters)}
+                                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all border ${hasActiveFilters
+                                    ? 'bg-cyan-50 text-cyan-700 border-cyan-200'
+                                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                                }`}
+                            >
+                                <SlidersHorizontalIcon className="w-3.5 h-3.5" />
+                                Filters
+                                {hasActiveFilters && <span className="w-4 h-4 bg-cyan-600 text-white rounded-full text-[9px] flex items-center justify-center">!</span>}
+                            </button>
+                            {showFilters && (
+                                <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-xl z-30 p-4 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Filters</span>
+                                        {hasActiveFilters && (
+                                            <button onClick={clearFilters} className="text-[10px] font-bold text-red-500 hover:text-red-700">Clear All</button>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Attorney</label>
+                                        <select
+                                            value={filterAttorney}
+                                            onChange={e => setFilterAttorney(e.target.value)}
+                                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+                                        >
+                                            <option value="">All Attorneys</option>
+                                            {uniqueAttorneys.map(a => <option key={a} value={a}>{a}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Assigned Physician</label>
+                                        <select
+                                            value={filterPhysician}
+                                            onChange={e => setFilterPhysician(e.target.value)}
+                                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+                                        >
+                                            <option value="">All Physicians</option>
+                                            {uniquePhysicians.map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Date From</label>
+                                            <input
+                                                type="date"
+                                                value={filterDateFrom}
+                                                onChange={e => setFilterDateFrom(e.target.value)}
+                                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Date To</label>
+                                            <input
+                                                type="date"
+                                                value={filterDateTo}
+                                                onChange={e => setFilterDateTo(e.target.value)}
+                                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+                                            />
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowFilters(false)}
+                                        className="w-full py-2 bg-cyan-600 text-white rounded-lg text-xs font-bold hover:bg-cyan-700 transition-all"
+                                    >
+                                        Apply Filters
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
 
-                {/* Table Header */}
-                <div className="grid grid-cols-12 gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">
-                    <div className="col-span-4">Case Details</div>
-                    <div className="col-span-2">Client</div>
-                    <div className="col-span-2">Primary Lawyer</div>
-                    <div className="col-span-2">Status</div>
-                    <div className="col-span-2 text-right">Actions</div>
-                </div>
+                {/* Table - header + body in same scroll context for alignment */}
+                <div className="flex-1 min-h-0 min-w-0 overflow-auto">
+                    {/* Table Header */}
+                    <div className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_0.9fr_1fr_1fr] gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 sticky top-0 z-10 min-w-[880px]">
+                        <div>Case Details</div>
+                        <div>Client</div>
+                        <div>Start Date</div>
+                        <div>Assigned Attorney</div>
+                        <div>Status</div>
+                        <div>Last Activity</div>
+                        <div className="text-right">Actions</div>
+                    </div>
 
-                {/* Table Body */}
-                <div className="overflow-y-auto flex-1">
+                    {/* Table Body */}
                     {filteredCases.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-64 text-slate-400">
                             <FilterIcon className="w-12 h-12 mb-2 opacity-20" />
@@ -156,16 +300,16 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                 <div
                                     key={c.id}
                                     onClick={() => onSelect(c)}
-                                    className="grid grid-cols-12 gap-4 px-6 py-4 transition-colors cursor-pointer group items-center hover:bg-slate-50"
+                                    className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_0.9fr_1fr_1fr] gap-4 px-6 py-4 transition-colors cursor-pointer group items-center hover:bg-slate-50 min-w-[880px]"
                                 >
-                                    <div className="col-span-4">
+                                    <div className="min-w-0">
                                         <h3 className="font-bold text-slate-800 text-sm mb-1 group-hover:text-cyan-600 transition-colors truncate">{c.title}</h3>
                                         <p className="text-xs text-slate-500 line-clamp-1">{c.description}</p>
                                     </div>
-                                    <div className="col-span-2">
+                                    <div className="min-w-0">
                                         {(c.clients && c.clients.length > 0) ? (
                                             <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">
+                                                <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold shrink-0">
                                                     {c.clients[0].name.charAt(0)}
                                                 </div>
                                                 <span className="text-sm text-slate-700 truncate">{c.clients[0].name}</span>
@@ -174,23 +318,28 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                             <span className="text-xs text-slate-400 italic">No Client</span>
                                         )}
                                     </div>
-                                    <div className="col-span-2">
+                                    <div className="text-sm text-slate-600 font-mono whitespace-nowrap">
+                                        {formatDate(c.startDate || c.createdAt)}
+                                    </div>
+                                    <div className="min-w-0">
                                         {c.primaryLawyer ? (
                                             <div className="flex items-center gap-2 text-sm text-slate-700">
-                                                <UsersIcon className="w-3 h-3 text-slate-400" />
+                                                <UsersIcon className="w-3 h-3 text-slate-400 shrink-0" />
                                                 <span className="truncate">{c.primaryLawyer}</span>
                                             </div>
                                         ) : (
                                             <span className="text-xs text-slate-400 italic">Unassigned</span>
                                         )}
                                     </div>
-                                    <div className="col-span-2">
-                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.status]}`}>
+                                    <div>
+                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${STATUS_COLORS[c.status]}`}>
                                             {STATUS_LABELS[c.status]}
                                         </span>
                                     </div>
-                                    <div className="col-span-2 flex items-center justify-end gap-2">
-                                        <span className="text-xs text-slate-500 font-mono mr-2">{c.createdAt}</span>
+                                    <div className="text-sm text-slate-600 font-mono whitespace-nowrap">
+                                        {getLastActivityDate(c)}
+                                    </div>
+                                    <div className="flex items-center justify-end gap-1">
                                         <button
                                             onClick={(e) => handleEdit(e, c)}
                                             className="p-1.5 text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
@@ -214,7 +363,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                     )}
                 </div>
 
-                <div className="bg-slate-50 border-t border-slate-200 p-3 text-xs text-slate-400 text-center">
+                <div className="bg-slate-50 border-t border-slate-200 p-3 text-xs text-slate-400 text-center shrink-0">
                     Showing {filteredCases.length} case{filteredCases.length !== 1 && 's'}
                 </div>
             </div>

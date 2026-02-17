@@ -176,7 +176,8 @@ const SignUpPage: React.FC<SignUpPageProps> = ({ onBackToLogin }) => {
       console.log('✅ Sign up completed successfully!');
       // Clear the flag - authorization check complete (success)
       sessionStorage.removeItem('isCheckingAuthorization');
-      // Success - user will be logged in automatically
+      // Force reload to root so App.tsx re-runs onAuthStateChanged with the new user
+      window.location.href = '/';
 
     } catch (err: any) {
       // Clear flag on any error

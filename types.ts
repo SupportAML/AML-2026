@@ -68,6 +68,8 @@ export interface Case {
   ownerId: string;
   ownerName?: string;
   assignedUserIds?: string[];
+  assignedUserEmails?: string[]; // Pre-authorized emails for invited users
+  virtualFolders?: string[];
 
   // New Fields
   primaryLawyer?: string;
@@ -121,6 +123,9 @@ export interface Case {
     fileName?: string;
   }[];
 
+  // Last activity timestamp - auto-updated on any case-related change
+  lastActivityAt?: string;
+
   // Finalization
   isFinal?: boolean;
   signature?: string;
@@ -165,6 +170,7 @@ export interface UserProfile {
   avatarUrl?: string;
   avatarColor?: string;
   qualifications?: string;
+  bio?: string;
   cvFileName?: string;
 }
 
@@ -220,6 +226,7 @@ export interface Document {
   uploadDate: string;
   size: string;
   driveFileId?: string;
+  storagePath?: string;
   path?: string;
   citation?: string;
   reviewStatus?: ReviewStatus;

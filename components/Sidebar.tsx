@@ -10,6 +10,7 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ChevronLeftIcon,
   UsersIcon,
   UserPlusIcon,
   XIcon,
@@ -21,7 +22,9 @@ import {
   CompassIcon,
   BookUserIcon,
   UserIcon,
-  SparklesIcon
+  SparklesIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon
 } from 'lucide-react';
 import { ViewMode, Case, UserProfile, AuthorizedUser, UserRole } from '../types';
 
@@ -39,6 +42,8 @@ interface SidebarProps {
   onInviteUser: (email: string, role: UserRole, name: string) => void;
   onDeleteUser: (id: string) => void;
   onImpersonate?: (userId: string) => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -54,19 +59,18 @@ const Sidebar: React.FC<SidebarProps> = ({
   authorizedUsers,
   onInviteUser,
   onDeleteUser,
-  onImpersonate
+  onImpersonate,
+  collapsed = false,
+  onToggleCollapse
 }) => {
   const [draggedCaseId, setDraggedCaseId] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [collapsedUsers, setCollapsedUsers] = useState<Set<string>>(new Set());
-  // team management moved to full Team Admin view
 
-  // New User State
   const [newUserName, setNewUserName] = useState('');
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserRole, setNewUserRole] = useState<UserRole>('USER');
 
-  // Filter Cases: Owner OR Assigned
   const myActiveCases = cases.filter(c =>
     c.status === 'active' &&
     (c.ownerId === currentUser.id || c.assignedUserIds?.includes(currentUser.id))
@@ -77,7 +81,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     (c.ownerId === currentUser.id || c.assignedUserIds?.includes(currentUser.id))
   );
 
-  // For Admin View: Group cases by owner (exclude self to avoid duplication if admin owns cases)
   const otherUsersCases = currentUser.role === 'ADMIN'
     ? cases.filter(c => c.ownerId !== currentUser.id)
     : [];
@@ -94,17 +97,17 @@ const Sidebar: React.FC<SidebarProps> = ({
   const NavItem = ({ icon: Icon, label, active, onClick }: any) => (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${active
+      title={collapsed ? label : undefined}
+      className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-4'} py-2.5 rounded-lg text-sm font-medium transition-all ${active
         ? 'bg-cyan-600 text-white shadow-md shadow-cyan-200'
         : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
         }`}
     >
       <Icon className="w-5 h-5 shrink-0" />
-      <span>{label}</span>
+      {!collapsed && <span>{label}</span>}
     </button>
   );
 
-  // Drag Handlers
   const handleDragStart = (e: React.DragEvent, id: string) => {
     setDraggedCaseId(id);
     e.dataTransfer.effectAllowed = 'move';
@@ -143,21 +146,22 @@ const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="w-64 bg-white border-r flex flex-col h-full shrink-0 relative">
-      
+    <aside className={`${collapsed ? 'w-16' : 'w-64'} bg-white border-r flex flex-col h-full shrink-0 relative transition-all duration-300`}>
 
-      <div className="p-6 pb-2">
-        <div className="flex items-center gap-2 mb-6">
-          <div className="w-8 h-8 bg-cyan-600 rounded-lg flex items-center justify-center text-white shadow-lg">
+      <div className={collapsed ? 'p-3 pb-2' : 'p-6 pb-2'}>
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-2'} mb-6`}>
+          <div className="w-8 h-8 bg-cyan-600 rounded-lg flex items-center justify-center text-white shadow-lg shrink-0">
             <ScaleIcon className="w-5 h-5" />
           </div>
-          <div>
-            <span className="block text-xl font-extrabold tracking-[-0.02em] text-slate-900 leading-none">ApexMedLaw</span>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-1 block">Admin Access</span>
-          </div>
+          {!collapsed && (
+            <div>
+              <span className="block text-xl font-extrabold tracking-[-0.02em] text-slate-900 leading-none">ApexMedLaw</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-1 block">Admin Access</span>
+            </div>
+          )}
         </div>
 
-        <nav className="space-y-1 mb-6">
+        <nav className={`space-y-1 ${collapsed ? 'mb-3' : 'mb-6'}`}>
           <NavItem
             icon={LayoutDashboardIcon}
             label="Dashboard"
@@ -209,140 +213,160 @@ const Sidebar: React.FC<SidebarProps> = ({
         </nav>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
-        {/* ACTIVE CASES (My Cases) */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Legal Cases</span>
-            <button
-              onClick={onCreateCase}
-              className="text-slate-400 hover:text-cyan-600 transition-colors"
-              title="New Legal Case"
-            >
-              <PlusIcon className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="space-y-1">
-            {myActiveCases.map(c => (
-              <div
-                key={c.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, c.id)}
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, c.id)}
-                onClick={() => onSelectCase(c)}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all cursor-pointer group relative ${activeCase?.id === c.id && currentView !== ViewMode.DASHBOARD
-                  ? 'bg-cyan-50 text-cyan-700 font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                  } ${draggedCaseId === c.id ? 'opacity-50 border-2 border-dashed border-cyan-300' : ''}`}
+      {!collapsed && (
+        <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
+          {/* ACTIVE CASES */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Legal Cases</span>
+              <button
+                onClick={onCreateCase}
+                className="text-slate-400 hover:text-cyan-600 transition-colors"
+                title="New Legal Case"
               >
-                <GripVerticalIcon className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing" />
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeCase?.id === c.id ? 'bg-cyan-600' : 'bg-slate-300'}`} />
-                <span className="truncate flex-1">{c.title}</span>
-                {c.ownerId !== currentUser.id && (
-                  <span title="Shared with you">
-                    <UsersIcon className="w-3 h-3 text-slate-400" />
-                  </span>
+                <PlusIcon className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-1">
+              {myActiveCases.map(c => (
+                <div
+                  key={c.id}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, c.id)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, c.id)}
+                  onClick={() => onSelectCase(c)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all cursor-pointer group relative ${activeCase?.id === c.id && currentView !== ViewMode.DASHBOARD
+                    ? 'bg-cyan-50 text-cyan-700 font-semibold'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                    } ${draggedCaseId === c.id ? 'opacity-50 border-2 border-dashed border-cyan-300' : ''}`}
+                >
+                  <GripVerticalIcon className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing" />
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeCase?.id === c.id ? 'bg-cyan-600' : 'bg-slate-300'}`} />
+                  <span className="truncate flex-1">{c.title}</span>
+                  {c.ownerId !== currentUser.id && (
+                    <span title="Shared with you">
+                      <UsersIcon className="w-3 h-3 text-slate-400" />
+                    </span>
+                  )}
+                </div>
+              ))}
+              {myActiveCases.length === 0 && (
+                <p className="text-xs text-slate-300 italic px-2">No active cases</p>
+              )}
+            </div>
+          </div>
+
+          {/* INACTIVE CASES */}
+          <div>
+            <button
+              onClick={() => setShowInactive(!showInactive)}
+              className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 mb-2 w-full"
+            >
+              {showInactive ? <ChevronDownIcon className="w-3 h-3" /> : <ChevronRightIcon className="w-3 h-3" />}
+              Archived
+            </button>
+
+            {showInactive && (
+              <div className="space-y-1 pl-2 border-l-2 border-slate-100 ml-1">
+                {myInactiveCases.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => onSelectCase(c)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-left ${activeCase?.id === c.id
+                      ? 'text-slate-700 font-semibold bg-slate-100'
+                      : 'text-slate-400 hover:text-slate-600'
+                      }`}
+                  >
+                    <ArchiveIcon className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{c.title}</span>
+                  </button>
+                ))}
+                {myInactiveCases.length === 0 && (
+                  <p className="text-xs text-slate-300 italic px-2">No archived cases</p>
                 )}
               </div>
-            ))}
-            {myActiveCases.length === 0 && (
-              <p className="text-xs text-slate-300 italic px-2">No active cases</p>
             )}
           </div>
-        </div>
 
-        {/* INACTIVE CASES */}
-        <div>
-          <button
-            onClick={() => setShowInactive(!showInactive)}
-            className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 mb-2 w-full"
-          >
-            {showInactive ? <ChevronDownIcon className="w-3 h-3" /> : <ChevronRightIcon className="w-3 h-3" />}
-            Archived
-          </button>
-
-          {showInactive && (
-            <div className="space-y-1 pl-2 border-l-2 border-slate-100 ml-1">
-              {myInactiveCases.map(c => (
+          {/* ADMIN VIEW */}
+          {currentUser.role === 'ADMIN' && (
+            <div className="pt-4 border-t border-slate-100">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldIcon className="w-3.5 h-3.5 text-cyan-500" />
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Firm Access</span>
+                </div>
                 <button
-                  key={c.id}
-                  onClick={() => onSelectCase(c)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-left ${activeCase?.id === c.id
-                    ? 'text-slate-700 font-semibold bg-slate-100'
-                    : 'text-slate-400 hover:text-slate-600'
-                    }`}
+                  onClick={() => setView(ViewMode.TEAM_ADMIN)}
+                  className="p-1 rounded hover:bg-slate-100 transition-colors text-slate-400"
+                  title="Manage Team"
                 >
-                  <ArchiveIcon className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{c.title}</span>
+                  <UserPlusIcon className="w-4 h-4" />
                 </button>
-              ))}
-              {myInactiveCases.length === 0 && (
-                <p className="text-xs text-slate-300 italic px-2">No archived cases</p>
+              </div>
+
+              {Object.keys(groupedOtherCases).length > 0 && (
+                <div className="space-y-3">
+                  {Object.entries(groupedOtherCases).map(([owner, cases]) => (
+                    <div key={owner}>
+                      <button
+                        onClick={() => toggleUserCollapse(owner)}
+                        className="flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-cyan-600 w-full mb-1"
+                      >
+                        {collapsedUsers.has(owner) ? <ChevronRightIcon className="w-3 h-3" /> : <ChevronDownIcon className="w-3 h-3" />}
+                        {owner}
+                      </button>
+                      {!collapsedUsers.has(owner) && (
+                        <div className="pl-3 space-y-1 border-l border-slate-100 ml-1.5">
+                          {cases.map(c => (
+                            <button
+                              key={c.id}
+                              onClick={() => onSelectCase(c)}
+                              className={`w-full text-left text-xs truncate py-1 px-2 rounded ${activeCase?.id === c.id ? 'bg-slate-100 text-slate-800 font-bold' : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                            >
+                              {c.title}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
         </div>
+      )}
 
-        {/* ADMIN VIEW */}
-        {currentUser.role === 'ADMIN' && (
-          <div className="pt-4 border-t border-slate-100">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <ShieldIcon className="w-3.5 h-3.5 text-cyan-500" />
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Firm Access</span>
-              </div>
-              <button
-                onClick={() => setView(ViewMode.TEAM_ADMIN)}
-                className="p-1 rounded hover:bg-slate-100 transition-colors text-slate-400"
-                title="Manage Team"
-              >
-                <UserPlusIcon className="w-4 h-4" />
-              </button>
-            </div>
+      {/* Collapsed: just show a spacer */}
+      {collapsed && <div className="flex-1" />}
 
-            {Object.keys(groupedOtherCases).length > 0 && (
-              <div className="space-y-3">
-                {Object.entries(groupedOtherCases).map(([owner, cases]) => (
-                  <div key={owner}>
-                    <button
-                      onClick={() => toggleUserCollapse(owner)}
-                      className="flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-cyan-600 w-full mb-1"
-                    >
-                      {collapsedUsers.has(owner) ? <ChevronRightIcon className="w-3 h-3" /> : <ChevronDownIcon className="w-3 h-3" />}
-                      {owner}
-                    </button>
-                    {!collapsedUsers.has(owner) && (
-                      <div className="pl-3 space-y-1 border-l border-slate-100 ml-1.5">
-                        {cases.map(c => (
-                          <button
-                            key={c.id}
-                            onClick={() => onSelectCase(c)}
-                            className={`w-full text-left text-xs truncate py-1 px-2 rounded ${activeCase?.id === c.id ? 'bg-slate-100 text-slate-800 font-bold' : 'text-slate-400 hover:text-slate-600'
-                              }`}
-                          >
-                            {c.title}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+      <div className="mt-auto border-t bg-slate-50/50">
+        {/* Toggle Button */}
+        {onToggleCollapse && (
+          <button
+            onClick={onToggleCollapse}
+            className="w-full p-3 flex items-center justify-center text-slate-400 hover:text-cyan-600 hover:bg-slate-100 transition-colors"
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {collapsed ? <PanelLeftOpenIcon className="w-4 h-4" /> : <PanelLeftCloseIcon className="w-4 h-4" />}
+          </button>
         )}
-      </div>
-
-      <div className="mt-auto p-4 border-t bg-slate-50/50">
-        <div className="flex items-center gap-3">
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-sm ${currentUser.avatarColor || 'bg-cyan-600'}`}>
+        {/* User Profile */}
+        <div className={`${collapsed ? 'p-2 flex justify-center' : 'p-4 flex items-center gap-3'}`}>
+          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-xs shadow-sm shrink-0 ${currentUser.avatarColor || 'bg-cyan-600'}`}
+            title={collapsed ? `${currentUser.name}\n${currentUser.email}` : undefined}
+          >
             {currentUser.name.charAt(0)}
           </div>
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-slate-700 truncate">{currentUser.name}</p>
-            <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-700 truncate">{currentUser.name}</p>
+              <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
+            </div>
+          )}
         </div>
       </div>
     </aside>

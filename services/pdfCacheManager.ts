@@ -49,18 +49,38 @@ class PDFCacheManager {
    */
   async getCachedPDF(cacheKey: string): Promise<ArrayBuffer | null> {
     if (this.memoryCache.has(cacheKey)) {
-      console.log(`[PDF Cache HIT - Memory] ${cacheKey}`);
       const buf = this.memoryCache.get(cacheKey)!;
-      // PDF.js DETACHES the buffer when used - always return a fresh copy
-      return buf.slice(0);
+
+      // Check if buffer is detached
+      if (buf.byteLength === 0) {
+        console.log(`[PDF Cache DETACHED - Memory] ${cacheKey}, evicting...`);
+        this.memoryCache.delete(cacheKey);
+        // Fall through to try IndexedDB
+      } else {
+        console.log(`[PDF Cache HIT - Memory] ${cacheKey}`);
+        try {
+          // PDF.js DETACHES the buffer when used - always return a fresh copy
+          return buf.slice(0);
+        } catch (e) {
+          console.warn(`[PDF Cache ERROR - Memory slice failed] ${cacheKey}`, e);
+          this.memoryCache.delete(cacheKey);
+          // Fall through to try IndexedDB
+        }
+      }
     }
 
     const cached = await this.getFromIndexedDB(cacheKey);
     if (cached) {
       console.log(`[PDF Cache HIT - IndexedDB] ${cacheKey}`);
-      const copy = cached.data.slice(0);
-      this.addToMemoryCache(cacheKey, copy);
-      return copy;
+      try {
+        const copy = cached.data.slice(0);
+        this.addToMemoryCache(cacheKey, copy);
+        return copy;
+      } catch (e) {
+        console.warn(`[PDF Cache ERROR - IndexedDB slice failed] ${cacheKey}`, e);
+        // Return null to force re-download
+        return null;
+      }
     }
 
     console.log(`[PDF Cache MISS] ${cacheKey}`);
@@ -78,7 +98,13 @@ class PDFCacheManager {
       const firstKey = this.memoryCache.keys().next().value;
       if (firstKey !== undefined) this.memoryCache.delete(firstKey);
     }
-    this.memoryCache.set(key, data);
+    // Store a copy to prevent detachment issues
+    try {
+      const copy = data.byteLength > 0 ? data.slice(0) : data;
+      this.memoryCache.set(key, copy);
+    } catch (e) {
+      console.warn(`[PDF Cache] Failed to cache in memory: ${key}`, e);
+    }
   }
 
   private async getFromIndexedDB(key: string): Promise<CachedPDFItem | null> {

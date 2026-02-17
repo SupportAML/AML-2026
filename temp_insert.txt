@@ -1,0 +1,4 @@
+
+                                              
+                                              // CRITICAL: Save immediately to prevent data loss if user switches tabs
+                                              onUpdateCase({ ...caseItem, reportContent: html });

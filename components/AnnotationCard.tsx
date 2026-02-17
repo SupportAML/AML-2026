@@ -9,6 +9,18 @@ interface AnnotationCardProps {
     onJumpToSource?: (documentId: string, page: number) => void;
 }
 
+// Format date from YYYY-MM-DD to "23/01/2026"
+const formatDisplayDate = (dateStr?: string): string | null => {
+    if (!dateStr) return null;
+    try {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        if (!year || !month || !day) return dateStr;
+        return `${day.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')}/${year}`;
+    } catch {
+        return dateStr;
+    }
+};
+
 export const AnnotationCard: React.FC<AnnotationCardProps> = ({
     annotation,
     onEdit,
@@ -33,12 +45,17 @@ export const AnnotationCard: React.FC<AnnotationCardProps> = ({
             <div className="flex justify-between items-start mb-2">
                 <div className="flex items-center gap-2">
                     {annotation.eventDate ? (
-                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded font-mono">
-                            {annotation.eventDate}
+                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
+                            {formatDisplayDate(annotation.eventDate)}
                         </span>
                     ) : (
                         <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">
                             UNDATED
+                        </span>
+                    )}
+                    {annotation.eventTime && (
+                        <span className="text-xs font-bold text-slate-600 bg-slate-50 px-2 py-1 rounded">
+                            🕐 {annotation.eventTime}
                         </span>
                     )}
                     <span className="text-[10px] font-bold text-slate-500 uppercase">

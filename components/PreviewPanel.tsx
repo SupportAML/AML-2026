@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { ArrowLeftIcon, ExternalLinkIcon, Loader2Icon, XIcon } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
+import { pdfCacheManager } from '../services/pdfCacheManager';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.mjs`;
 
@@ -40,9 +41,23 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
             setLoading(true);
             setError(null);
             try {
-                const response = await fetch(doc.url);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const buffer = await response.arrayBuffer();
+                const cacheKey = `pdf_${String(doc.id).replace(/[\/\.]/g, '_')}`;
+                let buffer: ArrayBuffer;
+
+                const cached = await pdfCacheManager.getCachedPDF(cacheKey);
+                if (cached) {
+                    buffer = cached;
+                } else {
+                    const response = await fetch(doc.url);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const fetched = await response.arrayBuffer();
+                    await pdfCacheManager.cachePDF(cacheKey, fetched.slice(0), {
+                        docName: doc.name,
+                        downloadedAt: new Date().toISOString()
+                    });
+                    buffer = fetched;
+                }
+
                 const loadedPdf = await pdfjsLib.getDocument({ data: buffer }).promise;
                 setPdfDoc(loadedPdf);
             } catch (err: any) {
@@ -53,7 +68,7 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({
             }
         };
         loadPdf();
-    }, [doc.url]);
+    }, [doc.id]);
 
     // Render page
     useEffect(() => {

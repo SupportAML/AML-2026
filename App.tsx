@@ -34,9 +34,77 @@ import {
   subscribeToUsers,
   upsertUser,
   deleteUserFromStore,
-  ensureAdminUser
+  ensureAdminUser,
+  getProfile,
+  upsertProfile,
+  reassignUserCases,
+  deleteUserCases
 } from './services/storageService';
 import { Loader2Icon, CloudCheckIcon, LogOutIcon, ShieldIcon } from 'lucide-react';
+
+const ProfileEditForm: React.FC<{
+  initialName: string;
+  initialQualifications: string;
+  initialBio: string;
+  onSave: (name: string, qualifications: string, bio: string) => void | Promise<void>;
+  onCancel: () => void;
+}> = ({ initialName, initialQualifications, initialBio, onSave, onCancel }) => {
+  const [name, setName] = useState(initialName);
+  const [qualifications, setQualifications] = useState(initialQualifications);
+  const [bio, setBio] = useState(initialBio);
+  const [saving, setSaving] = useState(false);
+  return (
+    <form
+      className="space-y-6"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setSaving(true);
+        await onSave(name, qualifications, bio);
+        setSaving(false);
+      }}
+    >
+      <div>
+        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition"
+          placeholder="Your full name"
+          autoFocus
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Qualifications</label>
+        <input
+          type="text"
+          value={qualifications}
+          onChange={(e) => setQualifications(e.target.value)}
+          className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition"
+          placeholder="e.g. MD, PhD, Board Certified..."
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Bio</label>
+        <textarea
+          value={bio}
+          onChange={(e) => setBio(e.target.value)}
+          rows={4}
+          className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition resize-y"
+          placeholder="Brief bio used to auto-generate Physician Expert segments in legal reports..."
+        />
+      </div>
+      <div className="flex gap-3">
+        <button type="button" onClick={onCancel} className="flex-1 py-3 border border-slate-300 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all">
+          Cancel
+        </button>
+        <button type="submit" disabled={saving} className="flex-1 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-black transition-all disabled:opacity-60">
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </form>
+  );
+};
 
 const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -57,7 +125,17 @@ const App: React.FC = () => {
   const [editingCase, setEditingCase] = useState<Case | undefined>(undefined);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadTotalFiles, setUploadTotalFiles] = useState<number | undefined>(undefined);
+  const [uploadCurrentFileIndex, setUploadCurrentFileIndex] = useState<number | undefined>(undefined);
   const [isUploading, setIsUploading] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('sidebarCollapsed') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
 
 
   useEffect(() => {
@@ -97,7 +175,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    const unsubCases = subscribeToCases(setCases, currentUser.id, currentUser.role);
+    const unsubCases = subscribeToCases(setCases, currentUser.id, currentUser.email, currentUser.role);
     const unsubUsers = subscribeToUsers(setAuthorizedUsers);
     return () => {
       unsubCases();
@@ -107,14 +185,37 @@ const App: React.FC = () => {
 
 
 
-  // Sync user role and profile from authorizedUsers
+  // Sync user role and profile from authorizedUsers + auto sign-out if revoked
   useEffect(() => {
-    if (!currentUser || authorizedUsers.length === 0) return;
+    if (!currentUser || isDemoUser) return;
+    if (authorizedUsers.length === 0) return; // Still loading
     const profile = authorizedUsers.find(u => u.email.toLowerCase() === currentUser.email.toLowerCase());
-    if (profile && profile.role !== currentUser.role) {
+    if (!profile) {
+      // User was removed from authorizedUsers - force sign out immediately
+      console.log('🚫 User removed from authorized list - forcing sign out');
+      signOut(auth).then(() => {
+        setCurrentUser(null);
+        setViewMode(ViewMode.DASHBOARD);
+        setActiveCase(null);
+        alert('Your access has been revoked by an administrator. You have been signed out.');
+        window.location.href = '/';
+      });
+      return;
+    }
+    if (profile.role !== currentUser.role) {
       setCurrentUser(prev => prev ? { ...prev, role: profile.role } : null);
     }
   }, [authorizedUsers, currentUser?.email]);
+
+  // Load extended profile (qualifications, bio) from Firestore
+  useEffect(() => {
+    if (!currentUser) return;
+    getProfile(currentUser.id).then((p) => {
+      setCurrentUser(prev =>
+        prev ? { ...prev, name: p.name || prev.name, qualifications: p.qualifications, bio: p.bio } : null
+      );
+    });
+  }, [currentUser?.id]);
 
   // Keep activeCase in sync with cases array
   useEffect(() => {
@@ -283,6 +384,13 @@ const App: React.FC = () => {
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
+    // Validate file size - allow up to 1GB
+    const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1GB in bytes
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`File size exceeds 1GB limit. File size: ${(file.size / (1024 * 1024 * 1024)).toFixed(2)}GB`);
+      return;
+    }
+
     setIsUploading(true);
     setUploadFileName(file.name);
     setUploadProgress(0);
@@ -366,6 +474,127 @@ const App: React.FC = () => {
       setIsUploading(false);
       setUploadProgress(0);
       setUploadFileName('');
+      setUploadTotalFiles(undefined);
+      setUploadCurrentFileIndex(undefined);
+    }
+  };
+
+  const handleFolderUpload = async (caseId: string, fileList: FileList | File[]) => {
+    const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1GB
+    const files = Array.from(fileList);
+    const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    const tooLarge: string[] = [];
+    const toUpload = pdfFiles.filter(f => {
+      if (f.size > MAX_FILE_SIZE) {
+        tooLarge.push(f.name);
+        return false;
+      }
+      return true;
+    });
+
+    const skippedNonPdf = pdfFiles.length < files.length ? files.length - pdfFiles.length : 0;
+    if (toUpload.length === 0) {
+      const parts: string[] = [];
+      if (skippedNonPdf) parts.push(`${skippedNonPdf} non-PDF file(s) skipped`);
+      if (tooLarge.length) parts.push(`${tooLarge.length} file(s) exceed 1GB: ${tooLarge.slice(0, 3).join(', ')}${tooLarge.length > 3 ? '...' : ''}`);
+      alert(parts.length ? `No PDFs to upload. ${parts.join('. ')}` : 'No PDF files found in the selected folder.');
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadTotalFiles(toUpload.length);
+    setUploadCurrentFileIndex(1);
+    setUploadFileName(toUpload.length > 1 ? 'Folder upload' : toUpload[0].name);
+    setUploadProgress(0);
+
+    const getFolderPath = (file: File): string => {
+      const rp = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const parts = rp.replace(/\\/g, '/').split('/');
+      parts.pop(); // remove filename
+      return parts.filter(Boolean).join('/');
+    };
+
+    try {
+      for (let i = 0; i < toUpload.length; i++) {
+        const file = toUpload[i];
+        setUploadCurrentFileIndex(i + 1);
+        setUploadFileName(file.name);
+        setUploadProgress(0);
+        let fileData;
+        try {
+          fileData = await uploadFile(caseId, file, (data) => {
+            setUploadProgress(data.progress);
+          });
+        } catch (e) {
+          if (isDemoUser) {
+            fileData = {
+              url: URL.createObjectURL(file),
+              name: file.name,
+              size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+              storagePath: undefined
+            };
+          } else throw e;
+        }
+        const folderPath = getFolderPath(file);
+        const newDoc: Document = {
+          id: Math.random().toString(36).substr(2, 9),
+          caseId,
+          name: fileData.name,
+          type: 'pdf',
+          url: fileData.url,
+          storagePath: (fileData as { storagePath?: string }).storagePath,
+          uploadDate: new Date().toISOString(),
+          size: fileData.size,
+          reviewStatus: 'pending',
+          path: folderPath || undefined
+        };
+        await upsertDocument(newDoc);
+      }
+      const parts: string[] = [`Uploaded ${toUpload.length} file(s).`];
+      if (skippedNonPdf) parts.push(`${skippedNonPdf} non-PDF skipped`);
+      if (tooLarge.length) parts.push(`${tooLarge.length} exceeded 1GB`);
+      if (parts.length > 1) console.info(parts.join(' '));
+    } catch (e) {
+      alert("Failed to upload folder. Ensure Firebase Storage is configured or use Demo mode.");
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+      setUploadFileName('');
+      setUploadTotalFiles(undefined);
+      setUploadCurrentFileIndex(undefined);
+    }
+  };
+
+  const handleSaveProfile = async (name: string, qualifications: string, bio: string) => {
+    if (!currentUser) return;
+    const uid = auth.currentUser?.uid ?? currentUser.id;
+    if (!uid) {
+      alert('You must be signed in to save your profile.');
+      return;
+    }
+    const trimmedName = name.trim();
+    const trimmedQuals = qualifications.trim() || undefined;
+    const trimmedBio = bio.trim() || undefined;
+    try {
+      // Save to Firestore first (main profile storage)
+      await upsertProfile(uid, { name: trimmedName, qualifications: trimmedQuals, bio: trimmedBio });
+      setCurrentUser(prev => prev ? { ...prev, name: trimmedName, qualifications: trimmedQuals, bio: trimmedBio } : null);
+      setIsEditingProfile(false);
+
+      // Optionally update Firebase Auth displayName (may fail for some providers; non-critical)
+      const user = auth.currentUser;
+      if (user && trimmedName) {
+        try {
+          await updateProfile(user, { displayName: trimmedName });
+        } catch (authErr) {
+          console.warn('Auth displayName update skipped:', authErr);
+        }
+      }
+    } catch (e: any) {
+      console.error('Failed to save profile:', e);
+      const msg = e?.message || e?.code || String(e);
+      const hint = msg.includes('permission') || msg.includes('Permission') ? ' Deploy Firestore rules: firebase deploy --only firestore:rules' : '';
+      alert(`Failed to save profile: ${msg}${hint}`);
     }
   };
 
@@ -392,7 +621,9 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       documentId: finalDocId,
       caseId: activeCase.id,
-      page, text, author: author || currentUser?.name || 'Expert User', category, x, y, width, height, imageUrl, eventDate, eventTime,
+      page, text, author: author || currentUser?.name || 'Expert User', category, x, y, width, height, imageUrl,
+      eventDate: eventDate?.trim() ? eventDate.trim() : undefined,
+      eventTime: eventTime?.trim() ? eventTime.trim() : undefined,
       timestamp: new Date().toLocaleString(),
       type
     };
@@ -426,10 +657,17 @@ const App: React.FC = () => {
     upsertUser(newUser);
   };
 
-  const handleDeleteUser = (id: string) => {
-    if (window.confirm("Are you sure you want to remove this team member?")) {
-      deleteUserFromStore(id);
+  const handleDeleteUser = async (id: string, action?: 'keep' | 'reassign' | 'delete', reassignToId?: string) => {
+    // action: 'keep' = just remove auth (default), 'reassign' = reassign cases, 'delete' = delete cases
+    if (action === 'reassign' && reassignToId) {
+      const targetUser = authorizedUsers.find(u => u.id === reassignToId);
+      if (targetUser) {
+        await reassignUserCases(id, reassignToId, targetUser.name);
+      }
+    } else if (action === 'delete') {
+      await deleteUserCases(id);
     }
+    await deleteUserFromStore(id);
   };
 
   const handleAssignUser = (caseId: string, userId: string) => {
@@ -490,6 +728,7 @@ const App: React.FC = () => {
           cases={cases} onCreateCase={handleCreateCase} onOpenSettings={() => { }}
           currentUser={currentUser} onReorderCases={() => { }} authorizedUsers={authorizedUsers}
           onInviteUser={handleInviteUser} onDeleteUser={handleDeleteUser}
+          collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
         />
 
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -535,6 +774,7 @@ const App: React.FC = () => {
                   currentUser={currentUser}
                   onDeleteCase={deleteCaseFromStore}
                   onUpdateCase={upsertCase}
+                  authorizedUsers={authorizedUsers}
                 />
               )}
               {viewMode === ViewMode.CASE_VIEW && activeCase && (
@@ -543,19 +783,21 @@ const App: React.FC = () => {
                   onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
                   onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
                   onUpload={handleFileUpload}
+                  onUploadFolder={handleFolderUpload}
                   onUpdateCase={upsertCase}
                   onDeleteDoc={deleteDocumentFromStore}
                   onUpdateDocStatus={(did, status) => {
                     const d = activeDocuments.find(x => x.id === did);
                     if (d) upsertDocument({ ...d, reviewStatus: status });
                   }}
+                  onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
                 />
               )}
               {viewMode === ViewMode.DOC_VIEWER && activeDoc && (
                 <DocumentViewer
                   doc={activeDoc}
-                  annotations={activeAnnotations.filter(a => a.documentId === activeDoc.id)}
+                  annotations={activeAnnotations}
                   onAddAnnotation={handleAddAnnotation}
                   onUpdateAnnotation={upsertAnnotation}
                   onDeleteAnnotation={deleteAnnotationFromStore}
@@ -596,26 +838,48 @@ const App: React.FC = () => {
               {viewMode === ViewMode.ORIENTATION && (
                 <Orientation />
               )}
-              {viewMode === ViewMode.PROFILE && (
+              {viewMode === ViewMode.PROFILE && currentUser && (
                 <div className="p-8 max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl mt-12 shadow-sm">
                   <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile</h2>
-                  <div className="flex items-center gap-6 mb-8">
-                    <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl text-white font-bold shadow-lg ${currentUser.avatarColor || 'bg-cyan-600'}`}>
-                      {currentUser.name.charAt(0)}
-                    </div>
-                    <div>
-                      <h3 className="text-xl font-bold text-slate-800">{currentUser.name}</h3>
-                      <p className="text-slate-500">{currentUser.email}</p>
-                      <span className="inline-block mt-2 px-2 py-0.5 bg-cyan-50 text-cyan-700 text-[10px] font-bold rounded uppercase tracking-widest border border-cyan-100">{currentUser.role}</span>
-                    </div>
-                  </div>
-                  <div className="space-y-6">
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qualifications & Bio</p>
-                      <p className="text-sm text-slate-600 italic">"No bio updated. Qualifications provided here are used to auto-generate Physician Expert segments in legal reports."</p>
-                    </div>
-                    <button className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-black transition-all">Edit Profile</button>
-                  </div>
+                  {isEditingProfile ? (
+                    <ProfileEditForm
+                      initialName={currentUser.name}
+                      initialQualifications={currentUser.qualifications ?? ''}
+                      initialBio={currentUser.bio ?? ''}
+                      onSave={handleSaveProfile}
+                      onCancel={() => setIsEditingProfile(false)}
+                    />
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-6 mb-8">
+                        <div className={`w-20 h-20 rounded-full flex items-center justify-center text-3xl text-white font-bold shadow-lg ${currentUser.avatarColor || 'bg-cyan-600'}`}>
+                          {currentUser.name.charAt(0)}
+                        </div>
+                        <div>
+                          <h3 className="text-xl font-bold text-slate-800">{currentUser.name}</h3>
+                          <p className="text-slate-500">{currentUser.email}</p>
+                          <span className="inline-block mt-2 px-2 py-0.5 bg-cyan-50 text-cyan-700 text-[10px] font-bold rounded uppercase tracking-widest border border-cyan-100">{currentUser.role}</span>
+                        </div>
+                      </div>
+                      <div className="space-y-6">
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qualifications & Bio</p>
+                          <p className="text-sm text-slate-600">
+                            {currentUser.qualifications || currentUser.bio ? (
+                              <>
+                                {currentUser.qualifications && <span className="font-medium">{currentUser.qualifications}</span>}
+                                {currentUser.qualifications && currentUser.bio && <br />}
+                                {currentUser.bio || ''}
+                              </>
+                            ) : (
+                              <span className="italic">"No bio updated. Qualifications provided here are used to auto-generate Physician Expert segments in legal reports."</span>
+                            )}
+                          </p>
+                        </div>
+                        <button onClick={() => setIsEditingProfile(true)} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-black transition-all">Edit Profile</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               {viewMode === ViewMode.TEAM_ADMIN && (
@@ -651,6 +915,8 @@ const App: React.FC = () => {
         progress={uploadProgress}
         fileName={uploadFileName}
         isUploading={isUploading}
+        totalFiles={uploadTotalFiles}
+        currentFileIndex={uploadCurrentFileIndex}
       />
     </div>
   );

@@ -57,7 +57,7 @@ const getModelForTask = (taskType: 'simple' | 'complex' | 'critical'): string =>
     if (process.env.CLAUDE_MODEL) {
         return process.env.CLAUDE_MODEL;
     }
-    
+
     switch (taskType) {
         case 'simple':
             return CLAUDE_HAIKU;
@@ -294,7 +294,7 @@ const callClaude = async (
         if (isServer) {
             await verifyAvailableModels();
         } else {
-        // Running in browser - skip verifying models to avoid CORS/preflight issues
+            // Running in browser - skip verifying models to avoid CORS/preflight issues
             // Rely on server-side env `CLAUDE_MODEL` or MODELS.DEFAULT set at build time
             // If an explicit model was requested from the browser but models aren't verified, try mapping common names
             // to the known MODELS entries instead of dropping the request entirely. This avoids unnecessary 404s
@@ -454,7 +454,7 @@ const callClaudeJSON = async <T>(
     } catch (err) {
         // Check if response looks truncated (doesn't end with } or ])
         const isTruncated = !jsonText.trim().endsWith('}') && !jsonText.trim().endsWith(']');
-        
+
         if (isTruncated) {
             // Try to auto-complete simple truncations silently
             let fixed = jsonText.trim();
@@ -463,11 +463,11 @@ const callClaudeJSON = async <T>(
             const closeBraces = (fixed.match(/}/g) || []).length;
             const openBrackets = (fixed.match(/\[/g) || []).length;
             const closeBrackets = (fixed.match(/]/g) || []).length;
-            
+
             // Add missing closing brackets/braces
             for (let i = 0; i < (openBrackets - closeBrackets); i++) fixed += ']';
             for (let i = 0; i < (openBraces - closeBraces); i++) fixed += '}';
-            
+
             try {
                 const result = JSON.parse(fixed);
                 console.log('✅ Auto-completed truncated JSON response');
@@ -477,7 +477,7 @@ const callClaudeJSON = async <T>(
                 console.warn('⚠️ JSON truncated and auto-completion failed - caller should retry with smaller input');
             }
         }
-        
+
         // Attempt to extract a JSON object/array safely
         const candidate = extractJsonSafe(jsonText);
         try {
@@ -485,7 +485,7 @@ const callClaudeJSON = async <T>(
         } catch (err2) {
             // Provide more helpful error with snippet for debugging
             const snippet = (candidate || jsonText).slice(0, 500);
-            const errorMsg = isTruncated 
+            const errorMsg = isTruncated
                 ? `JSON response was truncated. Response too large for maxTokens. Snippet: ${snippet}`
                 : `Failed to parse JSON from model response. Snippet: ${snippet}`;
             throw new SyntaxError(errorMsg);
@@ -572,7 +572,7 @@ Format the report professionally with proper sections and clinical terminology.
 `;
 
     try {
-        const result = await callClaude(systemPrompt, userPrompt, { 
+        const result = await callClaude(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 8000,
             timeoutMs: LONG_REQUEST_TIMEOUT_MS // Extended timeout for long report generation
@@ -698,7 +698,7 @@ You MUST respond with valid JSON matching this exact structure:
     const cached = aiCache.get<StructuredChronology>(cacheKey);
     if (cached) return cached;
 
-    console.log(`cleanupChronology: sending ${input.length} annotations to AI (dated=${input.filter(i=>i.date).length})`);
+    console.log(`cleanupChronology: sending ${input.length} annotations to AI (dated=${input.filter(i => i.date).length})`);
 
     const userPrompt = `
 TASK: Organize the provided medical data into a structured chronology.
@@ -712,9 +712,9 @@ INSTRUCTIONS:
 `;
 
     try {
-        const result = await callClaudeJSON<StructuredChronology>(systemPrompt, userPrompt, { 
+        const result = await callClaudeJSON<StructuredChronology>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
-            temperature: 0.3 
+            temperature: 0.3
         });
         if (result) aiCache.set(cacheKey, result);
         return result;
@@ -735,7 +735,7 @@ You MUST respond with valid JSON: an array of objects with "text", "eventDate" (
     const userPrompt = `Extract key clinical facts from these physician notes. eventDate should be YYYY-MM-DD or null. NOTES: "${userNotes}"`;
 
     try {
-        return await callClaudeJSON<Partial<Annotation>[]>(systemPrompt, userPrompt, { 
+        return await callClaudeJSON<Partial<Annotation>[]>(systemPrompt, userPrompt, {
             model: getModelForTask('simple'),
             temperature: 0.3,
             maxTokens: 512,
@@ -795,7 +795,7 @@ Create 3-4 key scenarios. Keep each field concise.`;
  */
 export const rewordClinicalNotes = async (rawNotes: string, caseTitle: string): Promise<string> => {
     try {
-        const systemPrompt = "You are a professional medical-legal scribe. Your task is to reword and refine clinical notes to be more professional, authoritative, and clinically precise. Maintain ALL original facts, dates, symptoms, and findings exactly as provided. Only improve the phrasing, vocabulary, and clarity. Do not add headers if they aren't there, and do not change the basic structure.";
+        const systemPrompt = "You are a professional medical-legal scribe. Your task is to reword and refine clinical notes to be more professional, authoritative, and clinically precise. \n\nCRITICAL RULES:\n1. Maintain ALL original facts, dates, symptoms, and findings exactly as provided.\n2. PRESERVE CITATIONS: Do NOT alter or remove source links in the format `([\"Source Name\", p. X])` or `(Source Name, p. X)`. Keep them exactly where they are.\n3. Only improve the phrasing, vocabulary, and clarity.\n4. Do not add headers if they aren't there, and do not change the basic structure.";
         const userPrompt = `CASE: "${caseTitle}"\n\nNOTES TO REWORD:\n${rawNotes}`;
 
         return await callClaude(systemPrompt, userPrompt, {
@@ -827,13 +827,18 @@ export const processAnnotationInput = async (rawText: string) => {
     }
 
     const systemPrompt = `You are a Senior Medical-Legal Consultant specializing in clinical documentation.
-DATE EXTRACTION RULES:
-- ONLY extract dates if they are EXPLICITLY stated with a full year (e.g., "January 22, 2025" or "2025-01-22").
-- DO NOT assume or add any year if not explicitly mentioned.
-- If only month/day is mentioned (e.g., "Jan 22") without year, return null for date.
-- Return dates as YYYY-MM-DD format.
-- Return times as HH:mm (24h format).
-- If date or time not explicitly found, return null.
+DATE & TIME EXTRACTION RULES:
+- Extract dates from ANY format: "21st jan 2026", "21/01/26", "21 jan 2026", "21-01-2026", "January 21st", "21st of January"
+- If year is missing but month/day present, assume current year (2026)
+- Parse natural language dates intelligently
+- Return dates as YYYY-MM-DD format (ISO 8601)
+- Extract times from ANY format: "23:00 hours", "11 PM", "17:00", "5pm", "approximately 23:00"
+- Return times as HH:mm in 24-hour format
+- If NO date/time found in text, return null (do NOT make up dates)
+
+CITATION PRESERVATION:
+- Do NOT remove or alter source citations like \`(["Source", p. 1])\` or \`(Source, p. 1)\`.
+- Include them exactly as they appear in the \`refinedText\`.
 
 You MUST respond with valid JSON matching this structure:
 {
@@ -843,25 +848,29 @@ You MUST respond with valid JSON matching this structure:
 }`;
 
     const userPrompt = `
-TASK: Refine the clinical observation into an authoritative medical-legal statement and strictly extract any mentioned dates/times.
+TASK: Refine the clinical observation into an authoritative medical-legal statement and extract any mentioned dates/times.
 
-RAW INPUT: 
+RAW INPUT:
 ---
 ${rawText}
 ---
 
 INSTRUCTIONS:
-1. REFINED TEXT: Rewrite the raw input into a professional, clinically precise medical-legal observation. 
+1. REFINED TEXT: Rewrite the raw input into a professional, clinically precise medical-legal observation.
    - Example: "patient has bad fever" -> "The patient presents with high-grade pyrexia."
    - Maintain all clinical facts (dates, values, symptoms).
-2. DATE EXTRACTION: ONLY extract dates if a complete date with YEAR is explicitly stated.
-   - Format: YYYY-MM-DD.
-   - Examples: "January 22, 2025" -> "2025-01-22", "2024-03-15" -> "2024-03-15"
-   - If only month/day without year (e.g., "Jan 22"), return null.
-   - DO NOT assume or add any year.
-3. TIME EXTRACTION: Extract any mentioned time. 
-   - Format: HH:mm (24-hour).
-   - Examples: "2pm" -> "14:00", "09:30" -> "09:30".
+2. DATE EXTRACTION: Extract dates from ANY natural language format.
+   - "21st of January" -> "2026-01-21" (assume current year 2026 if not stated)
+   - "23rd jan 2026" -> "2026-01-23"
+   - "21/01/26" -> "2026-01-21"
+   - "January 21, 2025" -> "2025-01-21"
+   - If NO date mentioned in text, return null (do NOT invent dates)
+3. TIME EXTRACTION: Extract times from ANY format.
+   - "23:00 hours" -> "23:00"
+   - "approximately 17:00" -> "17:00"
+   - "2pm" -> "14:00"
+   - "11 PM" -> "23:00"
+   - If NO time mentioned in text, return null
 `;
 
     try {
@@ -869,7 +878,7 @@ INSTRUCTIONS:
             refinedText: string;
             extractedDate: string | null;
             extractedTime: string | null;
-        }>(systemPrompt, userPrompt, { 
+        }>(systemPrompt, userPrompt, {
             model: getModelForTask('simple'),
             temperature: 0.1,
             maxTokens: 256,
@@ -895,25 +904,25 @@ export const chatWithDepositionCoach = async (history: ChatMessage[], message: s
     const systemPrompt = `You are an aggressive opposing counsel deposition coach. 
 Your goal is to trap the physician expert with difficult clinical questions.
 After the user responds, analyze their answer:
-1. Score it (1-10).
+    1. Score it(1 - 10).
 2. Provide a critique of why their answer might be dangerous or weak.
 3. Identify the 'trap' intent of your question.
-4. Provide a 'Golden Answer' (betterAnswer) that use a specific deposition technique (e.g. Pivot, Assertive Neutrality).
-5. Propose the 'nextQuestion' to continue the cross-examination.
+4. Provide a 'Golden Answer'(betterAnswer) that use a specific deposition technique(e.g.Pivot, Assertive Neutrality).
+5. Propose the 'nextQuestion' to continue the cross - examination.
 
-Context: ${context}.
+        Context: ${context}.
 
 You MUST respond with valid JSON matching this structure:
-{
-  "coaching": {
-    "score": number,
-    "critique": "string",
-    "questionIntent": "string",
-    "technique": "string",
-    "betterAnswer": "string"
-  },
-  "nextQuestion": "string"
-}`;
+    {
+        "coaching": {
+            "score": number,
+                "critique": "string",
+                    "questionIntent": "string",
+                        "technique": "string",
+                            "betterAnswer": "string"
+        },
+        "nextQuestion": "string"
+    } `;
 
     // Build conversation history for Claude
     const conversationHistory = history.map(h => ({
@@ -1003,7 +1012,7 @@ You MUST respond with valid JSON matching this structure:
 export const searchMedicalResearch = async (query: string, context: string) => {
     try {
         console.log('🔍 Searching medical literature for:', query);
-        
+
         const systemPrompt = `You are a medical research librarian with access to comprehensive medical databases (PubMed, MEDLINE, Cochrane Library, medical journals).
 Your task is to generate 4-6 REALISTIC research articles, clinical guidelines, or peer-reviewed studies that would be found when searching medical literature.
 
@@ -1020,6 +1029,12 @@ Return ONLY a JSON array of articles. Each article must have: title, source, sum
         const userPrompt = `Search Query: "${query}"
 
 Case Context (for relevance): ${context ? context.substring(0, 1000) : 'Medical-legal case review'}
+
+Search Type Detection:
+- If query contains a DOI pattern (e.g., "10.1001/jama.2023.12345"), return that specific article
+- If query mentions a journal name (e.g., "NEJM", "Lancet"), prioritize articles from that journal
+- If query is a medical condition/topic, return relevant clinical studies
+- If query is a keyword, search across all medical literature
 
 Generate 4-6 highly relevant research articles that would help support medical-legal arguments. Focus on:
 - Clinical standards of care
@@ -1081,7 +1096,7 @@ Return JSON array format:
 export const analyzeReportForResearchGaps = async (content: string) => {
     // Truncate content if extremely large to avoid token overflow
     const maxContentLength = 50000; // ~12k tokens for input
-    const truncatedContent = content.length > maxContentLength 
+    const truncatedContent = content.length > maxContentLength
         ? content.substring(0, maxContentLength) + '\n\n[Report truncated for analysis]'
         : content;
 
@@ -1120,7 +1135,7 @@ Return ONLY a JSON array. Example format:
 ${shorterContent}
 
 Return ONLY a JSON array with max 5 items. Keep "topic" and "reason" extremely brief.`;
-                
+
                 return await callClaudeJSON<Array<{ topic: string; reason: string }>>(systemPrompt, retryPrompt, {
                     model: getModelForTask('critical'),
                     maxTokens: 8192, // Smaller response window
@@ -1143,17 +1158,28 @@ Return ONLY a JSON array with max 5 items. Keep "topic" and "reason" extremely b
  */
 export const insertSmartCitation = async (content: string, article: any) => {
     const systemPrompt = `You are a medical-legal citation expert.
+
+CRITICAL RULES:
+- DO NOT modify the report header, case title, case identification, dates, "Prepared by" lines, author information, expert credentials, or any metadata sections.
+- DO NOT modify the first 10 lines of the report under any circumstances.
+- ONLY insert citations into the BODY paragraphs where the research is clinically relevant.
+- Preserve ALL existing formatting, section headers, numbering, and structure exactly as-is.
+- Add the citation in-line using standard legal citation format (e.g., "Author et al., Journal, Year").
+- If a bibliography/references section exists, append the full citation there. If not, create one at the end.
+- The changes should be minimal and surgical — only add the citation text, do not rewrite surrounding content.
+
 You MUST respond with valid JSON matching this structure:
 {
   "newContent": "string",
   "explanation": "string"
 }`;
 
-    const userPrompt = `Propose citation insertion. Article: ${JSON.stringify(article)}\nReport: ${content}`;
+    const userPrompt = `Propose a MINIMAL citation insertion for this article into the report. Only modify body paragraphs where the research is relevant. Do NOT touch headers, metadata, or case identification.\n\nArticle: ${JSON.stringify(article)}\n\nReport:\n${content}`;
 
     try {
         return await callClaudeJSON<{ newContent: string; explanation: string }>(systemPrompt, userPrompt, {
-            model: getModelForTask('critical')
+            model: getModelForTask('critical'),
+            maxTokens: 8192
         });
     } catch (e) {
         console.error("insertSmartCitation error:", e);
@@ -1170,12 +1196,70 @@ export const finalizeLegalReport = async (content: string): Promise<string> => {
         const systemPrompt = "You are a senior medical-legal editor. Your task is to convert a draft report into a final, client-ready format. Remove all markdown artifacts (like double asterisks or hashtags) if they interfere with professional look, ensure consistent typography, and remove any 'working' tags or AI markers. The output should be a clean, perfectly formatted professional report ready for signature.";
         const userPrompt = `FINAL EDIT REQUEST:\n\n${content}\n\n--- \nPlease provide the finalized text below:`;
 
-        return await callClaude(systemPrompt, userPrompt, { 
+        return await callClaude(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
-            maxTokens: 8000 
+            maxTokens: 8000
         });
     } catch (e) {
         console.error("finalizeLegalReport error:", e);
         return content;
     }
+};
+
+/**
+ * Extract handwritten notes from an image using Claude Vision.
+ * Returns text as bullet points matching the order/structure in the image.
+ */
+export const extractHandwrittenNotesFromImage = async (
+    imageBase64: string,
+    mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg'
+): Promise<string> => {
+    const systemPrompt = `You are a medical-legal transcription specialist. Extract ALL text from this handwritten image accurately.
+
+RULES:
+1. Preserve the order of items as they appear top-to-bottom in the image.
+2. Output each distinct point, bullet, or line as a separate bullet point.
+3. Use a simple bullet format: each line starts with "* " (asterisk space).
+4. If there are headings or sections, keep them with a blank line before the next section.
+5. Do not add numbering unless it was in the original.
+6. Transcribe handwritten text as accurately as possible; use your best judgment for unclear characters.
+7. Return ONLY the extracted text - no preamble, no "Here are the points:", no explanation.
+8. If the image is blank or unreadable, return exactly: "(No readable text found)"`;
+
+    const userPrompt = "Extract all handwritten text from this image and return it as bullet points, one per line, preserving the order as shown in the image.";
+
+    const response = await (anthropic as any).messages.create({
+        model: DEFAULT_CLAUDE_MODEL,
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{
+            role: "user",
+            content: [
+                {
+                    type: "image",
+                    source: {
+                        type: "base64",
+                        media_type: mediaType,
+                        data: imageBase64
+                    }
+                },
+                { type: "text", text: userPrompt }
+            ]
+        }]
+    });
+
+    const textBlock = (response as any).content?.find((b: any) => b.type === 'text');
+    const text = textBlock?.text?.trim() || "(No readable text found)";
+
+    if (text === "(No readable text found)") return text;
+
+    const lines = text.split('\n').filter(Boolean);
+    const bulleted = lines.map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('*') || trimmed.startsWith('-') || /^\d+[\.\)]/.test(trimmed)) return trimmed;
+        return `* ${trimmed}`;
+    }).filter(Boolean).join('\n');
+
+    return bulleted || text;
 };
