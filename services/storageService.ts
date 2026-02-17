@@ -162,6 +162,9 @@ export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: str
   // But assignedUserIds is also needed.
 
   return onSnapshot(collection(db, COLL_CASES), (snapshot) => {
+    console.log(`📊 subscribeToCases: Received ${snapshot.docs.length} cases from Firestore`);
+    console.log(`   User: ${userId}, Email: ${userEmail}, Role: ${role}`);
+
     let allCases = snapshot.docs.map(d => {
       const caseData = { ...d.data(), id: d.id } as Case;
       return caseData;
@@ -170,17 +173,29 @@ export const subscribeToCases = (callback: (cases: Case[]) => void, userId?: str
     // Filter by user access if not an admin
     if (role !== 'ADMIN' && userId) {
       const emailLower = userEmail?.toLowerCase();
-      allCases = allCases.filter(c =>
-        c.ownerId === userId ||
-        c.assignedUserIds?.includes(userId) ||
-        (emailLower && c.assignedUserEmails?.includes(emailLower))
-      );
+      const beforeFilterCount = allCases.length;
+
+      allCases = allCases.filter(c => {
+        const isOwner = c.ownerId === userId;
+        const isAssignedByUid = c.assignedUserIds?.includes(userId);
+        const isAssignedByEmail = emailLower && c.assignedUserEmails?.includes(emailLower);
+
+        console.log(`   Case ${c.id} (${c.title}):`);
+        console.log(`      ownerId: ${c.ownerId} (match: ${isOwner})`);
+        console.log(`      assignedUserIds: ${JSON.stringify(c.assignedUserIds)} (match: ${isAssignedByUid})`);
+        console.log(`      assignedUserEmails: ${JSON.stringify(c.assignedUserEmails)} (match: ${isAssignedByEmail})`);
+
+        return isOwner || isAssignedByUid || isAssignedByEmail;
+      });
+
+      console.log(`   Filtered: ${beforeFilterCount} → ${allCases.length} cases visible to user`);
     }
 
     callback(allCases);
   }, (error) => {
     console.error("❌ Error subscribing to cases:", error);
-    // Don't crash, just callback with empty or handle globally
+    console.error("   Error code:", error.code);
+    console.error("   Error message:", error.message);
   });
 };
 

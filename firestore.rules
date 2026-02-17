@@ -1,25 +1,25 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     // Helper function to check if user is authorized
     function isAuthorized() {
       return request.auth != null && (
              exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)) ||
-             exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())) ||
-             request.auth.token.email.lower() == 'support@apexmedlaw.com' ||
+             (request.auth.token.email != null && exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower()))) ||
+             (request.auth.token.email != null && request.auth.token.email.lower() == 'support@apexmedlaw.com') ||
              request.auth.uid == 'UjyoIcIzesNXrAwjzXtjV7V2uFs2'
       );
     }
-    
+
     // Helper function to check if user is admin
     function isAdmin() {
       return request.auth != null && (
              (exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)) &&
               get(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)).data.role in ['ADMIN', 'OWNER']) ||
-             (exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())) &&
+             (request.auth.token.email != null && exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())) &&
               get(/databases/$(database)/documents/authorizedUsers/$(request.auth.token.email.lower())).data.role in ['ADMIN', 'OWNER']) ||
-             request.auth.token.email.lower() == 'support@apexmedlaw.com' ||
+             (request.auth.token.email != null && request.auth.token.email.lower() == 'support@apexmedlaw.com') ||
              request.auth.uid == 'UjyoIcIzesNXrAwjzXtjV7V2uFs2'
       );
     }
@@ -31,7 +31,8 @@ service cloud.firestore {
         (resource.data.assignedUserIds != null &&
          request.auth.uid in resource.data.assignedUserIds) ||
         // Check assignedUserEmails array for email match
-        (resource.data.assignedUserEmails != null &&
+        (request.auth.token.email != null &&
+         resource.data.assignedUserEmails != null &&
          request.auth.token.email.lower() in resource.data.assignedUserEmails)
       );
     }
@@ -52,7 +53,8 @@ service cloud.firestore {
         (caseDoc.data.assignedUserIds != null &&
          request.auth.uid in caseDoc.data.assignedUserIds) ||
         // Assigned by email
-        (caseDoc.data.assignedUserEmails != null &&
+        (request.auth.token.email != null &&
+         caseDoc.data.assignedUserEmails != null &&
          request.auth.token.email.lower() in caseDoc.data.assignedUserEmails)
       );
     }
@@ -63,7 +65,7 @@ service cloud.firestore {
       allow create: if isAuthorized();
       allow update: if isAuthorized() || isCaseOwner(caseId);
       allow delete: if isAdmin() || (isAuthorized() && resource.data.ownerId == request.auth.uid);
-      
+
       // Documents within cases - accessible to case-assigned users
       match /documents/{documentId} {
         allow read: if isAuthorized() || isCaseAssigned(caseId);
@@ -92,7 +94,7 @@ service cloud.firestore {
       allow create, update: if isAuthorized();
       allow delete: if isAdmin() || (isAuthorized() && resource.data.caseId != null);
     }
-    
+
     // Authorized users - MUST be readable by authenticated users for login check
     // But only admins can modify
     match /authorizedUsers/{userId} {
@@ -101,7 +103,7 @@ service cloud.firestore {
       allow update: if request.auth != null && isAdmin();
       allow delete: if request.auth != null && isAdmin();
     }
-    
+
     // Pending signup requests - public can create (blind write), only admins can read/modify
     match /pendingSignupRequests/{requestId} {
       allow read: if isAdmin();
@@ -109,7 +111,7 @@ service cloud.firestore {
       allow update: if isAdmin();
       allow delete: if isAdmin();
     }
-    
+
     // Invitation tokens - public can get by ID (validation), users can update (redemption), admins manage
     match /invitationTokens/{tokenId} {
       allow get: if true;
@@ -119,13 +121,13 @@ service cloud.firestore {
       allow update: if request.auth != null;
       allow delete: if isAdmin();
     }
-    
+
     // Settings - only admins can modify
     match /settings/{settingId} {
       allow read: if isAuthorized();
       allow write: if isAdmin();
     }
-    
+
     // User profiles - users can read/write own profile only
     match /profiles/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;

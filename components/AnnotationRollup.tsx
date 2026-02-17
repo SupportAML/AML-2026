@@ -3295,7 +3295,13 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            <div className="w-full max-w-[8.5in] min-h-[11in] bg-white shadow-lg border border-slate-200 flex flex-col transition-all relative group">
                               <div
                                  key={writerContentKey}
-                                 ref={editableDivRef}
+                                 ref={(el) => {
+                                    editableDivRef.current = el;
+                                    // Restore content when the div mounts (e.g. after tab switch)
+                                    if (el && reportContentRef.current) {
+                                       el.innerHTML = reportContentRef.current;
+                                    }
+                                 }}
                                  contentEditable
                                  suppressContentEditableWarning
                                  className="w-full min-h-[11in] outline-none px-[1in] py-[1in] bg-transparent font-serif text-[12pt] leading-[2] text-slate-900 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:my-0"

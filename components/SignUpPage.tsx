@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { createUserWithEmailAndPassword, updateProfile, deleteUser } from "firebase/auth";
 import { auth } from '../firebase';
-import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { StethoscopeIcon, ArrowRightIcon, MailIcon, LockIcon, Loader2Icon, ShieldAlertIcon, CheckCircleIcon } from 'lucide-react';
 import { validateInvitationToken, redeemInvitationToken } from '../services/invitationService';
@@ -112,11 +112,22 @@ const SignUpPage: React.FC<SignUpPageProps> = ({ onBackToLogin }) => {
         const snapshot = await getDocs(q);
 
         if (!snapshot.empty) {
+          // User found in authorizedUsers - update their status with UID as doc ID
           const userDoc = snapshot.docs[0];
-          await updateDoc(doc(db, 'authorizedUsers', userDoc.id), {
+          const userData = userDoc.data();
+
+          // Create/update document with UID as the ID (proper structure)
+          await setDoc(doc(db, 'authorizedUsers', user.uid), {
+            ...userData,
             status: 'active',
-            id: user.uid
+            id: user.uid,
+            email: cleanEmail.toLowerCase()
           });
+
+          // Delete the old document if it has a different ID
+          if (userDoc.id !== user.uid) {
+            await deleteDoc(doc(db, 'authorizedUsers', userDoc.id));
+          }
         }
       } else if (!inviteToken) {
         // No invite token - verify authorization post-auth (now we can read Firestore)
@@ -159,17 +170,28 @@ const SignUpPage: React.FC<SignUpPageProps> = ({ onBackToLogin }) => {
         }
         
         console.log('✅ User authorized - updating status to active');
-        // Authorized - update status to active
+        // Authorized - update status to active with UID as doc ID
         const usersRef = collection(db, 'authorizedUsers');
         const q = query(usersRef, where('email', '==', cleanEmail.toLowerCase()));
         const snapshot = await getDocs(q);
 
         if (!snapshot.empty) {
+          // User found in authorizedUsers - update their status with UID as doc ID
           const userDoc = snapshot.docs[0];
-          await updateDoc(doc(db, 'authorizedUsers', userDoc.id), {
+          const userData = userDoc.data();
+
+          // Create/update document with UID as the ID (proper structure)
+          await setDoc(doc(db, 'authorizedUsers', user.uid), {
+            ...userData,
             status: 'active',
-            id: user.uid
+            id: user.uid,
+            email: cleanEmail.toLowerCase()
           });
+
+          // Delete the old document if it has a different ID
+          if (userDoc.id !== user.uid) {
+            await deleteDoc(doc(db, 'authorizedUsers', userDoc.id));
+          }
         }
       }
 
