@@ -132,7 +132,7 @@ const FileTreeItem: React.FC<{
               try {
                 const dt = new Date(node.doc!.uploadDate);
                 if (!isNaN(dt.getTime())) {
-                  return <span className="whitespace-nowrap">• {dt.toLocaleString()}</span>;
+                  return <span className="whitespace-nowrap">• {dt.toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })}</span>;
                 }
               } catch {
                 /* ignore parse errors */

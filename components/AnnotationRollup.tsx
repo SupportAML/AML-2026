@@ -1,16 +1,16 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import * as Diff from 'diff';
 import { parse } from 'marked';
 
-// Format date from YYYY-MM-DD to "23/01/2026"
+// Format date from YYYY-MM-DD to "MM/DD/YYYY"
 const formatDisplayDate = (dateStr?: string): string | null => {
    if (!dateStr) return null;
    try {
       const [year, month, day] = dateStr.split('-').map(Number);
       if (!year || !month || !day) return dateStr;
-      return `${day.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')}/${year}`;
+      return `${month.toString().padStart(2, '0')}/${day.toString().padStart(2, '0')}/${year}`;
    } catch {
       return dateStr;
    }
@@ -173,6 +173,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const lastContentRef = useRef<string>(reportContent);
    const reportContentRef = useRef<string>(reportContent);
    reportContentRef.current = reportContent;
+   const isUserTypingRef = useRef(false);
    const historyTimerRef = useRef<NodeJS.Timeout | null>(null);
    const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
    const [isSaving, setIsSaving] = useState(false);
@@ -370,11 +371,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [renderKey, setRenderKey] = useState(0);
 
    // Synchronize reportContent to contentEditable div ONLY when content changes externally
-   // (e.g., from AI generation), not from user typing. This prevents cursor jumping.
+   // (e.g., from AI generation, version restore), NOT from user typing.
    useEffect(() => {
+      if (isUserTypingRef.current) {
+         // Content changed because user typed — do NOT touch innerHTML (would reset cursor)
+         isUserTypingRef.current = false;
+         return;
+      }
       if (editableDivRef.current && reportContent !== undefined) {
-         // Only update if the content actually differs AND we're not in the middle of user input
-         // The key check ensures we update when switching documents or regenerating
          const currentHTML = editableDivRef.current.innerHTML;
          if (currentHTML !== reportContent) {
             editableDivRef.current.innerHTML = reportContent;
@@ -406,11 +410,20 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       }
    }, [caseItem.id]);
 
-   // Save on tab switch or unmount
+   // Save on tab switch, restore content when returning to WRITER tab
    const prevTabRef = useRef(activeTab);
    useEffect(() => {
       if (prevTabRef.current === 'WRITER' && activeTab !== 'WRITER') {
+         // Leaving WRITER tab — save content
          flushSave();
+      }
+      if (prevTabRef.current !== 'WRITER' && activeTab === 'WRITER') {
+         // Returning to WRITER tab — restore content into the freshly mounted div
+         requestAnimationFrame(() => {
+            if (editableDivRef.current && reportContentRef.current) {
+               editableDivRef.current.innerHTML = reportContentRef.current;
+            }
+         });
       }
       prevTabRef.current = activeTab;
       return () => { flushSave(); };
@@ -450,7 +463,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          }
 
          const yearStr = date.getFullYear().toString();
-         const monthStr = date.toLocaleString('default', { month: 'long' });
+        const monthStr = date.toLocaleString('en-US', { month: 'long' });
 
          let yearGroup = base.years.find(y => y.year === yearStr);
          if (!yearGroup) {
@@ -800,7 +813,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          const date = new Date(newDate);
          if (newDate && !isNaN(date.getTime())) {
             const yearStr = date.getFullYear().toString();
-            const monthStr = date.toLocaleString('default', { month: 'long' });
+            const monthStr = date.toLocaleString('en-US', { month: 'long' });
             let yearGroup = newChron.years.find(y => y.year === yearStr);
             if (!yearGroup) {
                yearGroup = { year: yearStr, months: [] };
@@ -945,7 +958,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
             const date = new Date(mergedDate);
             if (!isNaN(date.getTime())) {
                const yearStr = date.getFullYear().toString();
-               const monthStr = date.toLocaleString('default', { month: 'long' });
+               const monthStr = date.toLocaleString('en-US', { month: 'long' });
                let yearGroup = newChron.years.find(y => y.year === yearStr);
                if (!yearGroup) { yearGroup = { year: yearStr, months: [] }; newChron.years.push(yearGroup); newChron.years.sort((a, b) => parseInt(a.year) - parseInt(b.year)); }
                let monthGroup = yearGroup.months.find(m => m.month === monthStr);
@@ -1077,7 +1090,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                const date = new Date(ann.eventDate);
                if (!isNaN(date.getTime())) {
                   const yearStr = date.getFullYear().toString();
-                  const monthStr = date.toLocaleString('default', { month: 'long' });
+                  const monthStr = date.toLocaleString('en-US', { month: 'long' });
                   let yearGroup = base.years.find(y => y.year === yearStr);
                   if (!yearGroup) {
                      yearGroup = { year: yearStr, months: [] };
@@ -1828,7 +1841,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    };
 
    const handleRestoreVersion = async (version: any) => {
-      if (window.confirm(`Restore this version from ${new Date(version.date).toLocaleString()}?`)) {
+      if (window.confirm(`Restore this version from ${new Date(version.date).toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }) }?`)) {
          try {
             setIsSaving(true);
             // Only save current content if it's different from the version being restored
@@ -3295,19 +3308,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            <div className="w-full max-w-[8.5in] min-h-[11in] bg-white shadow-lg border border-slate-200 flex flex-col transition-all relative group">
                               <div
                                  key={writerContentKey}
-                                 ref={(el) => {
-                                    editableDivRef.current = el;
-                                    // Restore content when the div mounts (e.g. after tab switch)
-                                    if (el && reportContentRef.current) {
-                                       el.innerHTML = reportContentRef.current;
-                                    }
-                                 }}
+                                 ref={editableDivRef}
                                  contentEditable
                                  suppressContentEditableWarning
                                  className="w-full min-h-[11in] outline-none px-[1in] py-[1in] bg-transparent font-serif text-[12pt] leading-[2] text-slate-900 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:my-0"
                                  style={{ fontFamily: "'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif" }}
                                  onInput={() => {
                                     if (editableDivRef.current) {
+                                       isUserTypingRef.current = true;
                                        const html = editableDivRef.current.innerHTML;
                                        setReportContent(html);
                                        pushToUndoStack(html);
@@ -3750,7 +3758,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                              {version.status.toUpperCase()}
                                           </span>
                                           <span className="text-xs text-slate-500 font-medium">
-                                             {new Date(version.date).toLocaleString()}
+                                             {new Date(version.date).toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })}
                                           </span>
                                        </div>
                                        <p className="text-sm font-bold text-slate-700">{version.label}</p>
@@ -3759,12 +3767,25 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                           {version.content.substring(0, 100)}...
                                        </p>
                                     </div>
-                                    <button
-                                       onClick={() => handleRestoreVersion(version)}
-                                       className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 opacity-0 group-hover:opacity-100 transition-all"
-                                    >
-                                       Restore
-                                    </button>
+                                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                       <button
+                                          onClick={() => handleRestoreVersion(version)}
+                                          className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 transition-colors"
+                                       >
+                                          Restore
+                                       </button>
+                                       <button
+                                          onClick={() => {
+                                             if (!confirm('Delete this version? This cannot be undone.')) return;
+                                             const updated = (caseItem.draftVersions || []).filter(v => v.id !== version.id);
+                                             onUpdateCase({ ...caseItemRef.current, draftVersions: updated });
+                                          }}
+                                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                          title="Delete version"
+                                       >
+                                          <Trash2Icon className="w-3.5 h-3.5" />
+                                       </button>
+                                    </div>
                                  </div>
                               </div>
                            ))}

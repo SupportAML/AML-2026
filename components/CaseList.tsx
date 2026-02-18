@@ -32,15 +32,19 @@ const STATUS_COLORS: Record<CaseStatus, string> = {
     archived: 'bg-slate-100 text-slate-700'
 };
 
-/** Format ISO or date string to YYYY-MM-DD for display */
+/** Format ISO or date string to MM/DD/YYYY for display (US) */
 const formatDate = (val: string | undefined): string => {
     if (!val) return '—';
     try {
         const d = new Date(val);
         if (isNaN(d.getTime())) return '—';
-        return d.toISOString().slice(0, 10);
+        return d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
     } catch {
-        return val.slice(0, 10) || '—';
+        try {
+            return new Date(val).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+        } catch {
+            return '—';
+        }
     }
 };
 

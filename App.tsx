@@ -624,7 +624,7 @@ const App: React.FC = () => {
       page, text, author: author || currentUser?.name || 'Expert User', category, x, y, width, height, imageUrl,
       eventDate: eventDate?.trim() ? eventDate.trim() : undefined,
       eventTime: eventTime?.trim() ? eventTime.trim() : undefined,
-      timestamp: new Date().toLocaleString(),
+      timestamp: new Date().toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
       type
     };
     upsertAnnotation(newAnn);

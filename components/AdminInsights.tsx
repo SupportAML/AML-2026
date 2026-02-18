@@ -234,7 +234,7 @@ export const AdminInsights: React.FC<AdminInsightsProps> = ({
                         >
                             <div className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</div>
                             <div className={`text-xs mt-1 ${message.role === 'user' ? 'text-indigo-200' : 'text-slate-400'}`}>
-                                {message.timestamp.toLocaleTimeString()}
+                                {message.timestamp.toLocaleTimeString('en-US', { hour: 'numeric', minute: 'numeric', hour12: true })}
                             </div>
                         </div>
                         {message.role === 'user' && (

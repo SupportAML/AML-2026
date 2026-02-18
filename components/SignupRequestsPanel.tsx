@@ -192,7 +192,7 @@ export const SignupRequestsPanel: React.FC<SignupRequestsPanelProps> = ({ curren
                                         <div className="ml-13 space-y-1">
                                             <p className="text-xs text-slate-400">
                                                 <span className="font-semibold">Requested:</span>{' '}
-                                                {new Date(request.requestedAt).toLocaleString()}
+                                                {new Date(request.requestedAt).toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })}
                                             </p>
                                             {request.ipAddress && (
                                                 <p className="text-xs text-slate-400">
@@ -310,7 +310,7 @@ export const SignupRequestsPanel: React.FC<SignupRequestsPanelProps> = ({ curren
                                         {request.status}
                                     </p>
                                     <p className="text-xs text-slate-400">
-                                        {request.reviewedAt && new Date(request.reviewedAt).toLocaleDateString()}
+                                        {request.reviewedAt && new Date(request.reviewedAt).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
                                     </p>
                                 </div>
                             </div>

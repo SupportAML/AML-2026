@@ -826,7 +826,7 @@ export const processAnnotationInput = async (rawText: string) => {
         console.warn('Debug logging failed:', dbgError);
     }
 
-    const systemPrompt = `You are a Senior Medical-Legal Consultant specializing in clinical documentation.
+    const systemPrompt = `You are a concise medical-legal note assistant. Keep refined text brief — fix grammar/spelling only, never expand or over-formalize.
 DATE & TIME EXTRACTION RULES:
 - Extract dates from ANY format: "21st jan 2026", "21/01/26", "21 jan 2026", "21-01-2026", "January 21st", "21st of January"
 - If year is missing but month/day present, assume current year (2026)
@@ -848,7 +848,7 @@ You MUST respond with valid JSON matching this structure:
 }`;
 
     const userPrompt = `
-TASK: Refine the clinical observation into an authoritative medical-legal statement and extract any mentioned dates/times.
+TASK: Lightly clean up the note and extract any dates/times.
 
 RAW INPUT:
 ---
@@ -856,20 +856,21 @@ ${rawText}
 ---
 
 INSTRUCTIONS:
-1. REFINED TEXT: Rewrite the raw input into a professional, clinically precise medical-legal observation.
-   - Example: "patient has bad fever" -> "The patient presents with high-grade pyrexia."
-   - Maintain all clinical facts (dates, values, symptoms).
+1. REFINED TEXT: Clean up grammar and spelling only. Keep it SHORT and close to the original wording.
+   - Do NOT expand, elaborate, or make it more formal than the original.
+   - Do NOT add medical jargon or synonyms the user didn't use.
+   - Example: "patient started work at 7 am on dec 1, 2021" -> "Patient started work at 7:00 AM on December 1, 2021."
+   - Example: "bad fever noted" -> "Bad fever noted."
+   - Keep the same length or shorter than the original.
 2. DATE EXTRACTION: Extract dates from ANY natural language format.
    - "21st of January" -> "2026-01-21" (assume current year 2026 if not stated)
    - "23rd jan 2026" -> "2026-01-23"
-   - "21/01/26" -> "2026-01-21"
-   - "January 21, 2025" -> "2025-01-21"
+   - "dec 1, 2021" -> "2021-12-01"
    - If NO date mentioned in text, return null (do NOT invent dates)
 3. TIME EXTRACTION: Extract times from ANY format.
+   - "7 am" -> "07:00"
    - "23:00 hours" -> "23:00"
-   - "approximately 17:00" -> "17:00"
    - "2pm" -> "14:00"
-   - "11 PM" -> "23:00"
    - If NO time mentioned in text, return null
 `;
 
