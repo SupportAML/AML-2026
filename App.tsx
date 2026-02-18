@@ -673,9 +673,17 @@ const App: React.FC = () => {
   const handleAssignUser = (caseId: string, userId: string) => {
     const c = cases.find(x => x.id === caseId);
     if (!c) return;
+
+    // Look up the user's email for double-coverage (handles UID vs email ID mismatch)
+    const user = authorizedUsers.find(u => u.id === userId);
+    const userEmail = user?.email?.toLowerCase();
+
     const updated = {
       ...c,
-      assignedUserIds: [...(c.assignedUserIds || []), userId]
+      assignedUserIds: [...new Set([...(c.assignedUserIds || []), userId])],
+      ...(userEmail ? {
+        assignedUserEmails: [...new Set([...(c.assignedUserEmails || []), userEmail])]
+      } : {})
     };
     upsertCase(updated);
   };
@@ -683,9 +691,16 @@ const App: React.FC = () => {
   const handleRemoveUser = (caseId: string, userId: string) => {
     const c = cases.find(x => x.id === caseId);
     if (!c) return;
+
+    const user = authorizedUsers.find(u => u.id === userId);
+    const userEmail = user?.email?.toLowerCase();
+
     const updated = {
       ...c,
-      assignedUserIds: (c.assignedUserIds || []).filter(id => id !== userId)
+      assignedUserIds: (c.assignedUserIds || []).filter(id => id !== userId),
+      ...(userEmail ? {
+        assignedUserEmails: (c.assignedUserEmails || []).filter(e => e !== userEmail)
+      } : {})
     };
     upsertCase(updated);
   };
