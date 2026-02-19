@@ -108,6 +108,11 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
     const uniqueAttorneys = [...new Set(cases.map(c => c.primaryLawyer).filter(Boolean))] as string[];
     const uniquePhysicians = authorizedUsers.filter(u => u.status === 'active');
 
+    // Ensure the logged-in user is always present in the User filter list (handles async load race)
+    const usersForFilter = uniquePhysicians.some(u => u.id === currentUser.id)
+        ? uniquePhysicians
+        : [{ id: currentUser.id, name: currentUser.name, email: currentUser.email, role: currentUser.role, status: 'active' as const, addedAt: '' }, ...uniquePhysicians];
+
     useEffect(() => {
         localStorage.setItem('apex_dashboard_tab', activeTab);
     }, [activeTab]);
@@ -251,7 +256,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
                                             >
                                                 <option value="">All Users</option>
-                                                {uniquePhysicians.map(u => (
+                                                {usersForFilter.map(u => (
                                                     <option key={u.id} value={u.id}>
                                                         {u.name}{u.id === currentUser.id ? ' (You)' : ''} — {u.email}
                                                     </option>
@@ -316,11 +321,12 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                 {/* Table - header + body in same scroll context for alignment */}
                 <div className="flex-1 min-h-0 min-w-0 overflow-auto">
                     {/* Table Header */}
-                    <div className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_0.9fr_1fr_1fr] gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 sticky top-0 z-10 min-w-[880px]">
+                    <div className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_1.1fr_0.9fr_1fr_1fr] gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 sticky top-0 z-10 min-w-[1050px]">
                         <div>Case Details</div>
                         <div>Client</div>
                         <div>Start Date</div>
                         <div>Assigned Attorney</div>
+                        <div>Physician</div>
                         <div>Status</div>
                         <div>Last Activity</div>
                         <div className="text-right">Actions</div>
@@ -338,7 +344,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                 <div
                                     key={c.id}
                                     onClick={() => onSelect(c)}
-                                    className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_0.9fr_1fr_1fr] gap-4 px-6 py-4 transition-colors cursor-pointer group items-center hover:bg-slate-50 min-w-[880px]"
+                                    className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_1.1fr_0.9fr_1fr_1fr] gap-4 px-6 py-4 transition-colors cursor-pointer group items-center hover:bg-slate-50 min-w-[1050px]"
                                 >
                                     <div className="min-w-0">
                                         <h3 className="font-bold text-slate-800 text-sm mb-1 group-hover:text-cyan-600 transition-colors truncate">{c.title}</h3>
@@ -367,6 +373,18 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                             </div>
                                         ) : (
                                             <span className="text-xs text-slate-400 italic">Unassigned</span>
+                                        )}
+                                    </div>
+                                    <div className="min-w-0">
+                                        {c.ownerName ? (
+                                            <div className="flex items-center gap-2">
+                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 text-white ${authorizedUsers.find(u => u.id === c.ownerId)?.avatarColor || 'bg-slate-400'}`}>
+                                                    {c.ownerName.charAt(0).toUpperCase()}
+                                                </div>
+                                                <span className="text-sm text-slate-700 truncate">{c.ownerName}</span>
+                                            </div>
+                                        ) : (
+                                            <span className="text-xs text-slate-400 italic">Unknown</span>
                                         )}
                                     </div>
                                     <div>
