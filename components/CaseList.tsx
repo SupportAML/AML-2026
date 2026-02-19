@@ -84,15 +84,24 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
     const [filterPhysician, setFilterPhysician] = useState('');
     const [filterDateFrom, setFilterDateFrom] = useState('');
     const [filterDateTo, setFilterDateTo] = useState('');
+    // Default to logged-in user for admins so they see their own cases first
+    const [filterUser, setFilterUser] = useState<string>(() =>
+        currentUser.role === 'ADMIN' ? currentUser.id : ''
+    );
     const filterRef = useRef<HTMLDivElement>(null);
 
-    const hasActiveFilters = !!(filterAttorney || filterPhysician || filterDateFrom || filterDateTo);
+    // For admins, filterUser being set to someone other than the default (currentUser.id) counts as active
+    const hasActiveFilters = !!(
+        filterAttorney || filterPhysician || filterDateFrom || filterDateTo ||
+        (currentUser.role === 'ADMIN' && filterUser !== currentUser.id)
+    );
 
     const clearFilters = () => {
         setFilterAttorney('');
         setFilterPhysician('');
         setFilterDateFrom('');
         setFilterDateTo('');
+        if (currentUser.role === 'ADMIN') setFilterUser(currentUser.id);
     };
 
     // Collect unique attorneys and assigned physicians from cases
@@ -144,11 +153,19 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
           c.ownerId === filterPhysician ||
           (c.assignedUserIds || []).includes(filterPhysician) ||
           (c.assignedUserEmails || []).includes(filterPhysician);
+        // Filter by user (owner or assigned) - used by admins to scope the dashboard
+        const selectedUserEmail = filterUser
+            ? (authorizedUsers.find(u => u.id === filterUser)?.email ?? '')
+            : '';
+        const matchesUser = !filterUser ||
+            c.ownerId === filterUser ||
+            (c.assignedUserIds || []).includes(filterUser) ||
+            (selectedUserEmail && (c.assignedUserEmails || []).includes(selectedUserEmail));
         // Filter by date range (using startDate or createdAt)
         const caseDate = c.startDate || c.createdAt || '';
         const matchesDateFrom = !filterDateFrom || caseDate >= filterDateFrom;
         const matchesDateTo = !filterDateTo || caseDate <= filterDateTo;
-        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesDateFrom && matchesDateTo;
+        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesUser && matchesDateFrom && matchesDateTo;
     });
 
     const handleDelete = (e: React.MouseEvent, c: Case) => {
@@ -225,6 +242,23 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                             <button onClick={clearFilters} className="text-[10px] font-bold text-red-500 hover:text-red-700">Clear All</button>
                                         )}
                                     </div>
+                                    {currentUser.role === 'ADMIN' && (
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">User</label>
+                                            <select
+                                                value={filterUser}
+                                                onChange={e => setFilterUser(e.target.value)}
+                                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+                                            >
+                                                <option value="">All Users</option>
+                                                {uniquePhysicians.map(u => (
+                                                    <option key={u.id} value={u.id}>
+                                                        {u.name}{u.id === currentUser.id ? ' (You)' : ''} — {u.email}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
                                     <div>
                                         <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Attorney</label>
                                         <select
