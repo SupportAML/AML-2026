@@ -855,7 +855,7 @@ const App: React.FC = () => {
               )}
               {viewMode === ViewMode.PROFILE && currentUser && (
                 <div className="p-8 max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl mt-12 shadow-sm">
-                  <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile</h2>
+                  <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile and CV</h2>
                   {isEditingProfile ? (
                     <ProfileEditForm
                       initialName={currentUser.name}
