@@ -67,3 +67,42 @@ export const deleteFile = async (storagePath: string) => {
   const fileRef = ref(storage, storagePath);
   await deleteObject(fileRef);
 };
+
+/**
+ * Upload a CV PDF for a user profile.
+ * Stored at profiles/{userId}/cv/{filename}
+ */
+export const uploadCV = async (
+  userId: string,
+  file: File,
+  onProgress?: (data: UploadProgressData) => void
+): Promise<UploadResult> => {
+  const fileRef = ref(storage, `profiles/${userId}/cv/${file.name}`);
+
+  const uploadTask = uploadBytesResumable(fileRef, file, {
+    contentType: 'application/pdf',
+    customMetadata: { uploadedAt: new Date().toISOString() },
+  });
+
+  return new Promise((resolve, reject) => {
+    uploadTask.on(
+      'state_changed',
+      (snapshot) => {
+        if (onProgress && snapshot.totalBytes > 0) {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          onProgress({ progress, bytesTransferred: snapshot.bytesTransferred, totalBytes: snapshot.totalBytes, state: snapshot.state });
+        }
+      },
+      (error) => reject(error),
+      async () => {
+        const url = await getDownloadURL(uploadTask.snapshot.ref);
+        resolve({
+          url,
+          storagePath: uploadTask.snapshot.ref.fullPath,
+          name: file.name,
+          size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+        });
+      }
+    );
+  });
+};
