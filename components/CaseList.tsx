@@ -16,6 +16,8 @@ interface CaseListProps {
 
 type CaseStatus = 'planning' | 'active' | 'on_hold' | 'cancelled' | 'archived';
 
+const ALL_USERS_OPTION = '__all__';
+
 const STATUS_LABELS: Record<CaseStatus, string> = {
     planning: 'Planning',
     active: 'Active',
@@ -80,6 +82,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
 
     const [searchTerm, setSearchTerm] = useState('');
     const [showFilters, setShowFilters] = useState(false);
+    const [userFilter, setUserFilter] = useState<string>(() => currentUser?.id ?? ALL_USERS_OPTION);
     const [filterAttorney, setFilterAttorney] = useState('');
     const [filterPhysician, setFilterPhysician] = useState('');
     const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -97,11 +100,22 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
 
     // Collect unique attorneys and assigned physicians from cases
     const uniqueAttorneys = [...new Set(cases.map(c => c.primaryLawyer).filter(Boolean))] as string[];
-    const uniquePhysicians = authorizedUsers.filter(u => u.status === 'active');
+    const activePhysicians = authorizedUsers.filter(u => u.status === 'active');
+    const userFilterOptions = [
+        { value: currentUser.id, label: `My Cases (${currentUser.name})` },
+        { value: ALL_USERS_OPTION, label: 'All Cases' },
+        ...activePhysicians
+            .filter(u => u.id !== currentUser.id)
+            .map(u => ({ value: u.id, label: `${u.name} (${u.email})` }))
+    ];
 
     useEffect(() => {
         localStorage.setItem('apex_dashboard_tab', activeTab);
     }, [activeTab]);
+
+    useEffect(() => {
+        setUserFilter(currentUser?.id ?? ALL_USERS_OPTION);
+    }, [currentUser?.id]);
 
     // Ensure Roboto font is available for this page
     useEffect(() => {
@@ -132,6 +146,13 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
         return acc;
     }, {} as Record<CaseStatus, number>);
 
+    const selectedUserId = userFilter === ALL_USERS_OPTION ? null : userFilter;
+    const selectedUserEmail = selectedUserId
+        ? (selectedUserId === currentUser.id
+            ? currentUser.email?.toLowerCase() ?? null
+            : (authorizedUsers.find(u => u.id === selectedUserId)?.email?.toLowerCase() ?? null))
+        : null;
+
     const filteredCases = normalizedCases.filter(c => {
         const matchesTab = c.status === activeTab;
         const matchesSearch = c.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -144,11 +165,15 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
           c.ownerId === filterPhysician ||
           (c.assignedUserIds || []).includes(filterPhysician) ||
           (c.assignedUserEmails || []).includes(filterPhysician);
+        const matchesUserFilter = !selectedUserId ||
+            c.ownerId === selectedUserId ||
+            (c.assignedUserIds || []).includes(selectedUserId) ||
+            (selectedUserEmail ? (c.assignedUserEmails || []).some(email => email.toLowerCase() === selectedUserEmail) : false);
         // Filter by date range (using startDate or createdAt)
         const caseDate = c.startDate || c.createdAt || '';
         const matchesDateFrom = !filterDateFrom || caseDate >= filterDateFrom;
         const matchesDateTo = !filterDateTo || caseDate <= filterDateTo;
-        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesDateFrom && matchesDateTo;
+        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesDateFrom && matchesDateTo && matchesUserFilter;
     });
 
     const handleDelete = (e: React.MouseEvent, c: Case) => {
@@ -195,7 +220,20 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                         ))}
                     </div>
 
-                    <div className="flex items-center gap-2 ml-4">
+                    <div className="flex items-center gap-2 ml-4 flex-wrap">
+                        <div className="relative w-52">
+                            <select
+                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold uppercase tracking-wider text-slate-600 focus:outline-none focus:border-cyan-500"
+                                value={userFilter}
+                                onChange={(e) => setUserFilter(e.target.value)}
+                            >
+                                {userFilterOptions.map(option => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                         <div className="relative w-56">
                             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                             <input
@@ -244,7 +282,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
                                         >
                                             <option value="">All Physicians</option>
-                                            {uniquePhysicians.map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+                                            {activePhysicians.map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
                                         </select>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
