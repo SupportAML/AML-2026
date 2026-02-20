@@ -84,15 +84,18 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
     const [filterPhysician, setFilterPhysician] = useState('');
     const [filterDateFrom, setFilterDateFrom] = useState('');
     const [filterDateTo, setFilterDateTo] = useState('');
+    const [showMyCasesOnly, setShowMyCasesOnly] = useState(false);
     const filterRef = useRef<HTMLDivElement>(null);
 
-    const hasActiveFilters = !!(filterAttorney || filterPhysician || filterDateFrom || filterDateTo);
+    const isAdmin = currentUser.role === 'ADMIN';
+    const hasActiveFilters = !!(filterAttorney || filterPhysician || filterDateFrom || filterDateTo || (isAdmin && showMyCasesOnly));
 
     const clearFilters = () => {
         setFilterAttorney('');
         setFilterPhysician('');
         setFilterDateFrom('');
         setFilterDateTo('');
+        setShowMyCasesOnly(false);
     };
 
     // Collect unique attorneys and assigned physicians from cases
@@ -148,7 +151,12 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
         const caseDate = c.startDate || c.createdAt || '';
         const matchesDateFrom = !filterDateFrom || caseDate >= filterDateFrom;
         const matchesDateTo = !filterDateTo || caseDate <= filterDateTo;
-        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesDateFrom && matchesDateTo;
+        // Admin "My Cases Only" toggle
+        const matchesMyCases = !isAdmin || !showMyCasesOnly ||
+          c.ownerId === currentUser.id ||
+          (c.assignedUserIds || []).includes(currentUser.id) ||
+          (c.assignedUserEmails || []).includes(currentUser.email?.toLowerCase() ?? '');
+        return matchesTab && matchesSearch && matchesAttorney && matchesPhysician && matchesDateFrom && matchesDateTo && matchesMyCases;
     });
 
     const handleDelete = (e: React.MouseEvent, c: Case) => {
@@ -205,6 +213,18 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                 onChange={(e) => setSearchTerm(e.target.value)}
                             />
                         </div>
+                        {isAdmin && (
+                            <button
+                                onClick={() => setShowMyCasesOnly(prev => !prev)}
+                                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all border whitespace-nowrap ${showMyCasesOnly
+                                    ? 'bg-cyan-50 text-cyan-700 border-cyan-200'
+                                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                                }`}
+                                title="Toggle between your cases and all cases"
+                            >
+                                {showMyCasesOnly ? 'My Cases' : 'All Cases'}
+                            </button>
+                        )}
                         <div className="relative" ref={filterRef}>
                             <button
                                 onClick={() => setShowFilters(!showFilters)}
