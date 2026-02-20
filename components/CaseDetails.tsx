@@ -485,6 +485,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const assignedUsers = (caseItem.assignedUserIds || []).map(id => allUsers.find(u => u.id === id)).filter(Boolean) as AuthorizedUser[];
   const assignableUsers = allUsers.filter(u => u.id !== caseItem.ownerId && !(caseItem.assignedUserIds || []).includes(u.id));
   const potentialOwners = allUsers.filter(u => u.id !== caseItem.ownerId);
+  // Resolve owner email for Team Access display
+  const ownerEmail = allUsers.find(u => u.id === caseItem.ownerId)?.email ?? '';
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -795,7 +797,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               >
                 <option value="">Select member to assign...</option>
                 {assignableUsers.map(u => (
-                  <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                  <option key={u.id} value={u.id}>{u.name} — {u.email}</option>
                 ))}
                 {assignableUsers.length === 0 && <option disabled>No other members available</option>}
               </select>
@@ -818,6 +820,9 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 </div>
                 <div>
                   <p className="text-sm font-bold text-slate-800">{caseItem.ownerName}</p>
+                  {ownerEmail && (
+                    <p className="text-[10px] text-slate-500 font-mono">{ownerEmail}</p>
+                  )}
                   <p className="text-[10px] text-slate-400 font-medium">Case Owner</p>
                 </div>
               </div>
@@ -866,7 +871,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                   >
                     <option value="">Select new owner...</option>
                     {potentialOwners.map(u => (
-                      <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                      <option key={u.id} value={u.id}>{u.name} — {u.email}</option>
                     ))}
                   </select>
                   <button
@@ -888,6 +893,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                   </div>
                   <div>
                     <p className="text-sm font-bold text-slate-700">{u.name}</p>
+                    <p className="text-[10px] text-slate-500 font-mono">{u.email}</p>
                     <p className="text-[10px] text-slate-400">{u.role === 'ADMIN' ? 'Team Administrator' : 'Expert Physician'}</p>
                   </div>
                 </div>

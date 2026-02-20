@@ -159,14 +159,23 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
         status: (['planning', 'active', 'on_hold', 'cancelled', 'archived'].includes(c.status) ? c.status : 'active') as CaseStatus
     }));
 
-    // Calculate Counts — counts are based on admin ownership filter too
-    const countsSource = isAdmin && adminViewMode === 'mine'
-        ? normalizedCases.filter(c => {
-            const emailLower = currentUser.email?.toLowerCase();
-            return c.ownerId === currentUser.id ||
-                (c.assignedUserIds || []).includes(currentUser.id) ||
-                (emailLower && (c.assignedUserEmails || []).includes(emailLower));
-        })
+    /**
+     * Returns true if the current user owns or is directly shared on this case.
+     * Used for the admin "My Cases" default filter — prevents other physicians' cases
+     * from appearing unless the admin explicitly switches to "All Cases" mode.
+     */
+    const isOwnedByOrSharedWithMe = (c: Case): boolean => {
+        const emailLower = currentUser.email?.toLowerCase() ?? '';
+        return (
+            c.ownerId === currentUser.id ||
+            !!(c.assignedUserIds || []).includes(currentUser.id) ||
+            !!(emailLower && (c.assignedUserEmails || []).includes(emailLower))
+        );
+    };
+
+    // Tab counts respect the current view mode so badge numbers stay consistent with rows shown
+    const countsSource = (isAdmin && adminViewMode === 'mine')
+        ? normalizedCases.filter(isOwnedByOrSharedWithMe)
         : normalizedCases;
 
     const counts = countsSource.reduce((acc, c) => {
@@ -181,14 +190,9 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
             (c.primaryLawyer || '').toLowerCase().includes(searchTerm.toLowerCase());
 
         // Admin ownership visibility constraint (default: show only owned/shared cases)
-        let matchesOwnershipConstraint = true;
-        if (isAdmin && adminViewMode === 'mine') {
-            const emailLower = currentUser.email?.toLowerCase();
-            matchesOwnershipConstraint =
-                c.ownerId === currentUser.id ||
-                (c.assignedUserIds || []).includes(currentUser.id) ||
-                (emailLower && (c.assignedUserEmails || []).includes(emailLower));
-        }
+        // Admins receive ALL cases from Firestore; this frontend gate enforces the "My Cases" default view.
+        const matchesOwnershipConstraint =
+            !isAdmin || adminViewMode !== 'mine' || isOwnedByOrSharedWithMe(c);
 
         // Filter by case owner (reporting attribute — works in both 'mine' and 'all' view)
         const matchesOwner = !filterOwner || c.ownerId === filterOwner;
