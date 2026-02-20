@@ -602,8 +602,11 @@ const App: React.FC = () => {
     try {
       // Save extended profile data (qualifications, bio) to profiles collection
       await upsertProfile(uid, { name: trimmedName, qualifications: trimmedQuals, bio: trimmedBio });
-      // Also update the canonical name in authorizedUsers so it's consistent app-wide
-      await upsertUser({ id: uid, name: trimmedName });
+      // Update the canonical name in authorizedUsers using the actual document ID
+      // (may be keyed by email rather than UID for older accounts)
+      const authUserDoc = authorizedUsers.find(u => u.id === uid || u.email === currentUser.email);
+      const authDocId = authUserDoc?.id ?? uid;
+      await upsertUser({ id: authDocId, name: trimmedName });
       setCurrentUser(prev => prev ? { ...prev, name: trimmedName, qualifications: trimmedQuals, bio: trimmedBio } : null);
       setIsEditingProfile(false);
 
