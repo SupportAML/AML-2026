@@ -218,7 +218,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           {/* ACTIVE CASES */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Legal Cases</span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Active Cases</span>
               <button
                 onClick={onCreateCase}
                 className="text-slate-400 hover:text-cyan-600 transition-colors"
@@ -264,7 +264,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 mb-2 w-full"
             >
               {showInactive ? <ChevronDownIcon className="w-3 h-3" /> : <ChevronRightIcon className="w-3 h-3" />}
-              Archived
+              Other
             </button>
 
             {showInactive && (
