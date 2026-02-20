@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusIcon, ClockIcon, UsersIcon, FileIcon, SearchIcon, FilterIcon, CalendarIcon, Trash2Icon, PencilIcon, XIcon, SlidersHorizontalIcon } from 'lucide-react';
+import { PlusIcon, ClockIcon, FileIcon, SearchIcon, FilterIcon, CalendarIcon, Trash2Icon, PencilIcon, XIcon, SlidersHorizontalIcon } from 'lucide-react';
 import { Case, UserProfile, AuthorizedUser } from '../types';
 
 interface CaseListProps {
@@ -84,18 +84,18 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
     const [filterPhysician, setFilterPhysician] = useState('');
     const [filterDateFrom, setFilterDateFrom] = useState('');
     const [filterDateTo, setFilterDateTo] = useState('');
-    const [showMyCasesOnly, setShowMyCasesOnly] = useState(false);
+    const [showMyCasesOnly, setShowMyCasesOnly] = useState(currentUser.role === 'ADMIN');
     const filterRef = useRef<HTMLDivElement>(null);
 
     const isAdmin = currentUser.role === 'ADMIN';
-    const hasActiveFilters = !!(filterAttorney || filterPhysician || filterDateFrom || filterDateTo || (isAdmin && showMyCasesOnly));
+    const hasActiveFilters = !!(filterAttorney || filterPhysician || filterDateFrom || filterDateTo);
 
     const clearFilters = () => {
         setFilterAttorney('');
         setFilterPhysician('');
         setFilterDateFrom('');
         setFilterDateTo('');
-        setShowMyCasesOnly(false);
+        setShowMyCasesOnly(isAdmin);
     };
 
     // Collect unique attorneys and assigned physicians from cases
@@ -222,7 +222,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                 }`}
                                 title="Toggle between your cases and all cases"
                             >
-                                {showMyCasesOnly ? 'My Cases' : 'All Cases'}
+                                {showMyCasesOnly ? 'All Cases' : 'My Cases'}
                             </button>
                         )}
                         <div className="relative" ref={filterRef}>
@@ -302,11 +302,10 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                 {/* Table - header + body in same scroll context for alignment */}
                 <div className="flex-1 min-h-0 min-w-0 overflow-auto">
                     {/* Table Header */}
-                    <div className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_0.9fr_1fr_1fr] gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 sticky top-0 z-10 min-w-[880px]">
+                    <div className="grid grid-cols-[2fr_1.2fr_1fr_0.9fr_1fr_1fr] gap-4 px-6 py-3 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0 sticky top-0 z-10 min-w-[760px]">
                         <div>Case Details</div>
                         <div>Client</div>
                         <div>Start Date</div>
-                        <div>Assigned Attorney</div>
                         <div>Status</div>
                         <div>Last Activity</div>
                         <div className="text-right">Actions</div>
@@ -324,7 +323,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                 <div
                                     key={c.id}
                                     onClick={() => onSelect(c)}
-                                    className="grid grid-cols-[2fr_1.2fr_1fr_1.2fr_0.9fr_1fr_1fr] gap-4 px-6 py-4 transition-colors cursor-pointer group items-center hover:bg-slate-50 min-w-[880px]"
+                                    className="grid grid-cols-[2fr_1.2fr_1fr_0.9fr_1fr_1fr] gap-4 px-6 py-4 transition-colors cursor-pointer group items-center hover:bg-slate-50 min-w-[760px]"
                                 >
                                     <div className="min-w-0">
                                         <h3 className="font-bold text-slate-800 text-sm mb-1 group-hover:text-cyan-600 transition-colors truncate">{c.title}</h3>
@@ -344,16 +343,6 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
                                     </div>
                                     <div className="text-sm text-slate-600 font-mono whitespace-nowrap">
                                         {formatDate(c.startDate || c.createdAt)}
-                                    </div>
-                                    <div className="min-w-0">
-                                        {c.primaryLawyer ? (
-                                            <div className="flex items-center gap-2 text-sm text-slate-700">
-                                                <UsersIcon className="w-3 h-3 text-slate-400 shrink-0" />
-                                                <span className="truncate">{c.primaryLawyer}</span>
-                                            </div>
-                                        ) : (
-                                            <span className="text-xs text-slate-400 italic">Unassigned</span>
-                                        )}
                                     </div>
                                     <div>
                                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${STATUS_COLORS[c.status]}`}>
