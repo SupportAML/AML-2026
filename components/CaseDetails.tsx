@@ -492,11 +492,19 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         <div className="flex flex-col gap-6">
           <div className="flex items-start justify-between">
             <div className="relative group">
-              <div className="flex items-center gap-3 mb-2">
+              <div className="flex items-center gap-3 mb-2 flex-wrap">
                 <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">CASE ID: {caseItem.id}</span>
                 <span className={`text-xs font-bold uppercase px-2 py-1 rounded ${caseItem.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
                   caseItem.status === 'planning' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
                   }`}>{caseItem.status.replace('_', ' ')}</span>
+                {caseItem.ownerName && (
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded border border-slate-200">
+                    <span className="w-4 h-4 rounded-full bg-slate-800 text-white flex items-center justify-center text-[9px] font-black shrink-0">
+                      {caseItem.ownerName.charAt(0).toUpperCase()}
+                    </span>
+                    {caseItem.ownerName === currentUser.name ? `${caseItem.ownerName} (Owner)` : `Owner: ${caseItem.ownerName}`}
+                  </span>
+                )}
                 {canManageTeam && (
                   <button onClick={() => setIsEditingMetadata(true)} className="text-slate-400 hover:text-indigo-600 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <PencilIcon className="w-3.5 h-3.5" />
