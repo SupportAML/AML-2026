@@ -600,8 +600,10 @@ const App: React.FC = () => {
     const trimmedQuals = qualifications.trim() || undefined;
     const trimmedBio = bio.trim() || undefined;
     try {
-      // Save to Firestore first (main profile storage)
+      // Save extended profile data (qualifications, bio) to profiles collection
       await upsertProfile(uid, { name: trimmedName, qualifications: trimmedQuals, bio: trimmedBio });
+      // Also update the canonical name in authorizedUsers so it's consistent app-wide
+      await upsertUser({ id: uid, name: trimmedName });
       setCurrentUser(prev => prev ? { ...prev, name: trimmedName, qualifications: trimmedQuals, bio: trimmedBio } : null);
       setIsEditingProfile(false);
 

@@ -96,11 +96,16 @@ service cloud.firestore {
     }
 
     // Authorized users - MUST be readable by authenticated users for login check
-    // But only admins can modify
+    // But only admins can modify; users may update their own name only (role/status protected)
     match /authorizedUsers/{userId} {
       allow read: if request.auth != null;  // Allow all authenticated users to read (for login check)
       allow create: if request.auth != null && isAdmin();
-      allow update: if request.auth != null && isAdmin();
+      allow update: if request.auth != null && (
+        isAdmin() ||
+        (request.auth.uid == userId &&
+         request.resource.data.role == resource.data.role &&
+         request.resource.data.status == resource.data.status)
+      );
       allow delete: if request.auth != null && isAdmin();
     }
 
