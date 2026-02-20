@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut, signInAnonymously, updateProfile } from "firebase/auth";
 import { auth } from './firebase';
-import { Case, Document, Annotation, ViewMode, UserProfile, AuthorizedUser, ReviewStatus, UserRole } from './types';
+import { Case, Document, DocumentFileType, Annotation, ViewMode, UserProfile, AuthorizedUser, ReviewStatus, UserRole } from './types';
 import Sidebar from './components/Sidebar';
 const CaseList = React.lazy(() => import('./components/CaseList'));
 const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
@@ -383,11 +383,23 @@ const App: React.FC = () => {
     setEditingCase(undefined);
   };
 
+  // Detect document file type from extension / MIME
+  const detectFileType = (filename: string, mime?: string): DocumentFileType => {
+    const lower = filename.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'pdf';
+    if (lower.endsWith('.dcm') || lower.endsWith('.dicom') || lower.endsWith('.nii') || lower.endsWith('.nii.gz')) return 'dicom';
+    const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.svg'];
+    if (imageExts.some(ext => lower.endsWith(ext)) || mime?.startsWith('image/')) return 'image';
+    const videoExts = ['.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'];
+    if (videoExts.some(ext => lower.endsWith(ext)) || mime?.startsWith('video/')) return 'video';
+    return 'other';
+  };
+
   const handleFileUpload = async (caseId: string, file: File) => {
-    // Validate file size - allow up to 1GB
-    const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1GB in bytes
+    // Validate file size - allow up to 5GB for large imaging/video files
+    const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5GB in bytes
     if (file.size > MAX_FILE_SIZE) {
-      alert(`File size exceeds 1GB limit. File size: ${(file.size / (1024 * 1024 * 1024)).toFixed(2)}GB`);
+      alert(`File size exceeds 5GB limit. File size: ${(file.size / (1024 * 1024 * 1024)).toFixed(2)}GB`);
       return;
     }
 
@@ -415,7 +427,7 @@ const App: React.FC = () => {
       }
 
       // Smart path detection based on filename
-      const detectPath = (filename: string): string => {
+      const detectPath = (filename: string, fileType: DocumentFileType): string => {
         const lower = filename.toLowerCase();
 
         // Medical Records categories
@@ -425,7 +437,7 @@ const App: React.FC = () => {
         if (lower.includes('nursing') || lower.includes('nurse')) {
           return 'Medical Records/Nursing';
         }
-        if (lower.includes('radiology') || lower.includes('xray') || lower.includes('x-ray') || lower.includes('mri') || lower.includes('ct scan')) {
+        if (lower.includes('radiology') || lower.includes('xray') || lower.includes('x-ray') || lower.includes('mri') || lower.includes('ct scan') || lower.includes('ct_scan')) {
           return 'Medical Records/Radiology';
         }
         if (lower.includes('lab') || lower.includes('pathology') || lower.includes('blood')) {
@@ -449,23 +461,33 @@ const App: React.FC = () => {
           return 'Legal Documents/Correspondence';
         }
 
+        // Bodycam / Video Evidence
+        if (lower.includes('bodycam') || lower.includes('body_cam') || lower.includes('dashcam') || lower.includes('footage') || lower.includes('surveillance')) {
+          return 'Evidence/Video Footage';
+        }
+
+        // File-type based defaults
+        if (fileType === 'dicom') return 'Medical Records/Radiology';
+        if (fileType === 'video') return 'Evidence/Video Footage';
+        if (fileType === 'image') return 'Evidence/Images';
+
         // Default fallback
         return 'Medical Records/General';
       };
 
+      const fileType = detectFileType(fileData.name, file.type);
       const newDoc: Document = {
         id: Math.random().toString(36).substr(2, 9),
         caseId,
         name: fileData.name,
-        type: 'pdf',
+        type: fileType,
+        mimeType: file.type || undefined,
         url: fileData.url,
-        // storagePath returned by uploadFile (may be undefined in demo fallback)
         storagePath: (fileData as any).storagePath || undefined,
-        // store full ISO timestamp so UI can format user-friendly date/time
         uploadDate: new Date().toISOString(),
         size: fileData.size,
         reviewStatus: 'pending',
-        path: detectPath(fileData.name)
+        path: detectPath(fileData.name, fileType)
       };
       await upsertDocument(newDoc);
     } catch (e) {
@@ -480,11 +502,12 @@ const App: React.FC = () => {
   };
 
   const handleFolderUpload = async (caseId: string, fileList: FileList | File[]) => {
-    const MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1GB
+    const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5GB
     const files = Array.from(fileList);
-    const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    // Accept all file types - skip hidden/system files only
+    const validFiles = files.filter(f => !f.name.startsWith('.') && f.size > 0);
     const tooLarge: string[] = [];
-    const toUpload = pdfFiles.filter(f => {
+    const toUpload = validFiles.filter(f => {
       if (f.size > MAX_FILE_SIZE) {
         tooLarge.push(f.name);
         return false;
@@ -492,12 +515,10 @@ const App: React.FC = () => {
       return true;
     });
 
-    const skippedNonPdf = pdfFiles.length < files.length ? files.length - pdfFiles.length : 0;
     if (toUpload.length === 0) {
       const parts: string[] = [];
-      if (skippedNonPdf) parts.push(`${skippedNonPdf} non-PDF file(s) skipped`);
-      if (tooLarge.length) parts.push(`${tooLarge.length} file(s) exceed 1GB: ${tooLarge.slice(0, 3).join(', ')}${tooLarge.length > 3 ? '...' : ''}`);
-      alert(parts.length ? `No PDFs to upload. ${parts.join('. ')}` : 'No PDF files found in the selected folder.');
+      if (tooLarge.length) parts.push(`${tooLarge.length} file(s) exceed 5GB: ${tooLarge.slice(0, 3).join(', ')}${tooLarge.length > 3 ? '...' : ''}`);
+      alert(parts.length ? `No files to upload. ${parts.join('. ')}` : 'No valid files found in the selected folder.');
       return;
     }
 
@@ -536,11 +557,13 @@ const App: React.FC = () => {
           } else throw e;
         }
         const folderPath = getFolderPath(file);
+        const fileType = detectFileType(fileData.name, file.type);
         const newDoc: Document = {
           id: Math.random().toString(36).substr(2, 9),
           caseId,
           name: fileData.name,
-          type: 'pdf',
+          type: fileType,
+          mimeType: file.type || undefined,
           url: fileData.url,
           storagePath: (fileData as { storagePath?: string }).storagePath,
           uploadDate: new Date().toISOString(),
@@ -551,8 +574,7 @@ const App: React.FC = () => {
         await upsertDocument(newDoc);
       }
       const parts: string[] = [`Uploaded ${toUpload.length} file(s).`];
-      if (skippedNonPdf) parts.push(`${skippedNonPdf} non-PDF skipped`);
-      if (tooLarge.length) parts.push(`${tooLarge.length} exceeded 1GB`);
+      if (tooLarge.length) parts.push(`${tooLarge.length} exceeded 5GB`);
       if (parts.length > 1) console.info(parts.join(' '));
     } catch (e) {
       alert("Failed to upload folder. Ensure Firebase Storage is configured or use Demo mode.");
@@ -655,6 +677,12 @@ const App: React.FC = () => {
       avatarColor: ['bg-cyan-600', 'bg-emerald-600', 'bg-indigo-600', 'bg-rose-600', 'bg-amber-600'][Math.floor(Math.random() * 5)]
     };
     upsertUser(newUser);
+  };
+
+  const handleUpdateUserRole = (userId: string, newRole: UserRole) => {
+    const user = authorizedUsers.find(u => u.id === userId);
+    if (!user) return;
+    upsertUser({ ...user, role: newRole });
   };
 
   const handleDeleteUser = async (id: string, action?: 'keep' | 'reassign' | 'delete', reassignToId?: string) => {
@@ -902,6 +930,7 @@ const App: React.FC = () => {
                   authorizedUsers={authorizedUsers}
                   onInviteUser={handleInviteUser}
                   onDeleteUser={handleDeleteUser}
+                  onUpdateUserRole={handleUpdateUserRole}
                   currentUser={currentUser}
                 />
               )}

@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(firebase deploy:*)",
-      "Bash(npx tsc:*)",
-      "WebSearch"
-    ]
-  }
-}

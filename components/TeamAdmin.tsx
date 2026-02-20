@@ -6,6 +6,7 @@ import {
     Trash2Icon,
     MailIcon,
     ShieldCheckIcon,
+    ShieldIcon,
     SearchIcon,
     FilterIcon,
     ActivityIcon,
@@ -23,11 +24,12 @@ interface TeamAdminProps {
     authorizedUsers: AuthorizedUser[];
     onInviteUser: (email: string, role: UserRole, name: string) => void;
     onDeleteUser: (id: string, action?: 'keep' | 'reassign' | 'delete', reassignToId?: string) => void | Promise<void>;
+    onUpdateUserRole: (userId: string, newRole: UserRole) => void;
     currentUser: UserProfile;
 }
 
 export const TeamAdmin: React.FC<TeamAdminProps> = ({
-    authorizedUsers, onInviteUser, onDeleteUser, currentUser
+    authorizedUsers, onInviteUser, onDeleteUser, onUpdateUserRole, currentUser
 }) => {
     const [newUserName, setNewUserName] = useState('');
     const [newUserEmail, setNewUserEmail] = useState('');
@@ -196,12 +198,29 @@ export const TeamAdmin: React.FC<TeamAdminProps> = ({
                                     </div>
                                 </td>
                                 <td className="px-6 py-4">
-                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded border uppercase tracking-tighter ${user.role === 'ADMIN'
-                                        ? 'bg-purple-50 text-purple-600 border-purple-100'
-                                        : 'bg-slate-100 text-slate-500 border-slate-200'
-                                        }`}>
-                                        {user.role}
-                                    </span>
+                                    {user.id === currentUser.id ? (
+                                        <span className="text-[10px] font-black px-2 py-0.5 rounded border uppercase tracking-tighter bg-purple-50 text-purple-600 border-purple-100">
+                                            {user.role}
+                                        </span>
+                                    ) : (
+                                        <button
+                                            onClick={() => {
+                                                const newRole: UserRole = user.role === 'ADMIN' ? 'USER' : 'ADMIN';
+                                                const action = newRole === 'ADMIN' ? 'promote to Admin' : 'demote to User';
+                                                if (confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} "${user.name}"?`)) {
+                                                    onUpdateUserRole(user.id, newRole);
+                                                }
+                                            }}
+                                            className={`text-[10px] font-black px-2.5 py-1 rounded border uppercase tracking-tighter transition-all cursor-pointer group/role flex items-center gap-1.5 ${user.role === 'ADMIN'
+                                                ? 'bg-purple-50 text-purple-600 border-purple-100 hover:bg-purple-100 hover:border-purple-200'
+                                                : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200'
+                                                }`}
+                                            title={user.role === 'ADMIN' ? 'Click to demote to User' : 'Click to promote to Admin'}
+                                        >
+                                            {user.role === 'ADMIN' ? <ShieldCheckIcon className="w-3 h-3" /> : <ShieldIcon className="w-3 h-3" />}
+                                            {user.role}
+                                        </button>
+                                    )}
                                 </td>
                                 <td className="px-6 py-4">
                                     <div className="flex items-center gap-2">

@@ -216,11 +216,14 @@ export interface InvitationToken {
 
 export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';
 
+export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'other';
+
 export interface Document {
   id: string;
   caseId: string;
   name: string;
-  type: 'pdf';
+  type: DocumentFileType;
+  mimeType?: string;
   category?: 'legal' | 'research' | 'medical';
   url: string;
   uploadDate: string;

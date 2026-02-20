@@ -22,7 +22,13 @@ import {
   LayoutListIcon,
   SquareIcon,
   Trash2Icon,
-  HighlighterIcon
+  HighlighterIcon,
+  DownloadIcon,
+  VideoIcon,
+  ImageIcon,
+  FileIcon,
+  ScanIcon,
+  ExternalLinkIcon
 } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
 import { processAnnotationInput } from '../services/claudeService';
@@ -782,7 +788,15 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     return () => clearTimeout(timer);
   }, [focusedAnnotationId]);
 
+  const isPdf = doc.type === 'pdf' || (!doc.type && doc.name?.toLowerCase().endsWith('.pdf'));
+
   useEffect(() => {
+    // Skip PDF loading for non-PDF documents
+    if (!isPdf) {
+      setLoading(false);
+      return;
+    }
+
     const loadPdf = async () => {
       setLoading(true);
       setError(null);
@@ -795,8 +809,6 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       }
 
       try {
-        // Use doc.url directly - Firebase Storage download URLs include tokens and work cross-origin.
-        // No proxy: avoids 500s in dev and ensures identical behavior in dev + prod.
         const fetchUrl = doc.url;
         const cacheKey = `pdf_${String(doc.id).replace(/[\/\.]/g, '_')}`;
         let arrayBuffer: ArrayBuffer;
@@ -1064,7 +1076,11 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                             className={`w-full text-left px-4 py-3 hover:bg-indigo-50 transition-all flex items-center gap-3 border-b border-slate-50 last:border-0 ${isActive ? 'bg-indigo-50 border-l-4 border-l-indigo-600' : 'border-l-4 border-l-transparent'
                               }`}
                           >
-                            <FileTextIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                            {document.type === 'video' ? <VideoIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-purple-600' : 'text-purple-400'}`} /> :
+                             document.type === 'image' ? <ImageIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-600' : 'text-emerald-400'}`} /> :
+                             document.type === 'dicom' ? <ScanIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-600' : 'text-cyan-400'}`} /> :
+                             document.type === 'other' ? <FileIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-slate-600' : 'text-slate-400'}`} /> :
+                             <FileTextIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />}
                             <div className="flex-1 min-w-0">
                               <p className={`text-sm font-bold truncate ${isActive ? 'text-indigo-700' : 'text-slate-700'}`}>
                                 {document.name}
@@ -1121,92 +1137,112 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
               <SparklesIcon className="w-3.5 h-3.5" /> View Clinical Workspace
             </button>
           )}
-          <div className="flex bg-slate-100 p-1 rounded-lg">
-            <button onClick={() => setActiveTool('POINT')} className={`p-1.5 rounded ${activeTool === 'POINT' ? 'bg-white shadow' : 'text-slate-400'}`} title="Pointer Tool"><MousePointer2Icon className="w-4 h-4" /></button>
-            <button onClick={() => setActiveTool('TEXT')} className={`p-1.5 rounded ${activeTool === 'TEXT' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-200'}`} title="Highlight Text Tool - Select text in PDF to create annotations">
-              <HighlighterIcon className="w-4 h-4" />
-            </button>
-            <button onClick={() => setActiveTool('VOICE')} className={`p-1.5 rounded relative ${activeTool === 'VOICE' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-200'}`} title="Voice Annotation">
-              <MicIcon className="w-4 h-4" />
-              {activeTool === 'VOICE' && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-ping" />
-              )}
-            </button>
-          </div>
 
-          {activeTool === 'TEXT' && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-amber-50 text-amber-700 rounded-full border border-amber-200 animate-in fade-in slide-in-from-left-2 duration-300">
-              <HighlighterIcon className="w-3.5 h-3.5" />
-              <span className="text-[10px] font-black uppercase tracking-widest">Select text in PDF to create annotation</span>
-            </div>
+          {!isPdf && (
+            <a
+              href={doc.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg"
+            >
+              <DownloadIcon className="w-3.5 h-3.5" /> Download File
+            </a>
           )}
-          {activeTool === 'VOICE' && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-red-50 text-red-600 rounded-full border border-red-100 animate-in fade-in slide-in-from-left-2 duration-300">
-              <div className="w-1.5 h-1.5 bg-red-600 rounded-full animate-pulse" />
-              <span className="text-[10px] font-black uppercase tracking-widest">Mic Ready</span>
-            </div>
+
+          {isPdf && (
+            <>
+              <div className="flex bg-slate-100 p-1 rounded-lg">
+                <button onClick={() => setActiveTool('POINT')} className={`p-1.5 rounded ${activeTool === 'POINT' ? 'bg-white shadow' : 'text-slate-400'}`} title="Pointer Tool"><MousePointer2Icon className="w-4 h-4" /></button>
+                <button onClick={() => setActiveTool('TEXT')} className={`p-1.5 rounded ${activeTool === 'TEXT' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-200'}`} title="Highlight Text Tool - Select text in PDF to create annotations">
+                  <HighlighterIcon className="w-4 h-4" />
+                </button>
+                <button onClick={() => setActiveTool('VOICE')} className={`p-1.5 rounded relative ${activeTool === 'VOICE' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-200'}`} title="Voice Annotation">
+                  <MicIcon className="w-4 h-4" />
+                  {activeTool === 'VOICE' && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                  )}
+                </button>
+              </div>
+
+              {activeTool === 'TEXT' && (
+                <div className="flex items-center gap-2 px-3 py-1 bg-amber-50 text-amber-700 rounded-full border border-amber-200 animate-in fade-in slide-in-from-left-2 duration-300">
+                  <HighlighterIcon className="w-3.5 h-3.5" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Select text in PDF to create annotation</span>
+                </div>
+              )}
+              {activeTool === 'VOICE' && (
+                <div className="flex items-center gap-2 px-3 py-1 bg-red-50 text-red-600 rounded-full border border-red-100 animate-in fade-in slide-in-from-left-2 duration-300">
+                  <div className="w-1.5 h-1.5 bg-red-600 rounded-full animate-pulse" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Mic Ready</span>
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex bg-slate-100 p-1 rounded-lg">
-            <button
-              onClick={() => setIsContinuous(!isContinuous)}
-              className={`p-1.5 rounded transition-all ${isContinuous ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
-              title={isContinuous ? "Switch to Single Page" : "Switch to Continuous Scrolling"}
-            >
-              <LayoutListIcon className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setIsContinuous(!isContinuous)}
-              className={`p-1.5 rounded transition-all ${!isContinuous ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
-              title={isContinuous ? "Switch to Single Page" : "Switch to Continuous Scrolling"}
-            >
-              <SquareIcon className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border">
-            <button onClick={() => jumpToPage(currentPage - 1)} disabled={currentPage <= 1} className="p-1 disabled:opacity-30"><ChevronLeftIcon className="w-4 h-4" /></button>
-            {isEditingPage ? (
-              <input
-                autoFocus
-                className="w-12 text-xs font-bold px-1 py-0.5 bg-white border border-indigo-300 rounded text-center outline-none focus:ring-2 focus:ring-indigo-500/20"
-                value={tempPageInput}
-                onChange={(e) => setTempPageInput(e.target.value)}
-                onFocus={(e) => e.target.select()}
-                onBlur={() => {
-                  setIsEditingPage(false);
-                  if (tempPageInput) {
-                    const p = parseInt(tempPageInput);
-                    if (!isNaN(p)) jumpToPage(p);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    setIsEditingPage(false);
-                    if (tempPageInput) {
-                      const p = parseInt(tempPageInput);
-                      if (!isNaN(p)) jumpToPage(p);
-                    }
-                  }
-                  if (e.key === 'Escape') setIsEditingPage(false);
-                }}
-              />
-            ) : (
-              <span
-                className="text-xs font-bold px-2 cursor-pointer hover:bg-slate-200 rounded select-none transition-colors"
-                onDoubleClick={() => {
-                  setTempPageInput(currentPage.toString());
-                  setIsEditingPage(true);
-                }}
-                title="Double click to jump to page"
-              >
-                {currentPage} / {numPages}
-              </span>
-            )}
-            <button onClick={() => jumpToPage(currentPage + 1)} disabled={currentPage >= numPages} className="p-1 disabled:opacity-30"><ChevronRightIcon className="w-4 h-4" /></button>
-          </div>
-          <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className="p-1.5 text-slate-500 hover:text-indigo-600"><ZoomOutIcon className="w-4 h-4" /></button>
-          <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 text-slate-500 hover:text-indigo-600"><ZoomInIcon className="w-4 h-4" /></button>
+          {isPdf && (
+            <>
+              <div className="flex bg-slate-100 p-1 rounded-lg">
+                <button
+                  onClick={() => setIsContinuous(!isContinuous)}
+                  className={`p-1.5 rounded transition-all ${isContinuous ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+                  title={isContinuous ? "Switch to Single Page" : "Switch to Continuous Scrolling"}
+                >
+                  <LayoutListIcon className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setIsContinuous(!isContinuous)}
+                  className={`p-1.5 rounded transition-all ${!isContinuous ? 'bg-white shadow text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+                  title={isContinuous ? "Switch to Single Page" : "Switch to Continuous Scrolling"}
+                >
+                  <SquareIcon className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border">
+                <button onClick={() => jumpToPage(currentPage - 1)} disabled={currentPage <= 1} className="p-1 disabled:opacity-30"><ChevronLeftIcon className="w-4 h-4" /></button>
+                {isEditingPage ? (
+                  <input
+                    autoFocus
+                    className="w-12 text-xs font-bold px-1 py-0.5 bg-white border border-indigo-300 rounded text-center outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    value={tempPageInput}
+                    onChange={(e) => setTempPageInput(e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    onBlur={() => {
+                      setIsEditingPage(false);
+                      if (tempPageInput) {
+                        const p = parseInt(tempPageInput);
+                        if (!isNaN(p)) jumpToPage(p);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setIsEditingPage(false);
+                        if (tempPageInput) {
+                          const p = parseInt(tempPageInput);
+                          if (!isNaN(p)) jumpToPage(p);
+                        }
+                      }
+                      if (e.key === 'Escape') setIsEditingPage(false);
+                    }}
+                  />
+                ) : (
+                  <span
+                    className="text-xs font-bold px-2 cursor-pointer hover:bg-slate-200 rounded select-none transition-colors"
+                    onDoubleClick={() => {
+                      setTempPageInput(currentPage.toString());
+                      setIsEditingPage(true);
+                    }}
+                    title="Double click to jump to page"
+                  >
+                    {currentPage} / {numPages}
+                  </span>
+                )}
+                <button onClick={() => jumpToPage(currentPage + 1)} disabled={currentPage >= numPages} className="p-1 disabled:opacity-30"><ChevronRightIcon className="w-4 h-4" /></button>
+              </div>
+              <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className="p-1.5 text-slate-500 hover:text-indigo-600"><ZoomOutIcon className="w-4 h-4" /></button>
+              <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 text-slate-500 hover:text-indigo-600"><ZoomInIcon className="w-4 h-4" /></button>
+            </>
+          )}
           <button onClick={() => setShowSidebar(!showSidebar)} className={`p-2 rounded-lg transition-colors ${showSidebar ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:bg-slate-50'}`}><PanelRightIcon className="w-5 h-5" /></button>
         </div>
       </div>
@@ -1222,7 +1258,74 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           className="flex-1 overflow-auto p-8 bg-slate-200/50 cursor-default"
           style={{ scrollBehavior: 'auto', WebkitOverflowScrolling: 'touch', willChange: 'scroll-position' }}
         >
-          {loading ? (
+          {!isPdf ? (
+            /* Non-PDF file viewer */
+            <div className="flex flex-col items-center justify-center h-full">
+              {doc.type === 'video' ? (
+                <div className="w-full max-w-5xl">
+                  <video
+                    controls
+                    className="w-full rounded-2xl shadow-2xl bg-black"
+                    style={{ maxHeight: 'calc(100vh - 200px)' }}
+                    preload="metadata"
+                  >
+                    <source src={doc.url} type={doc.mimeType || 'video/mp4'} />
+                    Your browser does not support video playback.
+                  </video>
+                  <div className="mt-4 text-center">
+                    <p className="text-sm text-slate-500">{doc.name}</p>
+                    <p className="text-xs text-slate-400 mt-1">{doc.size}</p>
+                  </div>
+                </div>
+              ) : doc.type === 'image' ? (
+                <div className="w-full max-w-5xl flex flex-col items-center">
+                  <img
+                    src={doc.url}
+                    alt={doc.name}
+                    className="max-w-full rounded-2xl shadow-2xl"
+                    style={{ maxHeight: 'calc(100vh - 200px)', objectFit: 'contain' }}
+                  />
+                  <div className="mt-4 text-center">
+                    <p className="text-sm text-slate-500">{doc.name}</p>
+                    <p className="text-xs text-slate-400 mt-1">{doc.size}</p>
+                  </div>
+                </div>
+              ) : (
+                /* DICOM, or any other file type - show info card with download */
+                <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-12 max-w-lg text-center">
+                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 ${
+                    doc.type === 'dicom' ? 'bg-cyan-50 text-cyan-600' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {doc.type === 'dicom' ? <ScanIcon className="w-10 h-10" /> : <FileIcon className="w-10 h-10" />}
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-700 mb-2">{doc.name}</h3>
+                  <p className="text-sm text-slate-400 mb-1">{doc.size}</p>
+                  {doc.mimeType && <p className="text-xs text-slate-400 mb-6 font-mono">{doc.mimeType}</p>}
+                  {doc.type === 'dicom' && (
+                    <p className="text-sm text-cyan-700 bg-cyan-50 rounded-xl px-4 py-3 mb-6 border border-cyan-100">
+                      DICOM imaging files require a specialized viewer. Download the file and open it with your preferred DICOM viewer (e.g., Horos, RadiAnt, 3D Slicer).
+                    </p>
+                  )}
+                  <a
+                    href={doc.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg"
+                  >
+                    <DownloadIcon className="w-4 h-4" /> Download File
+                  </a>
+                  <a
+                    href={doc.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-6 py-3 ml-3 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm hover:bg-slate-200 transition-all border border-slate-200"
+                  >
+                    <ExternalLinkIcon className="w-4 h-4" /> Open in New Tab
+                  </a>
+                </div>
+              )}
+            </div>
+          ) : loading ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400">
               <Loader2Icon className="w-10 h-10 animate-spin mb-4 text-indigo-500" />
               <p className="font-serif italic text-slate-500">Opening document...</p>
@@ -1346,6 +1449,21 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 <MessageSquareIcon className="w-4 h-4 text-indigo-600 mr-2" /> Comments
               </div>
               <div className="flex items-center gap-2">
+                {!isPdf && !pendingAnnotation && !editingAnnotation && (
+                  <button
+                    onClick={() => {
+                      setPendingAnnotation({ page: 1, x: 0, y: 0, type: 'point' });
+                      setEditingAnnotation(null);
+                      setPendingText('');
+                      setPendingDate('');
+                      setPendingTime('');
+                      onClearFocus?.();
+                    }}
+                    className="text-[10px] text-white bg-indigo-600 hover:bg-indigo-700 px-2.5 py-1 rounded-lg border border-indigo-700 font-bold flex items-center gap-1 transition-colors"
+                  >
+                    + Add Note
+                  </button>
+                )}
                 {focusedAnnotationId && (
                   <button onClick={onClearFocus} className="text-[10px] text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 font-bold">Clear Focus</button>
                 )}
@@ -1438,7 +1556,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   </div>
                   <div className="flex items-center justify-between mb-2">
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded text-white ${getCategoryColor(ann.category)}`}>{ann.category}</span>
-                    <span className="text-[9px] text-slate-400">Page {ann.page}</span>
+                    {isPdf && <span className="text-[9px] text-slate-400">Page {ann.page}</span>}
                   </div>
                   <p className="text-xs text-slate-700 leading-relaxed mb-3">"{ann.text}"</p>
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">

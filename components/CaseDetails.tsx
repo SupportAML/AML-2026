@@ -22,7 +22,11 @@ import {
   LayoutTemplateIcon,
   ShieldIcon,
   FolderPlusIcon,
-  GripVerticalIcon
+  GripVerticalIcon,
+  VideoIcon,
+  ImageIcon,
+  FileIcon,
+  ScanIcon
 } from 'lucide-react';
 import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus } from '../types';
 import { sendInvitationEmail } from '../services/emailService';
@@ -109,8 +113,18 @@ const FileTreeItem: React.FC<{
         onClick={() => !isRenaming && onOpenDoc(node.doc!)}
       >
         <GripVerticalIcon className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing shrink-0" />
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center border shadow-sm shrink-0 ${node.doc.category === 'research' ? 'bg-indigo-50 border-indigo-100 text-indigo-500' : 'bg-white border-slate-100 text-red-500'}`}>
-          <FileTextIcon className="w-4 h-4" />
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center border shadow-sm shrink-0 ${
+          node.doc.type === 'video' ? 'bg-purple-50 border-purple-100 text-purple-500' :
+          node.doc.type === 'image' ? 'bg-emerald-50 border-emerald-100 text-emerald-500' :
+          node.doc.type === 'dicom' ? 'bg-cyan-50 border-cyan-100 text-cyan-600' :
+          node.doc.type === 'other' ? 'bg-slate-50 border-slate-200 text-slate-500' :
+          node.doc.category === 'research' ? 'bg-indigo-50 border-indigo-100 text-indigo-500' : 'bg-white border-slate-100 text-red-500'
+        }`}>
+          {node.doc.type === 'video' ? <VideoIcon className="w-4 h-4" /> :
+           node.doc.type === 'image' ? <ImageIcon className="w-4 h-4" /> :
+           node.doc.type === 'dicom' ? <ScanIcon className="w-4 h-4" /> :
+           node.doc.type === 'other' ? <FileIcon className="w-4 h-4" /> :
+           <FileTextIcon className="w-4 h-4" />}
         </div>
         <div className="min-w-0 flex-1">
           {isRenaming ? (
@@ -922,7 +936,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             <FolderPlusIcon className="w-4 h-4" />
             New Folder
           </button>
-          <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".pdf" />
+          <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
           <input
             type="file"
             ref={folderInputRef}
@@ -953,16 +967,15 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
           setIsExternalDragOver(false);
           // Check if this is an external file drop (from OS)
           if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            const files = Array.from(e.dataTransfer.files);
-            const pdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
-            if (pdfFiles.length === 0) {
-              alert('Only PDF files are supported. Please drop PDF files.');
+            const files = Array.from(e.dataTransfer.files).filter(f => !f.name.startsWith('.') && f.size > 0);
+            if (files.length === 0) {
+              alert('No valid files found. Please drop files to upload.');
               return;
             }
-            if (pdfFiles.length === 1) {
-              onUpload(caseItem.id, pdfFiles[0]);
+            if (files.length === 1) {
+              onUpload(caseItem.id, files[0]);
             } else {
-              onUploadFolder(caseItem.id, pdfFiles);
+              onUploadFolder(caseItem.id, files);
             }
             return;
           }
@@ -979,8 +992,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         {isExternalDragOver && (
           <div className="flex flex-col items-center justify-center py-12 mb-4 border-2 border-dashed border-cyan-400 rounded-xl bg-cyan-50/50 pointer-events-none">
             <UploadIcon className="w-10 h-10 text-cyan-500 mb-3" />
-            <p className="text-sm font-bold text-cyan-700">Drop PDF files here to upload</p>
-            <p className="text-xs text-cyan-500 mt-1">Supports single files and multiple files</p>
+            <p className="text-sm font-bold text-cyan-700">Drop files here to upload</p>
+            <p className="text-xs text-cyan-500 mt-1">PDFs, images, videos, DICOM imaging, and all file types</p>
           </div>
         )}
         {showNewFolderInput && (

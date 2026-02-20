@@ -13,7 +13,7 @@ service firebase.storage {
       );
     }
     
-    // All files require authorization (1GB+ supported via resumable upload)
+    // All files require authorization (up to 5GB supported via resumable upload)
     match /{allPaths=**} {
       allow read: if isAuthorized();
       allow write: if isAuthorized();
