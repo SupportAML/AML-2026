@@ -172,6 +172,7 @@ export interface UserProfile {
   qualifications?: string;
   bio?: string;
   cvFileName?: string;
+  cvUrl?: string;
 }
 
 export interface AuthorizedUser {

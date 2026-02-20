@@ -320,7 +320,7 @@ export const ensureAdminUser = async (currentUserEmail: string, uid: string) => 
 // --- User Profile (qualifications, bio) ---
 const demoProfiles: Record<string, { name?: string; qualifications?: string; bio?: string }> = {};
 
-export const getProfile = async (userId: string): Promise<{ name?: string; qualifications?: string; bio?: string }> => {
+export const getProfile = async (userId: string): Promise<{ name?: string; qualifications?: string; bio?: string; cvFileName?: string; cvUrl?: string }> => {
   if (isDemoMode) {
     return demoProfiles[userId] ?? {};
   }
@@ -334,7 +334,7 @@ export const getProfile = async (userId: string): Promise<{ name?: string; quali
 
 export const upsertProfile = async (
   userId: string,
-  data: { name?: string; qualifications?: string; bio?: string }
+  data: { name?: string; qualifications?: string; bio?: string; cvFileName?: string; cvUrl?: string }
 ): Promise<void> => {
   if (isDemoMode) {
     demoProfiles[userId] = { ...(demoProfiles[userId] ?? {}), ...data };

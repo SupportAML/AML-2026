@@ -19,7 +19,7 @@ const AdminInsights = React.lazy(() => import('./components/AdminInsights').then
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
-import { uploadFile } from './services/fileService';
+import { uploadFile, uploadCV } from './services/fileService';
 import {
   subscribeToCases,
   subscribeToAnnotations,
@@ -129,6 +129,8 @@ const App: React.FC = () => {
   const [uploadCurrentFileIndex, setUploadCurrentFileIndex] = useState<number | undefined>(undefined);
   const [isUploading, setIsUploading] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [isCvUploading, setIsCvUploading] = useState(false);
+  const [cvUploadProgress, setCvUploadProgress] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('sidebarCollapsed') === 'true';
   });
@@ -212,7 +214,7 @@ const App: React.FC = () => {
     if (!currentUser) return;
     getProfile(currentUser.id).then((p) => {
       setCurrentUser(prev =>
-        prev ? { ...prev, name: p.name || prev.name, qualifications: p.qualifications, bio: p.bio } : null
+        prev ? { ...prev, name: p.name || prev.name, qualifications: p.qualifications, bio: p.bio, cvFileName: p.cvFileName, cvUrl: p.cvUrl } : null
       );
     });
   }, [currentUser?.id]);
@@ -620,6 +622,34 @@ const App: React.FC = () => {
     }
   };
 
+  const handleCvUpload = async (file: File) => {
+    if (!currentUser) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      alert('Please upload a PDF file.');
+      return;
+    }
+    const uid = auth.currentUser?.uid ?? currentUser.id;
+    setIsCvUploading(true);
+    setCvUploadProgress(0);
+    try {
+      let cvUrl: string;
+      const cvFileName = file.name;
+      if (isDemoUser) {
+        cvUrl = URL.createObjectURL(file);
+      } else {
+        const result = await uploadCV(uid, file, (data) => setCvUploadProgress(data.progress));
+        cvUrl = result.url;
+      }
+      await upsertProfile(uid, { cvFileName, cvUrl });
+      setCurrentUser(prev => prev ? { ...prev, cvFileName, cvUrl } : null);
+    } catch (e: any) {
+      alert('Failed to upload CV: ' + (e?.message || String(e)));
+    } finally {
+      setIsCvUploading(false);
+      setCvUploadProgress(0);
+    }
+  };
+
   const handleAddAnnotation = (
     page: number,
     text: string,
@@ -883,7 +913,7 @@ const App: React.FC = () => {
               )}
               {viewMode === ViewMode.PROFILE && currentUser && (
                 <div className="p-8 max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl mt-12 shadow-sm">
-                  <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile</h2>
+                  <h2 className="text-3xl font-serif font-black text-slate-900 mb-6">Expert Profile and CV</h2>
                   {isEditingProfile ? (
                     <ProfileEditForm
                       initialName={currentUser.name}
@@ -920,6 +950,53 @@ const App: React.FC = () => {
                           </p>
                         </div>
                         <button onClick={() => setIsEditingProfile(true)} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-black transition-all">Edit Profile</button>
+
+                        {/* CV Upload Section */}
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Curriculum Vitae (PDF)</p>
+                          {currentUser.cvFileName && currentUser.cvUrl ? (
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="text-red-500 text-lg flex-shrink-0">📄</span>
+                                <span className="text-sm text-slate-700 font-medium truncate">{currentUser.cvFileName}</span>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <a
+                                  href={currentUser.cvUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 bg-cyan-600 text-white text-xs font-bold rounded-lg hover:bg-cyan-700 transition-all"
+                                >
+                                  View
+                                </a>
+                                <label className="px-3 py-1.5 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 transition-all cursor-pointer">
+                                  Replace
+                                  <input type="file" accept=".pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleCvUpload(f); e.target.value = ''; }} />
+                                </label>
+                              </div>
+                            </div>
+                          ) : (
+                            <label className={`flex items-center justify-center gap-2 w-full py-3 border-2 border-dashed rounded-xl cursor-pointer transition-all ${isCvUploading ? 'border-cyan-300 bg-cyan-50' : 'border-slate-300 hover:border-cyan-400 hover:bg-cyan-50'}`}>
+                              {isCvUploading ? (
+                                <div className="w-full px-2">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-cyan-600 font-medium">Uploading CV...</span>
+                                    <span className="text-xs text-cyan-600 font-bold">{Math.round(cvUploadProgress)}%</span>
+                                  </div>
+                                  <div className="w-full bg-slate-200 rounded-full h-1.5">
+                                    <div className="bg-cyan-500 h-1.5 rounded-full transition-all" style={{ width: `${cvUploadProgress}%` }} />
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <span className="text-slate-400 text-lg">📎</span>
+                                  <span className="text-sm text-slate-500 font-medium">Upload CV (PDF)</span>
+                                  <input type="file" accept=".pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleCvUpload(f); e.target.value = ''; }} />
+                                </>
+                              )}
+                            </label>
+                          )}
+                        </div>
                       </div>
                     </>
                   )}
