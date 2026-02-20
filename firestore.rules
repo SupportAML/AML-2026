@@ -102,7 +102,7 @@ service cloud.firestore {
       allow create: if request.auth != null && isAdmin();
       allow update: if request.auth != null && (
         isAdmin() ||
-        (request.auth.uid == userId &&
+        ((request.auth.uid == userId || request.auth.token.email.lower() == userId) &&
          request.resource.data.role == resource.data.role &&
          request.resource.data.status == resource.data.status)
       );
