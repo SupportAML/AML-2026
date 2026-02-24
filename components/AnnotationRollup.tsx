@@ -463,7 +463,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          }
 
          const yearStr = date.getFullYear().toString();
-        const monthStr = date.toLocaleString('en-US', { month: 'long' });
+         const monthStr = date.toLocaleString('en-US', { month: 'long' });
 
          let yearGroup = base.years.find(y => y.year === yearStr);
          if (!yearGroup) {
@@ -1841,7 +1841,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    };
 
    const handleRestoreVersion = async (version: any) => {
-      if (window.confirm(`Restore this version from ${new Date(version.date).toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }) }?`)) {
+      if (window.confirm(`Restore this version from ${new Date(version.date).toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })}?`)) {
          try {
             setIsSaving(true);
             // Only save current content if it's different from the version being restored
@@ -2406,7 +2406,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                          )}
                                                       </td>
                                                       <td className="px-4 py-3">
-                                                         <p className="text-xs text-slate-700 leading-relaxed line-clamp-2">{ev.text}</p>
+                                                         <p className="text-xs text-slate-700 leading-relaxed">{ev.text}</p>
                                                       </td>
                                                       <td className="px-4 py-3">
                                                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded text-white ${ev.category === 'Medical' ? 'bg-red-500' : ev.category === 'Legal' ? 'bg-blue-500' : ev.category === 'Urgent' ? 'bg-rose-500' : 'bg-amber-500'}`}>
@@ -2604,7 +2604,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                                                  className="text-xs font-semibold text-slate-400 hover:text-indigo-600 flex items-center gap-1"
                                                                                  title="Edit event"
                                                                               >
-                                                                                 <PencilIcon className="w-3 h-3" />
+                                                                                 <PencilIcon className="w-3.5 h-3.5" />
                                                                               </button>
                                                                               {src ? (
                                                                                  <button
@@ -2720,7 +2720,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            highlightAnnotationId={previewSource.annotationId}
                            onClose={() => setPreviewSource(null)}
                            onOpenFullView={() => {
-                              onNavigateToSource(previewSource.documentId, previewSource.page);
+                              if (previewSource.annotationId) {
+                                 onNavigateToAnnotation(previewSource.annotationId);
+                              } else {
+                                 onNavigateToSource(previewSource.documentId, previewSource.page);
+                              }
                               setPreviewSource(null);
                            }}
                         />
@@ -2821,7 +2825,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                       </button>
                                                    </div>
                                                 </div>
-                                                <p className="text-xs text-slate-700 leading-relaxed font-medium line-clamp-2">"{ann.text}"</p>
+                                                <p className="text-xs text-slate-700 leading-relaxed font-medium">"{ann.text}"</p>
                                                 <div className="mt-1.5 pt-1.5 border-t border-slate-50 flex items-center justify-between text-[9px] text-slate-400">
                                                    <span className="font-semibold text-indigo-600/70 truncate max-w-[140px]">
                                                       Page {ann.page}
@@ -2975,7 +2979,11 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            highlightAnnotationId={previewSource.annotationId}
                            onClose={() => setPreviewSource(null)}
                            onOpenFullView={() => {
-                              onNavigateToSource(previewSource.documentId, previewSource.page);
+                              if (previewSource.annotationId) {
+                                 onNavigateToAnnotation(previewSource.annotationId);
+                              } else {
+                                 onNavigateToSource(previewSource.documentId, previewSource.page);
+                              }
                               setPreviewSource(null);
                            }}
                         />
