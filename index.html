@@ -15,7 +15,7 @@
              font-src 'self' https://fonts.gstatic.com; 
              img-src 'self' data: blob: https://firebasestorage.googleapis.com;
              media-src 'self' blob: https://firebasestorage.googleapis.com;
-             connect-src 'self' blob: http://127.0.0.1:7242 https://esm.sh https://firebasestorage.googleapis.com https://api.brevo.com https://api.anthropic.com https://raw.githubusercontent.com https://generativelanguage.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com;
+             connect-src 'self' blob: http://127.0.0.1:7242 https://esm.sh https://firebasestorage.googleapis.com https://api.brevo.com https://api.openai.com https://raw.githubusercontent.com https://generativelanguage.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com;
              frame-src 'self' https://accounts.google.com;
              worker-src 'self' blob:;
              object-src 'none';">
@@ -153,16 +153,16 @@
     }
   </style>
   <link rel="stylesheet" href="/index.css">
-  
+
   <!-- Suppress common browser extension errors that don't affect functionality -->
   <script>
     // Suppress "Could not establish connection. Receiving end does not exist" error
     // This is a harmless browser extension error (React DevTools, etc.)
     const originalError = console.error;
-    console.error = function(...args) {
+    console.error = function (...args) {
       const errorMsg = args.join(' ');
-      if (errorMsg.includes('Could not establish connection') || 
-          errorMsg.includes('Receiving end does not exist')) {
+      if (errorMsg.includes('Could not establish connection') ||
+        errorMsg.includes('Receiving end does not exist')) {
         // Silently ignore browser extension connection errors
         return;
       }

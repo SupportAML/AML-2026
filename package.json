@@ -10,12 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.73.0",
     "@google/generative-ai": "^0.24.1",
     "diff": "5.1.0",
     "firebase": "^12.7.0",
     "lucide-react": "^0.562.0",
     "marked": "12.0.0",
+    "openai": "^4.104.0",
     "pdfjs-dist": "4.0.379",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"

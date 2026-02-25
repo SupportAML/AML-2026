@@ -18,7 +18,7 @@
 
 ### Step 2: Environment Variables
 Copy `.env.template` to `.env.local` and fill in your API keys.
-Required: `VITE_FIREBASE_*`, `VITE_BREVO_API_KEY`, `VITE_ANTHROPIC_API_KEY`
+Required: `VITE_FIREBASE_*`, `VITE_BREVO_API_KEY`, `VITE_OPENAI_API_KEY`
 
 ### Step 3: Start App
 ```bash

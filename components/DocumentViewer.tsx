@@ -31,7 +31,7 @@ import {
   ExternalLinkIcon
 } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
-import { processAnnotationInput } from '../services/claudeService';
+import { processAnnotationInput } from '../services/openaiService';
 import { pdfCacheManager } from '../services/pdfCacheManager';
 import { VoiceTranscriptionOverlay } from './VoiceTranscriptionOverlay';
 
@@ -803,7 +803,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       setCacheStatus('idle');
 
       if (pdfDocRef.current) {
-        try { pdfDocRef.current.destroy(); } catch {}
+        try { pdfDocRef.current.destroy(); } catch { }
         pdfDocRef.current = null;
         setPdfDoc(null);
       }
@@ -868,7 +868,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     loadPdf();
     return () => {
       if (pdfDocRef.current) {
-        try { pdfDocRef.current.destroy(); } catch {}
+        try { pdfDocRef.current.destroy(); } catch { }
         pdfDocRef.current = null;
       }
     };
@@ -1077,10 +1077,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                               }`}
                           >
                             {document.type === 'video' ? <VideoIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-purple-600' : 'text-purple-400'}`} /> :
-                             document.type === 'image' ? <ImageIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-600' : 'text-emerald-400'}`} /> :
-                             document.type === 'dicom' ? <ScanIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-600' : 'text-cyan-400'}`} /> :
-                             document.type === 'other' ? <FileIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-slate-600' : 'text-slate-400'}`} /> :
-                             <FileTextIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />}
+                              document.type === 'image' ? <ImageIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-600' : 'text-emerald-400'}`} /> :
+                                document.type === 'dicom' ? <ScanIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-600' : 'text-cyan-400'}`} /> :
+                                  document.type === 'other' ? <FileIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-slate-600' : 'text-slate-400'}`} /> :
+                                    <FileTextIcon className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />}
                             <div className="flex-1 min-w-0">
                               <p className={`text-sm font-bold truncate ${isActive ? 'text-indigo-700' : 'text-slate-700'}`}>
                                 {document.name}
@@ -1293,9 +1293,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
               ) : (
                 /* DICOM, or any other file type - show info card with download */
                 <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-12 max-w-lg text-center">
-                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 ${
-                    doc.type === 'dicom' ? 'bg-cyan-50 text-cyan-600' : 'bg-slate-100 text-slate-500'
-                  }`}>
+                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 ${doc.type === 'dicom' ? 'bg-cyan-50 text-cyan-600' : 'bg-slate-100 text-slate-500'
+                    }`}>
                     {doc.type === 'dicom' ? <ScanIcon className="w-10 h-10" /> : <FileIcon className="w-10 h-10" />}
                   </div>
                   <h3 className="text-xl font-bold text-slate-700 mb-2">{doc.name}</h3>
@@ -1542,74 +1541,74 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                   return getTime(a) - getTime(b);
                 })
                 .map(ann => (
-                <div
-                  key={ann.id}
-                  data-annotation-id={ann.id}
-                  onClick={() => handleFocusAnnotation(ann)}
-                  className={`group p-4 bg-white rounded-xl border transition-all cursor-pointer hover:shadow-md relative ${focusedAnnotationId === ann.id ? 'border-indigo-500 ring-2 ring-indigo-500/30 shadow-lg bg-indigo-50/30' : 'border-slate-200 shadow-sm hover:border-indigo-200'}`}
-                >
-                  <div className="text-center mb-2 pb-1.5 border-b border-slate-100">
-                    <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100 inline-flex items-center gap-1">
-                      <FileTextIcon className="w-2.5 h-2.5" />
-                      {doc.name}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded text-white ${getCategoryColor(ann.category)}`}>{ann.category}</span>
-                    {isPdf && <span className="text-[9px] text-slate-400">Page {ann.page}</span>}
-                  </div>
-                  <p className="text-xs text-slate-700 leading-relaxed mb-3">"{ann.text}"</p>
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white font-bold ${getAvatarColor(ann.author)}`}>{ann.author.charAt(0)}</div>
-                      <span>{ann.author}</span>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      {/* Action Buttons - Shown on Hover */}
-                      <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleStartEdit(ann); }}
-                          className="p-1.5 px-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md font-bold text-[10px] shadow-sm border border-indigo-100"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={async (e) => { 
-                            e.stopPropagation(); 
-                            if (confirm('Delete this annotation? This cannot be undone.')) {
-                              try {
-                                await onDeleteAnnotation(ann.id);
-                                console.log(`✅ Successfully deleted annotation ${ann.id}`);
-                              } catch (error) {
-                                console.error('❌ Failed to delete annotation:', error);
-                                alert('Failed to delete annotation. Please try again.');
-                              }
-                            }
-                          }}
-                          className="p-1.5 px-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-md font-bold flex items-center"
-                          title="Delete"
-                        >
-                          <Trash2Icon className="w-3 h-3" />
-                        </button>
+                  <div
+                    key={ann.id}
+                    data-annotation-id={ann.id}
+                    onClick={() => handleFocusAnnotation(ann)}
+                    className={`group p-4 bg-white rounded-xl border transition-all cursor-pointer hover:shadow-md relative ${focusedAnnotationId === ann.id ? 'border-indigo-500 ring-2 ring-indigo-500/30 shadow-lg bg-indigo-50/30' : 'border-slate-200 shadow-sm hover:border-indigo-200'}`}
+                  >
+                    <div className="text-center mb-2 pb-1.5 border-b border-slate-100">
+                      <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100 inline-flex items-center gap-1">
+                        <FileTextIcon className="w-2.5 h-2.5" />
+                        {doc.name}
                       </span>
-                      {/* Date and time - no icons */}
-                      {ann.eventDate && (
-                        <span className="text-[10px] text-slate-500 font-medium">
-                          {formatDisplayDate(ann.eventDate)}
+                    </div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded text-white ${getCategoryColor(ann.category)}`}>{ann.category}</span>
+                      {isPdf && <span className="text-[9px] text-slate-400">Page {ann.page}</span>}
+                    </div>
+                    <p className="text-xs text-slate-700 leading-relaxed mb-3">"{ann.text}"</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white font-bold ${getAvatarColor(ann.author)}`}>{ann.author.charAt(0)}</div>
+                        <span>{ann.author}</span>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {/* Action Buttons - Shown on Hover */}
+                        <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleStartEdit(ann); }}
+                            className="p-1.5 px-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md font-bold text-[10px] shadow-sm border border-indigo-100"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (confirm('Delete this annotation? This cannot be undone.')) {
+                                try {
+                                  await onDeleteAnnotation(ann.id);
+                                  console.log(`✅ Successfully deleted annotation ${ann.id}`);
+                                } catch (error) {
+                                  console.error('❌ Failed to delete annotation:', error);
+                                  alert('Failed to delete annotation. Please try again.');
+                                }
+                              }
+                            }}
+                            className="p-1.5 px-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-md font-bold flex items-center"
+                            title="Delete"
+                          >
+                            <Trash2Icon className="w-3 h-3" />
+                          </button>
                         </span>
-                      )}
-                      {ann.eventTime && (
-                        <span className="text-[10px] text-slate-500 font-medium">
-                          {ann.eventTime}
-                        </span>
-                      )}
-                      {!ann.eventDate && !ann.eventTime && (
-                        <span className="text-[10px] text-slate-300 italic">No date/time</span>
-                      )}
+                        {/* Date and time - no icons */}
+                        {ann.eventDate && (
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            {formatDisplayDate(ann.eventDate)}
+                          </span>
+                        )}
+                        {ann.eventTime && (
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            {ann.eventTime}
+                          </span>
+                        )}
+                        {!ann.eventDate && !ann.eventTime && (
+                          <span className="text-[10px] text-slate-300 italic">No date/time</span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
             </div>
           </div>
         )}

@@ -10,7 +10,7 @@ import {
     MessageSquareIcon
 } from 'lucide-react';
 import { Case, AuthorizedUser, Annotation, Document as DocType } from '../types';
-import { analyzeDataWithAI } from '../services/adminClaudeService';
+import { analyzeDataWithAI } from '../services/adminOpenAIService';
 import { subscribeToDocuments, subscribeToAnnotations } from '../services/storageService';
 
 interface AdminInsightsProps {

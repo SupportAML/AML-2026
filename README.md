@@ -15,12 +15,14 @@ A comprehensive medical-legal platform with AI-powered features for case managem
    npm install
    ```
 
-2. Set up your Claude API key:
-   - Get your API key from: https://console.anthropic.com/settings/keys
+2. Set up your OpenAI API key:
+   - Get your API key from: https://platform.openai.com/api-keys
    - Add it to [.env.local](.env.local):
      ```bash
-     CLAUDE_API_KEY=your-claude-api-key-here
-     VITE_CLAUDE_API_KEY=your-claude-api-key-here
+     OPENAI_API_KEY=your-openai-api-key-here
+     VITE_OPENAI_API_KEY=your-openai-api-key-here
+     OPENAI_MODEL=gpt-4o
+     VITE_OPENAI_MODEL=gpt-4o
      ```
 
 3. Run the app:
@@ -30,13 +32,10 @@ A comprehensive medical-legal platform with AI-powered features for case managem
 
 ## AI Features
 
-All AI features now use **Claude API** for consistent, reliable responses:
+All AI features now use **OpenAI API** for consistent, reliable responses:
 - Timeline organization and chronology cleanup
 - Clinical notes refinement
 - Medical-legal report generation
 - Research gap analysis
 - Deposition coaching
 - Admin intelligence
-
-See [CLAUDE_MIGRATION.md](CLAUDE_MIGRATION.md) for detailed migration information.
-

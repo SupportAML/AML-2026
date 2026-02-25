@@ -27,8 +27,8 @@ export default defineConfig(({ mode }) => {
       })
     ],
     define: {
-      'process.env.API_KEY': JSON.stringify(env.CLAUDE_API_KEY || env.VITE_CLAUDE_API_KEY || ''),
-      'process.env.CLAUDE_API_KEY': JSON.stringify(env.CLAUDE_API_KEY || env.VITE_CLAUDE_API_KEY || '')
+      'process.env.API_KEY': JSON.stringify(env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''),
+      'process.env.OPENAI_API_KEY': JSON.stringify(env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || '')
     },
     resolve: {
       alias: {

@@ -105,7 +105,7 @@ import {
    extractFactsFromNotes,
    rewordClinicalNotes,
    extractHandwrittenNotesFromImage
-} from '../services/claudeService';
+} from '../services/openaiService';
 
 interface AnnotationRollupProps {
    caseItem: Case;
