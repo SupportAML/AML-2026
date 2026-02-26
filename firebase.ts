@@ -46,8 +46,7 @@ try {
             tabManager: persistentMultipleTabManager()
         }),
         // Network-stability fallback (avoids QUIC/HTTP3 issues)
-        experimentalAutoDetectLongPolling: true,
-        experimentalForceLongPolling: true
+        experimentalAutoDetectLongPolling: true
     });
     console.log('✅ Firebase initialized with offline persistence');
 } catch (error: any) {
