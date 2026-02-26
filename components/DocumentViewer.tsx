@@ -881,6 +881,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     setPendingAnnotation({ page, x, y, type: 'highlight' });
     setEditingAnnotation(null);
     setPendingText(selectedText);
+    setPendingAuthor(currentUser.name);
     setPendingDate('');
     setPendingTime('');
     onClearFocus?.();
@@ -1358,6 +1359,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                           setPendingAnnotation({ page: p, x, y, type: t });
                           setEditingAnnotation(null);
                           setPendingText('');
+                          setPendingAuthor(currentUser.name);
                           setPendingDate('');
                           onClearFocus?.();
                         }}
@@ -1404,6 +1406,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                     setPendingAnnotation({ page: pg, x, y, type: t });
                     setEditingAnnotation(null);
                     setPendingText('');
+                    setPendingAuthor(currentUser.name);
                     setPendingDate('');
                     onClearFocus?.();
                   }}
@@ -1454,6 +1457,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                       setPendingAnnotation({ page: 1, x: 0, y: 0, type: 'point' });
                       setEditingAnnotation(null);
                       setPendingText('');
+                      setPendingAuthor(currentUser.name);
                       setPendingDate('');
                       setPendingTime('');
                       onClearFocus?.();

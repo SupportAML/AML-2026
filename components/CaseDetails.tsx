@@ -29,7 +29,6 @@ import {
   ScanIcon
 } from 'lucide-react';
 import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus } from '../types';
-import { sendInvitationEmail } from '../services/emailService';
 
 interface CaseDetailsProps {
   caseItem: Case;
@@ -197,9 +196,9 @@ const FileTreeItem: React.FC<{
         className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors select-none ${isDragOver ? 'bg-indigo-50 ring-2 ring-indigo-300' : 'hover:bg-slate-50 text-slate-600'}`}
         style={{ paddingLeft: `${level * 20}px` }}
         onClick={() => !isRenaming && setIsOpen(!isOpen)}
-        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setIsDragOver(true); }}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setIsDragOver(true); }}
         onDragLeave={() => setIsDragOver(false)}
-        onDrop={(e) => { e.preventDefault(); setIsDragOver(false); onDropOnFolder?.(e, node.path); }}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); onDropOnFolder?.(e, node.path); }}
       >
         {isOpen ? <ChevronDownIcon className="w-4 h-4 text-slate-400" /> : <ChevronRightIcon className="w-4 h-4 text-slate-400" />}
         <FolderTreeIcon className={`w-4 h-4 ${isDragOver ? 'text-indigo-600' : 'text-indigo-400'}`} />
@@ -295,9 +294,9 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
 
   const [showAddClient, setShowAddClient] = useState(false);
   const [newClient, setNewClient] = useState<Partial<Client>>({ role: 'Plaintiff' });
+  const [customRole, setCustomRole] = useState('');
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [editClientData, setEditClientData] = useState<Partial<Client>>({});
-  const [customRole, setCustomRole] = useState('');
 
   const [isAssigning, setIsAssigning] = useState(false);
   const [selectedAssignUserId, setSelectedAssignUserId] = useState('');
@@ -314,9 +313,13 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const externalDragCounter = useRef(0);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onUpload(caseItem.id, file);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      if (files.length === 1) {
+        onUpload(caseItem.id, files[0]);
+      } else {
+        onUploadFolder(caseItem.id, files);
+      }
     }
     e.target.value = '';
   };
@@ -341,14 +344,14 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     setIsEditingMetadata(false);
   };
 
-  const handleAddClient = async () => {
+  const handleAddClient = async (roleOverride?: string) => {
     if (!newClient.name || !newClient.email) return;
     const client: Client = {
       id: Date.now().toString(),
       name: newClient.name,
       email: newClient.email,
       phone: newClient.phone || '',
-      role: newClient.role as any || 'Plaintiff'
+      role: (roleOverride || newClient.role) as any || 'Plaintiff'
     };
 
     // Check if a platform user matches this client's email
@@ -373,19 +376,12 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         updatedCase.assignedUserEmails = [...currentEmails, emailLower];
       }
 
-      // Send invitation email
-      try {
-        const signupUrl = `${window.location.origin}?signup=true&email=${encodeURIComponent(client.email)}&name=${encodeURIComponent(client.name)}`;
-        await sendInvitationEmail(client.email, client.name, signupUrl, currentUser.name);
-        alert(`✅ ${client.name} added to case and invitation email sent!`);
-      } catch (err) {
-        console.error('Failed to send invitation email:', err);
-        alert(`⚠️ ${client.name} added to case, but invitation email failed. They can still sign up manually.`);
-      }
+      // Invitation email intentionally disabled for client roster additions
     }
 
     onUpdateCase(updatedCase);
     setNewClient({ role: 'Plaintiff' });
+    setCustomRole('');
     setShowAddClient(false);
   };
 
@@ -452,6 +448,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   };
 
   const handleDropOnFolder = (e: React.DragEvent, folderPath: string) => {
+    e.preventDefault();
+    e.stopPropagation();
     const docId = e.dataTransfer.getData('text/plain') || draggedDocId;
     if (!docId) return;
     const doc = docs.find(d => d.id === docId);
@@ -518,7 +516,11 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 )}
               </div>
               <h2 className="text-4xl font-serif font-black text-slate-900 mb-2">{caseItem.title}</h2>
-              <p className="text-slate-600 leading-relaxed max-w-2xl">{caseItem.description}</p>
+              <div className="max-w-2xl">
+                <div className="text-slate-600 leading-relaxed max-h-32 overflow-y-auto pr-2 whitespace-pre-wrap">
+                  {caseItem.description}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -665,29 +667,38 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 >
                   <option value="Plaintiff">Plaintiff</option>
                   <option value="Defendant">Defendant</option>
-                  {allUsers.filter(u => u.role === 'ADMIN' || u.role === 'USER').map(u => (
-                    <option key={u.id} value={u.name}>Lawyer - {u.name}</option>
-                  ))}
+                  <option value="Lawyer">Lawyer</option>
+                  <option value="Petitioner">Petitioner</option>
+                  <option value="Respondent">Respondent</option>
+                  <option value="Intervenor">Intervenor</option>
+                  <option value="Amicus">Amicus</option>
+                  <option value="Third-Party Defendant">Third-Party Defendant</option>
+                  <option value="Claimant">Claimant</option>
                   <option value="Other">Other (specify)</option>
                 </select>
-                <button onClick={() => {
-                  if (newClient.role === 'Other' && customRole) {
+                <button
+                  onClick={() => {
+                    if (newClient.role === 'Other') {
+                      if (!customRole.trim()) {
+                        alert('Please specify the role for "Other".');
+                        return;
+                      }
+                      handleAddClient(customRole.trim());
+                      return;
+                    }
                     handleAddClient();
-                    setNewClient({ ...newClient, role: customRole as any });
-                  } else {
-                    handleAddClient();
-                  }
-                }} className="bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 shadow-md shadow-indigo-100 transition-all">Add</button>
+                  }}
+                  className="bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 shadow-md shadow-indigo-100 transition-all"
+                >
+                  Add
+                </button>
               </div>
               {newClient.role === 'Other' && (
                 <input
                   className="w-full text-xs p-2 border border-indigo-300 rounded-lg focus:outline-none focus:border-indigo-500 bg-indigo-50"
                   placeholder="Specify role (e.g., Expert Witness, Consultant)"
                   value={customRole}
-                  onChange={e => {
-                    setCustomRole(e.target.value);
-                    setNewClient({ ...newClient, role: e.target.value as any });
-                  }}
+                  onChange={e => setCustomRole(e.target.value)}
                 />
               )}
             </div>
@@ -920,7 +931,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
           >
             <UploadIcon className="w-4 h-4" />
-            Upload File
+            Upload Files
           </button>
           <button
             onClick={() => folderInputRef.current?.click()}
@@ -936,7 +947,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             <FolderPlusIcon className="w-4 h-4" />
             New Folder
           </button>
-          <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
+          <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple />
           <input
             type="file"
             ref={folderInputRef}

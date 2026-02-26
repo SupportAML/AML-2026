@@ -811,7 +811,7 @@ const App: React.FC = () => {
                 {viewMode === ViewMode.DASHBOARD && "Case Dashboard"}
                 {viewMode === ViewMode.CASE_VIEW && activeCase?.title}
                 {viewMode === ViewMode.DOC_VIEWER && activeDoc?.name}
-                {viewMode === ViewMode.ANNOTATION_ROLLUP && "Clinical Workspace"}
+                {viewMode === ViewMode.ANNOTATION_ROLLUP && `Clinical Workspace${activeCase?.title ? ` — ${activeCase.title}` : ''}`}
                 {viewMode === ViewMode.CLIENTS && "Client Directory"}
                 {viewMode === ViewMode.ORIENTATION && "Orientation"}
                 {viewMode === ViewMode.PROFILE && "My Profile"}

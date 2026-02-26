@@ -44,7 +44,10 @@ try {
     db = initializeFirestore(app, {
         localCache: persistentLocalCache({
             tabManager: persistentMultipleTabManager()
-        })
+        }),
+        // Network-stability fallback (avoids QUIC/HTTP3 issues)
+        experimentalAutoDetectLongPolling: true,
+        experimentalForceLongPolling: true
     });
     console.log('✅ Firebase initialized with offline persistence');
 } catch (error: any) {

@@ -87,6 +87,7 @@ export interface Case {
   reportStatus?: 'idle' | 'generating' | 'review';
   reportComments?: ReportComment[];
   additionalContext?: string;
+  freehandNotes?: string;
   caseSummary?: string;
 
   // Strategy Persistence

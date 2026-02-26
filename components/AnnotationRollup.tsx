@@ -106,6 +106,7 @@ import {
    rewordClinicalNotes,
    extractHandwrittenNotesFromImage
 } from '../services/openaiService';
+import { extractPdfTextForAnnotations } from '../services/pdfTextService';
 
 interface AnnotationRollupProps {
    caseItem: Case;
@@ -193,6 +194,9 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [isGenerating, setIsGenerating] = useState(false);
    const [showHeaderMenu, setShowHeaderMenu] = useState(false);
    const [additionalContext, setAdditionalContext] = useState(caseItem.additionalContext || '');
+   const [freehandNotes, setFreehandNotes] = useState(caseItem.freehandNotes || '');
+   const [notesSplit, setNotesSplit] = useState(55);
+   const isResizingNotesRef = useRef(false);
    const moreButtonRef = useRef<HTMLButtonElement | null>(null);
    const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
 
@@ -406,6 +410,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          const newContent = caseItem.reportContent || '';
          setReportContent(newContent);
          lastContentRef.current = newContent;
+         setAdditionalContext(caseItem.additionalContext || '');
+         setFreehandNotes(caseItem.freehandNotes || '');
          prevCaseIdRef.current = caseItem.id;
       }
    }, [caseItem.id]);
@@ -646,6 +652,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          const hasChanges =
             currentReportContent !== (c.reportContent ?? '') ||
             additionalContext !== (c.additionalContext ?? '') ||
+            freehandNotes !== (c.freehandNotes ?? '') ||
             JSON.stringify(strategyData ?? null) !== JSON.stringify(c.strategyData ?? null) ||
             JSON.stringify(chronologyData ?? null) !== JSON.stringify(c.chronologyData ?? null) ||
             JSON.stringify(researchResults ?? null) !== JSON.stringify(c.researchResults ?? null) ||
@@ -661,6 +668,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                   strategyData: strategyData || undefined,
                   chronologyData: chronologyData || undefined,
                   additionalContext,
+                  freehandNotes,
                   researchResults,
                   researchGaps,
                   reportTemplate,
@@ -675,7 +683,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          }
       }, 1500);
       return () => clearTimeout(timer);
-   }, [reportContent, strategyData, chronologyData, additionalContext, researchResults, researchGaps, reportTemplate]);
+   }, [reportContent, strategyData, chronologyData, additionalContext, freehandNotes, researchResults, researchGaps, reportTemplate]);
 
    // --- Handlers: Source Navigation & Linking ---
    const handleJumpToSource = (annotationId: string) => {
@@ -1176,7 +1184,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       // We just need to append them to the existing content with proper spacing
       setAdditionalContext(prev => {
          if (!prev) return text;
-         // Add space or newline before the new text
          const separator = prev.endsWith('\n') || prev.endsWith(' ') ? '' : ' ';
          return prev + separator + text;
       });
@@ -1232,9 +1239,9 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
             alert('Could not extract text from this image. Please try a clearer photo.');
             return;
          }
-         const prefix = additionalContext.trim() ? '\n\n' : '';
+         const prefix = freehandNotes.trim() ? '\n\n' : '';
          const appended = `--- From handwritten notes ---\n${points}\n`;
-         setAdditionalContext(prev => prev + prefix + appended);
+         setFreehandNotes(prev => prev + prefix + appended);
          setTimeout(() => {
             if (factsNotesTextareaRef.current) {
                factsNotesTextareaRef.current.focus();
@@ -1425,31 +1432,95 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       setIsGenerating(true);
 
       const result = await suggestReportEdit(reportContent, userText);
-      const diff = Diff.diffWords(reportContent, result.newContent);
+      const suggestions = (result.suggestions || [])
+         .filter(s => s.originalExcerpt && s.revisedExcerpt)
+         .slice(0, 12)
+         .map((s, idx) => {
+            const diff = Diff.diffWords(s.originalExcerpt, s.revisedExcerpt);
+            const suggestion: EditorSuggestion = {
+               id: `${Date.now()}_${idx}`,
+               original: s.originalExcerpt,
+               proposed: s.revisedExcerpt,
+               explanation: s.explanation || 'Suggested edit',
+               diff
+            };
+            return suggestion;
+         });
 
-      const suggestion: EditorSuggestion = {
-         id: Date.now().toString(),
-         original: reportContent,
-         proposed: result.newContent,
-         explanation: result.explanation,
-         diff: diff
-      };
-
-      setEditorHistory(prev => [...prev, { role: 'model', text: result.explanation, suggestion }]);
+      if (suggestions.length === 0) {
+         setEditorHistory(prev => [...prev, { role: 'model', text: "No edits suggested for this request." }]);
+      } else {
+         const cards = suggestions.map((s, i) => ({
+            role: 'model' as const,
+            text: i === 0 ? `Suggested ${suggestions.length} targeted edits:` : s.explanation,
+            suggestion: s
+         }));
+         setEditorHistory(prev => [...prev, ...cards]);
+      }
       setIsGenerating(false);
    };
 
-   const handleApplySuggestion = (suggestion: EditorSuggestion) => {
+  const handleApplySuggestion = (suggestion: EditorSuggestion) => {
+      if (!suggestion.original.trim() || !suggestion.proposed.trim()) {
+         alert("No valid excerpt to apply.");
+         return;
+      }
+
+      const currentContent = reportContentRef.current || reportContent;
+      if (!currentContent.includes(suggestion.original)) {
+         alert("Could not locate the original excerpt in the document. Please try again.");
+         return;
+      }
+
       // Push current state to undo stack before applying suggestion
-      setUndoStack(prev => [...prev, reportContent].slice(-50));
+      setUndoStack(prev => [...prev, currentContent].slice(-50));
       setRedoStack([]);
-      setReportContent(suggestion.proposed);
-      lastContentRef.current = suggestion.proposed;
+      const updated = currentContent.replace(suggestion.original, suggestion.proposed);
+      setReportContent(updated);
+      lastContentRef.current = updated;
       setEditorHistory(prev => prev.map(item =>
          item.suggestion?.id === suggestion.id
             ? { ...item, text: "Change applied successfully.", suggestion: undefined }
             : item
       ));
+   };
+
+   const handleApplyAllSuggestions = () => {
+      const suggestions = editorHistory
+         .map(m => m.suggestion)
+         .filter((s): s is EditorSuggestion => !!s);
+
+      if (suggestions.length === 0) {
+         alert("No suggestions to apply.");
+         return;
+      }
+
+      let updated = reportContentRef.current || reportContent;
+      const appliedIds = new Set<string>();
+
+      for (const s of suggestions) {
+         if (updated.includes(s.original)) {
+            updated = updated.replace(s.original, s.proposed);
+            appliedIds.add(s.id);
+         }
+      }
+
+      if (appliedIds.size === 0) {
+         alert("No matching excerpts found in the document.");
+         return;
+      }
+
+      setUndoStack(prev => [...prev, updated].slice(-50));
+      setRedoStack([]);
+      setReportContent(updated);
+      lastContentRef.current = updated;
+
+      setEditorHistory(prev => prev.map(item => {
+         if (item.suggestion && appliedIds.has(item.suggestion.id)) {
+            return { ...item, text: "Change applied successfully.", suggestion: undefined };
+         }
+         return item;
+      }));
    };
 
    // --- Handlers: Writer (Comments) ---
@@ -2272,10 +2343,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     {mergeMode ? 'Cancel Merge' : 'Merge'}
                                  </button>
                               )}
-                              <button onClick={handleCleanupChronology} disabled={isGenerating} className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-xs hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all disabled:opacity-50">
-                                 {isGenerating ? <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> : <SparklesIcon className="w-3.5 h-3.5" />}
-                                 Organize
-                              </button>
+                              {/* Organize button removed */}
                            </div>
                         </div>
 
@@ -2396,17 +2464,32 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                    <tr
                                                       key={ev.id}
                                                       className={`border-b border-slate-100 hover:bg-indigo-50/30 transition-colors cursor-pointer group ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}
-                                                      onClick={() => { if (hasValidSource) handleJumpToSource(ev.id); }}
+                                                      onClick={() => { if (editingEventId !== ev.id && hasValidSource) handleJumpToSource(ev.id); }}
                                                    >
                                                       <td className="px-4 py-3">
-                                                         {ev.date ? (
+                                                         {editingEventId === ev.id ? (
+                                                            <input
+                                                               type="date"
+                                                               className="w-full text-xs border border-slate-200 bg-slate-50 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                                               defaultValue={ev.date || ''}
+                                                               onChange={(e) => { editDateRef.current = e.target.value; }}
+                                                            />
+                                                         ) : ev.date ? (
                                                             <span className="text-xs font-bold text-indigo-600">{formatDisplayDate(ev.date)}</span>
                                                          ) : (
                                                             <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded">UNDATED</span>
                                                          )}
                                                       </td>
                                                       <td className="px-4 py-3">
-                                                         <p className="text-xs text-slate-700 leading-relaxed">{ev.text}</p>
+                                                         {editingEventId === ev.id ? (
+                                                            <textarea
+                                                               className="w-full text-xs border border-slate-200 bg-slate-50 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-indigo-500 outline-none resize-none h-20"
+                                                               defaultValue={ev.text}
+                                                               onChange={(e) => { editTextRef.current = e.target.value; }}
+                                                            />
+                                                         ) : (
+                                                            <p className="text-xs text-slate-700 leading-relaxed">{ev.text}</p>
+                                                         )}
                                                       </td>
                                                       <td className="px-4 py-3">
                                                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded text-white ${ev.category === 'Medical' ? 'bg-red-500' : ev.category === 'Legal' ? 'bg-blue-500' : ev.category === 'Urgent' ? 'bg-rose-500' : 'bg-amber-500'}`}>
@@ -2430,15 +2513,43 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                          )}
                                                       </td>
                                                       <td className="px-4 py-3 text-center">
-                                                         {hasValidSource ? (
-                                                            <button
-                                                               onClick={(e) => { e.stopPropagation(); handleJumpToSource(ev.id); }}
-                                                               className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 opacity-0 group-hover:opacity-100 transition-all"
-                                                            >
-                                                               <EyeIcon className="w-3 h-3 inline mr-1" />Preview
-                                                            </button>
+                                                         {editingEventId === ev.id ? (
+                                                            <div className="flex items-center justify-center gap-2">
+                                                               <button
+                                                                  onClick={(e) => { e.stopPropagation(); setEditingEventId(null); }}
+                                                                  className="px-2 py-1 text-[10px] font-bold text-slate-500 hover:bg-slate-100 rounded-lg"
+                                                               >
+                                                                  Cancel
+                                                               </button>
+                                                               <button
+                                                                  onClick={(e) => {
+                                                                     e.stopPropagation();
+                                                                     handleSaveEventEdit(ev.id, editDateRef.current || ev.date, editTextRef.current || ev.text);
+                                                                  }}
+                                                                  className="px-2 py-1 text-[10px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+                                                               >
+                                                                  Save
+                                                               </button>
+                                                            </div>
                                                          ) : (
-                                                            <span className="text-[9px] text-slate-300">-</span>
+                                                            <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                                               <button
+                                                                  onClick={(e) => { e.stopPropagation(); editDateRef.current = ''; editTextRef.current = ''; setEditingEventId(editingEventId === ev.id ? null : ev.id); }}
+                                                                  className="text-[10px] font-bold text-slate-500 hover:text-indigo-700 bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-200"
+                                                               >
+                                                                  <PencilIcon className="w-3 h-3 inline mr-1" />Edit
+                                                               </button>
+                                                               {hasValidSource ? (
+                                                                  <button
+                                                                     onClick={(e) => { e.stopPropagation(); handleJumpToSource(ev.id); }}
+                                                                     className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1.5 rounded-lg border border-indigo-100"
+                                                                  >
+                                                                     <EyeIcon className="w-3 h-3 inline mr-1" />Preview
+                                                                  </button>
+                                                               ) : (
+                                                                  <span className="text-[9px] text-slate-300">-</span>
+                                                               )}
+                                                            </div>
                                                          )}
                                                       </td>
                                                    </tr>
@@ -2463,7 +2574,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                  <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-white/50">
                                     <CalendarIcon className="w-12 h-12 text-slate-200 mx-auto mb-3" />
                                     <p className="text-slate-400 font-bold mb-1">Timeline is empty.</p>
-                                    <p className="text-xs text-slate-400">Add dated annotations to documents or click "Organize".</p>
+                                 <p className="text-xs text-slate-400">Add dated annotations to documents.</p>
                                  </div>
                               ) : (
                                  <>
@@ -2910,8 +3021,20 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
                      {/* Notes Toolbar */}
                      <div className="bg-white rounded-t-2xl border border-slate-200 border-b-0 p-2 flex items-center gap-1">
-                        <button onClick={() => setAdditionalContext(prev => prev + (prev.endsWith('\n') ? '' : '\n') + '# Annotations\n')} className="p-2 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-indigo-600" title="Add Main Header"><FileTextIcon className="w-4 h-4" /></button>
-                        <button onClick={insertTimestamp} className="p-2 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-indigo-600" title="Insert Timestamp"><CalendarIcon className="w-4 h-4" /></button>
+                        <button
+                           onClick={() => setAdditionalContext(prev => prev + (prev.endsWith('\n') ? '' : '\n') + '# Annotations\n')}
+                           className="p-2 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-indigo-600"
+                           title="Add Main Header"
+                        >
+                           <FileTextIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                           onClick={insertTimestamp}
+                           className="p-2 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-indigo-600"
+                           title="Insert Timestamp (Dated Notes)"
+                        >
+                           <CalendarIcon className="w-4 h-4" />
+                        </button>
                         <button
                            onClick={() => handwrittenImageInputRef.current?.click()}
                            disabled={isGenerating}
@@ -2949,21 +3072,53 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         <div className="flex-1" />
                      </div>
 
-                     <div className="flex-1 bg-white rounded-b-2xl border border-slate-200 p-6 shadow-sm relative group overflow-hidden">
+                     <div
+                        className="flex-1 bg-white rounded-b-2xl border border-slate-200 shadow-sm relative overflow-hidden"
+                        onMouseMove={(e) => {
+                           if (!isResizingNotesRef.current) return;
+                           const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                           const x = e.clientX - rect.left;
+                           const next = Math.min(80, Math.max(20, Math.round((x / rect.width) * 100)));
+                           setNotesSplit(next);
+                        }}
+                        onMouseUp={() => { isResizingNotesRef.current = false; }}
+                        onMouseLeave={() => { isResizingNotesRef.current = false; }}
+                     >
                         <div className="absolute top-0 right-0 w-1.5 h-full bg-slate-100/50 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        <textarea
-                           ref={factsNotesTextareaRef}
-                           className="w-full h-full bg-transparent border-none outline-none resize-none text-slate-800 leading-loose text-base font-medium placeholder:text-slate-300 font-serif"
-                           placeholder={isVoiceActiveFactsNotes ? "🎤 Listening... Speak your clinical notes" : `# Annotations\n(1/24/2026, 1:30:00 PM)\n\n## Clinic Records\n* Patient observations go here...\n* Use (["Source", p. 1]) for references.`}
-                           value={additionalContext}
-                           onChange={e => setAdditionalContext(e.target.value)}
-                           onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !e.shiftKey && isVoiceActiveFactsNotes) {
-                                 e.preventDefault();
-                                 handleRewordNotes();
-                              }
-                           }}
-                        />
+                        <div className="h-full flex">
+                           <div className="h-full p-6" style={{ width: `${notesSplit}%` }}>
+                              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Dated Notes</div>
+                              <textarea
+                                 ref={factsNotesTextareaRef}
+                                 className="w-full h-[calc(100%-1.5rem)] bg-transparent border-none outline-none resize-none text-slate-800 leading-loose text-base font-medium placeholder:text-slate-300 font-serif"
+                                 placeholder={isVoiceActiveFactsNotes ? "🎤 Listening... Speak your clinical notes" : `# Annotations\n(1/24/2026, 1:30:00 PM)\n\n## Clinic Records\n* Patient observations go here...\n* Use (["Source", p. 1]) for references.`}
+                                 value={additionalContext}
+                                 onChange={e => setAdditionalContext(e.target.value)}
+                                 onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !e.shiftKey && isVoiceActiveFactsNotes) {
+                                       e.preventDefault();
+                                       handleRewordNotes();
+                                    }
+                                 }}
+                              />
+                           </div>
+                           <div
+                              className="w-2 bg-slate-100 hover:bg-indigo-200 cursor-col-resize flex items-center justify-center"
+                              onMouseDown={(e) => { e.preventDefault(); isResizingNotesRef.current = true; }}
+                              title="Drag to resize"
+                           >
+                              <div className="w-0.5 h-8 bg-slate-300 rounded" />
+                           </div>
+                           <div className="h-full p-6" style={{ width: `${100 - notesSplit}%` }}>
+                              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Freehand Notes</div>
+                              <textarea
+                                 className="w-full h-[calc(100%-1.5rem)] bg-transparent border-none outline-none resize-none text-slate-800 leading-loose text-base font-medium placeholder:text-slate-300 font-serif"
+                                 placeholder="Freehand notes (not auto-extracted). Use this space for rough notes or non-dated observations."
+                                 value={freehandNotes}
+                                 onChange={e => setFreehandNotes(e.target.value)}
+                              />
+                           </div>
+                        </div>
                      </div>
                   </div>
 
@@ -3207,7 +3362,10 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            </div>
 
                            <button
-                              onClick={() => setShowTemplateSelector(true)}
+                              onClick={() => {
+                                 if (reportContent && !confirm('Regenerating will overwrite the current draft. Continue?')) return;
+                                 setShowTemplateSelector(true);
+                              }}
                               disabled={isGenerating}
                               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50"
                            >
@@ -3319,7 +3477,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                  ref={editableDivRef}
                                  contentEditable
                                  suppressContentEditableWarning
-                                 className="w-full min-h-[11in] outline-none px-[1in] py-[1in] bg-transparent font-serif text-[12pt] leading-[2] text-slate-900 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:my-0"
+                                 className="w-full min-h-[11in] outline-none px-[1in] py-[1in] bg-transparent font-serif text-[12pt] leading-[2] text-slate-900 prose prose-slate max-w-none prose-headings:font-serif prose-headings:font-bold prose-p:my-0 prose-h1:text-4xl md:prose-h1:text-5xl prose-h1:tracking-tight prose-h2:text-2xl md:prose-h2:text-3xl prose-h3:text-xl md:prose-h3:text-2xl prose-h2:mt-8 prose-h3:mt-6"
                                  style={{ fontFamily: "'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif" }}
                                  onInput={() => {
                                     if (editableDivRef.current) {
@@ -3421,6 +3579,13 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                  <p className="text-xs text-emerald-800 font-bold">AI Editing Partner</p>
                                  <p className="text-[10px] text-emerald-600">I can rewrite, rephrase, or critique your draft.</p>
                               </div>
+                              <button
+                                 onClick={handleApplyAllSuggestions}
+                                 disabled={!editorHistory.some(m => m.suggestion)}
+                                 className="w-full bg-emerald-700 text-white py-2 rounded-lg text-xs font-bold hover:bg-emerald-800 disabled:opacity-50 shadow-sm"
+                              >
+                                 Apply All Changes
+                              </button>
 
                               {editorHistory.map((msg, idx) => (
                                  <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
@@ -3541,22 +3706,39 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        setSelectedTemplate(tpl.id);
                                        setShowTemplateSelector(false);
                                        // Trigger generation
-                                       setTimeout(async () => {
-                                          setIsGenerating(true);
-                                          try {
-                                             if (reportContent.trim()) {
-                                                setUndoStack(prev => [...prev, reportContent].slice(-50));
-                                                setRedoStack([]);
-                                             }
-                                             const generatedReport = await draftMedicalLegalReportStream(
-                                                { ...caseItem, reportTemplate: tpl.id },
-                                                docs,
-                                                annotations,
-                                                additionalContext,
-                                                currentUser.qualifications || '',
-                                                (chunk) => {
-                                                   // Parse markdown chunk to HTML for live preview
-                                                   // This ensures we always store HTML in state, matching the contentEditable behavior
+                                          setTimeout(async () => {
+                                            setIsGenerating(true);
+                                            try {
+                                               if (reportContent.trim()) {
+                                                  setUndoStack(prev => [...prev, reportContent].slice(-50));
+                                                  setRedoStack([]);
+                                               }
+                                               let pdfTextContext = '';
+                                               try {
+                                                  pdfTextContext = await extractPdfTextForAnnotations(docs, annotations, {
+                                                     perPageCharLimit: 1500,
+                                                     totalCharLimit: 12000
+                                                  });
+                                               } catch (err) {
+                                                  console.warn('PDF text extraction failed:', err);
+                                               }
+                                               const expertLabel = currentUser.name
+                                                  ? `${currentUser.name}${currentUser.qualifications ? `, ${currentUser.qualifications}` : ''}`
+                                                  : (currentUser.qualifications || '');
+                                               const commentsText = (caseItem.reportComments || [])
+                                                  .map(c => `- ${c.author}: ${c.text}${c.context ? ` (Context: ${c.context})` : ''}`)
+                                                  .join('\n');
+                                               const generatedReport = await draftMedicalLegalReportStream(
+                                                  { ...caseItem, reportTemplate: tpl.id },
+                                                  docs,
+                                                  annotations,
+                                                  pdfTextContext,
+                                                  commentsText,
+                                                  additionalContext,
+                                                  expertLabel,
+                                                  (chunk) => {
+                                                     // Parse markdown chunk to HTML for live preview
+                                                     // This ensures we always store HTML in state, matching the contentEditable behavior
                                                    const html = parse(chunk) as string;
                                                    setReportContent(html);
                                                    lastContentRef.current = html;

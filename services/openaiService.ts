@@ -61,6 +61,102 @@ const getModelForTask = (taskType: 'simple' | 'complex' | 'critical'): string =>
     }
 };
 
+// ========================================================================
+// REPORT TEMPLATE RESOLUTION
+// ========================================================================
+
+const REPORT_TEMPLATES: Record<string, { label: string; template: string }> = {
+    ime: {
+        label: 'IME Report',
+        template: `
+I. HEADER
+II. QUESTION PRESENTED / SCOPE
+III. DOCUMENTS REVIEWED
+IV. HISTORY & RECORDS REVIEW
+V. EXAMINATION SUMMARY (IF PROVIDED)
+VI. DIAGNOSTIC STUDIES
+VII. ANALYSIS
+VIII. OPINIONS
+IX. EXPERT DISCLOSURES (IF PROVIDED)
+X. LIMITATIONS
+XI. CERTIFICATION
+`
+    },
+    causation: {
+        label: 'Causation Analysis',
+        template: `
+I. HEADER
+II. QUESTION PRESENTED
+III. DOCUMENTS REVIEWED
+IV. MEDICAL HISTORY & TIMELINE
+V. MEDICAL ANALYSIS
+VI. CAUSATION OPINION(S)
+VII. ALTERNATIVE CAUSES
+VIII. EXPERT DISCLOSURES (IF PROVIDED)
+IX. LIMITATIONS
+X. CERTIFICATION
+`
+    },
+    rebuttal: {
+        label: 'Rebuttal Report',
+        template: `
+I. HEADER
+II. SUMMARY OF OPPOSING OPINIONS
+III. DOCUMENTS REVIEWED
+IV. REBUTTAL ANALYSIS
+V. SUPPORTING FACTS/DATA
+VI. CONCLUSIONS / OPINIONS
+VII. EXPERT DISCLOSURES (IF PROVIDED)
+VIII. LIMITATIONS
+IX. CERTIFICATION
+`
+    },
+    chronology: {
+        label: 'Chronology Summary',
+        template: `
+I. HEADER
+II. DOCUMENTS REVIEWED
+III. CLINICAL TIMELINE
+IV. KEY CLINICAL FINDINGS
+V. ANALYTICAL NOTES
+VI. LIMITATIONS
+VII. CERTIFICATION
+`
+    },
+    deposition: {
+        label: 'Deposition Prep Memo',
+        template: `
+I. HEADER
+II. PURPOSE & SCOPE
+III. KEY FACTS
+IV. KEY MEDICAL ISSUES
+V. LIKELY LINES OF QUESTIONING
+VI. EXHIBIT LIST
+VII. RISK AREAS / WEAKNESSES
+VIII. LIMITATIONS
+IX. CERTIFICATION
+`
+    }
+};
+
+const resolveReportTemplate = (reportTemplate?: string) => {
+    if (!reportTemplate) return undefined;
+    const key = reportTemplate.trim().toLowerCase();
+    if (REPORT_TEMPLATES[key]) return REPORT_TEMPLATES[key];
+    return { label: 'Custom Template', template: reportTemplate };
+};
+
+const getTargetCharsForTemplate = (reportTemplate: string | undefined, inputChars: number) => {
+    const key = (reportTemplate || '').trim().toLowerCase();
+    const base =
+        key === 'deposition' ? 30000 :
+            key === 'chronology' ? 32000 :
+                key === 'rebuttal' ? 36000 :
+                    (key === 'causation' || key === 'ime') ? 38000 : 34000;
+    const scaled = Math.round(inputChars * 2.5);
+    return Math.min(50000, Math.max(base, scaled));
+};
+
 // ============================================================================
 // REQUEST TIMEOUT CONFIGURATION
 // ============================================================================
@@ -132,6 +228,52 @@ const extractJsonSafe = (text: string): string => {
         }
         return candidate || s;
     }
+};
+
+// ========================================================================
+// REPORT LENGTH HELPERS
+// ========================================================================
+
+const stripMarkup = (text: string) => text.replace(/<[^>]+>/g, ' ');
+
+const countChars = (text: string) => stripMarkup(text).length;
+
+const expandReportIfTooShort = async (
+    draft: string,
+    minChars: number,
+    resolvedTemplate: { label: string; template: string } | undefined
+): Promise<string> => {
+    const currentCount = countChars(draft);
+    if (currentCount >= minChars) return draft;
+
+    const systemPrompt = [
+        "You are a Physician Expert expanding a medical-legal report.",
+        "CRITICAL RULES:",
+        "1) Do NOT add new facts or claims beyond the provided draft.",
+        "2) Preserve the original structure and headings.",
+        "3) Expand with deeper clinical reasoning, explanations of methodology, and limitations.",
+        "4) If details are missing, explicitly state they are not provided.",
+        "5) Do not remove or alter citations."
+    ].join('\n');
+
+    const userPrompt = `
+Expand the following report to at least ${minChars} characters while preserving all facts and the chosen template.
+You may add clarifying analysis, rationale, and limitations, but do not invent any new case facts.
+Preserve the title line, date line, and prepared-by line at the top. Preserve Roman numeral headings.
+Template selected: ${resolvedTemplate?.label || 'Standard Medical-Legal Report'}.
+
+REPORT TO EXPAND:
+${draft}
+`;
+
+    const expanded = await callOpenAI(systemPrompt, userPrompt, {
+        model: getModelForTask('critical'),
+        maxTokens: 16000,
+        temperature: 0.4,
+        timeoutMs: LONG_REQUEST_TIMEOUT_MS
+    });
+
+    return expanded?.trim() || draft;
 };
 
 // ============================================================================
@@ -331,20 +473,71 @@ export const draftMedicalLegalReport = async (
     caseData: Case,
     docs: Document[],
     annotations: Annotation[],
+    pdfTextContext: string = '',
+    writerComments: string = '',
     additionalContext: string = '',
     qualifications: string = ''
 ): Promise<string> => {
-    const systemPrompt = "You are a Physician Expert drafting a formal Medical-Legal Report. Your tone is authoritative, clinical, and precise.";
+    const systemPrompt = [
+        "You are a Physician Expert drafting a formal Medical-Legal Report for litigation.",
+        "Tone: authoritative, clinical, precise, and court-ready.",
+        "CRITICAL RULES:",
+        "1) Use ONLY the provided case notes, annotations, and document list.",
+        "2) Do NOT fabricate facts; if a detail is missing, state it as a limitation.",
+        "3) Be thorough and comprehensive. Do not be overly concise.",
+        "4) Prefer narrative paragraphs over bullet-only sections unless the template demands bullets.",
+        "5) If asked to include U.S. expert disclosure elements, list them and mark missing items as 'Not provided'."
+    ].join('\n');
+
+    const docNameById = new Map(docs.map(d => [d.id, d.name]));
+    const formatAnnotationLine = (ann: Annotation) => {
+        const docName =
+            ann.documentId === 'manual-notes' ? 'Manual Notes' :
+                ann.documentId === 'research-notes' ? 'Research Notes' :
+                    docNameById.get(ann.documentId) || 'Unknown Document';
+        const pageInfo = ann.page ? `p. ${ann.page}` : '';
+        const dateInfo = ann.eventDate ? `Date: ${ann.eventDate}` : '';
+        const meta = [docName, pageInfo, dateInfo].filter(Boolean).join(', ');
+        return `- [${ann.category}] ${ann.text}${meta ? ` (${meta})` : ''}`;
+    };
 
     const groupedAnnotations = annotations.reduce((acc, ann) => {
-        const key = ann.documentId === 'research-notes' ? 'Research' : 'Medical Records';
+        const key =
+            ann.documentId === 'manual-notes' ? 'Case Notes (Manual)' :
+                ann.documentId === 'research-notes' ? 'Research Notes' :
+                    'PDF Annotations';
         if (!acc[key]) acc[key] = [];
-        acc[key].push(`- [${ann.category}] ${ann.text} ${ann.eventDate ? `(Date: ${ann.eventDate})` : ''}`);
+        acc[key].push(formatAnnotationLine(ann));
         return acc;
     }, {} as Record<string, string[]>);
 
+    const annotationsBlock = Object.entries(groupedAnnotations)
+        .map(([category, items]) => `\n### ${category}\n${items.join('\n')}`)
+        .join('\n') || 'No annotations available';
+
+    const resolvedTemplate = resolveReportTemplate(caseData.reportTemplate);
+    const inputChars = [
+        annotationsBlock,
+        pdfTextContext || '',
+        additionalContext || '',
+        writerComments || ''
+    ].join('\n').length;
+    const minChars = getTargetCharsForTemplate(caseData.reportTemplate, inputChars);
     const userPrompt = `
-You are drafting a professional Medical-Legal Report for litigation purposes.
+You are drafting a professional Medical-Legal Report for litigation purposes in the United States.
+
+FORMAT REQUIREMENTS (match the example style):
+- Use Markdown headings so sizes are consistent:
+  - Main title: "# MEDICAL-LEGAL REPORT" (all caps).
+  - Major sections: "## I. INTRODUCTION AND PURPOSE" (Roman numerals, all caps).
+  - Sub-sections: "### A. The Index Traumatic Event" (bold label is optional).
+- Then provide "**DATE OF REPORT:** ***" on its own line (all caps, bold label).
+- Then provide "**PREPARED BY:** <Name>" on its own line (all caps, bold label).
+- Insert a horizontal rule after the header block: "---".
+- Insert a horizontal rule between major sections.
+- Use full paragraphs with blank lines between paragraphs.
+- Keep a formal tone and explicit medical reasoning.
+- Preserve any citations exactly as provided.
 
 **CASE INFORMATION:**
 - Title: "${caseData.title}"
@@ -356,44 +549,56 @@ ${qualifications || 'Medical Expert'}
 **DOCUMENTS REVIEWED:**
 ${docs.map((d, i) => `${i + 1}. ${d.name}`).join('\n') || 'No documents listed'}
 
-**CLINICAL EVIDENCE:**
-${Object.entries(groupedAnnotations).map(([category, items]) =>
-        `\n### ${category}\n${items.join('\n')}`
-    ).join('\n') || 'No annotations available'}
+**PDF ANNOTATIONS & EVIDENCE EXCERPTS:**
+${annotationsBlock}
 
-**ADDITIONAL CONTEXT:**
+**PDF TEXT EXCERPTS (FROM SOURCE DOCUMENTS):**
+${pdfTextContext || 'Not available'}
+
+**WRITER COMMENTS / REVIEW NOTES:**
+${writerComments || 'None provided'}
+
+**CASE NOTES / CLINICAL NOTES:**
 ${additionalContext || 'None provided'}
 
 ---
 
 **TASK:** Generate a complete, professional Medical-Legal Report.
 
-If a template is provided below, follow its structure exactly. If not, use the standard professional format.
+Length guidance: aim for approximately 3200-5200 words unless the provided evidence is very limited; if limited, still provide a full structure and explicitly note limitations.
+Each major section should include multiple paragraphs with reasoning, not just a single short paragraph. Use professional narrative prose.
+If U.S. expert-report elements are relevant and the data is provided (e.g., qualifications, publications, prior testimony, compensation), include them in the appropriate section. If not provided, state the limitation.
 
-**REPORT STRUCTURE/TEMPLATE:**
-${caseData.reportTemplate || `
+If a template is provided below, follow its structure exactly. If not, use a standard professional format with clear headings and subheadings.
+
+**REPORT STRUCTURE/TEMPLATE (use these as your Roman numeral section titles; ALL CAPS, BOLD):**
+${resolvedTemplate?.template || `
 1. HEADER: Case name, date, and expert identification.
 2. INTRODUCTION: Brief case overview and purpose of the report.
 3. DOCUMENTS REVIEWED: Detailed list of all materials examined.
 4. PATIENT HISTORY & TIMELINE: Chronological clinical summary.
 5. MEDICAL ANALYSIS: Clinical findings, standard of care, and causation.
 6. PROFESSIONAL OPINION: Final conclusions and recommendations.
+7. LIMITATIONS: Identify missing data or uncertainties.
 `}
 
-Format the report professionally with proper sections and clinical terminology.
+Template selected: ${resolvedTemplate?.label || 'Standard Medical-Legal Report'}.
+
+Format the report professionally with proper sections, clinical terminology, and courtroom-appropriate language. Preserve any source citations that appear in the notes (e.g., ("Source", p. X)).
 `;
 
     try {
         const result = await callOpenAI(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
-            maxTokens: 8000,
+            maxTokens: 12000,
             timeoutMs: LONG_REQUEST_TIMEOUT_MS
         });
         if (!result || result.trim() === '') {
             console.error("Empty response from OpenAI API");
             return "Error: Received empty response from AI. Please try again.";
         }
-        return result;
+        const expanded = await expandReportIfTooShort(result, minChars, resolvedTemplate);
+        return expanded;
     } catch (error: any) {
         console.error("draftMedicalLegalReport error:", error);
         return `Error: Unable to generate report. ${error?.message || 'Unknown error'}`;
@@ -407,20 +612,72 @@ export const draftMedicalLegalReportStream = async (
     caseData: Case,
     docs: Document[],
     annotations: Annotation[],
+    pdfTextContext: string,
+    writerComments: string,
     additionalContext: string,
     qualifications: string,
     onChunk: (text: string) => void
 ): Promise<string> => {
-    const systemPrompt = "You are a Physician Expert drafting a formal Medical-Legal Report. Your tone is authoritative, clinical, and precise.";
+    const systemPrompt = [
+        "You are a Physician Expert drafting a formal Medical-Legal Report for litigation.",
+        "Tone: authoritative, clinical, precise, and court-ready.",
+        "CRITICAL RULES:",
+        "1) Use ONLY the provided case notes, annotations, and document list.",
+        "2) Do NOT fabricate facts; if a detail is missing, state it as a limitation.",
+        "3) Be thorough and comprehensive. Do not be overly concise.",
+        "4) Prefer narrative paragraphs over bullet-only sections unless the template demands bullets.",
+        "5) If asked to include U.S. expert disclosure elements, list them and mark missing items as 'Not provided'."
+    ].join('\n');
+
+    const docNameById = new Map(docs.map(d => [d.id, d.name]));
+    const formatAnnotationLine = (ann: Annotation) => {
+        const docName =
+            ann.documentId === 'manual-notes' ? 'Manual Notes' :
+                ann.documentId === 'research-notes' ? 'Research Notes' :
+                    docNameById.get(ann.documentId) || 'Unknown Document';
+        const pageInfo = ann.page ? `p. ${ann.page}` : '';
+        const dateInfo = ann.eventDate ? `Date: ${ann.eventDate}` : '';
+        const meta = [docName, pageInfo, dateInfo].filter(Boolean).join(', ');
+        return `- [${ann.category}] ${ann.text}${meta ? ` (${meta})` : ''}`;
+    };
+
     const groupedAnnotations = annotations.reduce((acc, ann) => {
-        const key = ann.documentId === 'research-notes' ? 'Research' : 'Medical Records';
+        const key =
+            ann.documentId === 'manual-notes' ? 'Case Notes (Manual)' :
+                ann.documentId === 'research-notes' ? 'Research Notes' :
+                    'PDF Annotations';
         if (!acc[key]) acc[key] = [];
-        acc[key].push(`- [${ann.category}] ${ann.text} ${ann.eventDate ? `(Date: ${ann.eventDate})` : ''}`);
+        acc[key].push(formatAnnotationLine(ann));
         return acc;
     }, {} as Record<string, string[]>);
 
+    const annotationsBlock = Object.entries(groupedAnnotations)
+        .map(([category, items]) => `\n### ${category}\n${items.join('\n')}`)
+        .join('\n') || 'No annotations available';
+
+    const resolvedTemplate = resolveReportTemplate(caseData.reportTemplate);
+    const inputChars = [
+        annotationsBlock,
+        pdfTextContext || '',
+        additionalContext || '',
+        writerComments || ''
+    ].join('\n').length;
+    const minChars = getTargetCharsForTemplate(caseData.reportTemplate, inputChars);
     const userPrompt = `
-You are drafting a professional Medical-Legal Report for litigation purposes.
+You are drafting a professional Medical-Legal Report for litigation purposes in the United States.
+
+FORMAT REQUIREMENTS (match the example style):
+- Use Markdown headings so sizes are consistent:
+  - Main title: "# MEDICAL-LEGAL REPORT" (all caps).
+  - Major sections: "## I. INTRODUCTION AND PURPOSE" (Roman numerals, all caps).
+  - Sub-sections: "### A. The Index Traumatic Event" (bold label is optional).
+- Then provide "**DATE OF REPORT:** ***" on its own line (all caps, bold label).
+- Then provide "**PREPARED BY:** <Name>" on its own line (all caps, bold label).
+- Insert a horizontal rule after the header block: "---".
+- Insert a horizontal rule between major sections.
+- Use full paragraphs with blank lines between paragraphs.
+- Keep a formal tone and explicit medical reasoning.
+- Preserve any citations exactly as provided.
 
 **CASE INFORMATION:**
 - Title: "${caseData.title}"
@@ -432,37 +689,53 @@ ${qualifications || 'Medical Expert'}
 **DOCUMENTS REVIEWED:**
 ${docs.map((d, i) => `${i + 1}. ${d.name}`).join('\n') || 'No documents listed'}
 
-**CLINICAL EVIDENCE:**
-${Object.entries(groupedAnnotations).map(([category, items]) => `\n### ${category}\n${items.join('\n')}`).join('\n') || 'No annotations available'}
+**PDF ANNOTATIONS & EVIDENCE EXCERPTS:**
+${annotationsBlock}
 
-**ADDITIONAL CONTEXT:**
+**PDF TEXT EXCERPTS (FROM SOURCE DOCUMENTS):**
+${pdfTextContext || 'Not available'}
+
+**WRITER COMMENTS / REVIEW NOTES:**
+${writerComments || 'None provided'}
+
+**CASE NOTES / CLINICAL NOTES:**
 ${additionalContext || 'None provided'}
 
 ---
 
 **TASK:** Generate a complete, professional Medical-Legal Report.
 
-**REPORT STRUCTURE/TEMPLATE:**
-${caseData.reportTemplate || `
+Length guidance: aim for approximately 3200-5200 words unless the provided evidence is very limited; if limited, still provide a full structure and explicitly note limitations.
+Each major section should include multiple paragraphs with reasoning, not just a single short paragraph. Use professional narrative prose.
+If U.S. expert-report elements are relevant and the data is provided (e.g., qualifications, publications, prior testimony, compensation), include them in the appropriate section. If not provided, state the limitation.
+
+**REPORT STRUCTURE/TEMPLATE (use these as your Roman numeral section titles; ALL CAPS, BOLD):**
+${resolvedTemplate?.template || `
 1. HEADER: Case name, date, and expert identification.
 2. INTRODUCTION: Brief case overview and purpose of the report.
 3. DOCUMENTS REVIEWED: Detailed list of all materials examined.
 4. PATIENT HISTORY & TIMELINE: Chronological clinical summary.
 5. MEDICAL ANALYSIS: Clinical findings, standard of care, and causation.
 6. PROFESSIONAL OPINION: Final conclusions and recommendations.
+7. LIMITATIONS: Identify missing data or uncertainties.
 `}
 
-Format the report professionally with proper sections and clinical terminology.
+Template selected: ${resolvedTemplate?.label || 'Standard Medical-Legal Report'}.
+
+Format the report professionally with proper sections, clinical terminology, and courtroom-appropriate language. Preserve any source citations that appear in the notes (e.g., ("Source", p. X)).
 `;
     try {
         const result = await callOpenAIStream(systemPrompt, userPrompt, onChunk, {
             model: getModelForTask('critical'),
-            maxTokens: 8000
+            maxTokens: 12000
         });
-        return result?.trim() || "Error: Empty response from AI.";
+        const trimmed = result?.trim() || "Error: Empty response from AI.";
+        const expanded = await expandReportIfTooShort(trimmed, minChars, resolvedTemplate);
+        if (expanded !== trimmed) onChunk(expanded);
+        return expanded;
     } catch (error: any) {
         console.error("draftMedicalLegalReportStream error:", error);
-        const fallback = await draftMedicalLegalReport(caseData, docs, annotations, additionalContext, qualifications);
+        const fallback = await draftMedicalLegalReport(caseData, docs, annotations, pdfTextContext, writerComments, additionalContext, qualifications);
         onChunk(fallback);
         return fallback;
     }
@@ -777,20 +1050,32 @@ export const suggestReportEdit = async (content: string, instruction: string) =>
     const systemPrompt = `You are a thoroughly trained Medical-Legal Report Editor.
 You MUST respond with valid JSON matching this structure:
 {
-  "newContent": "string",
-  "explanation": "string"
-}`;
+  "suggestions": [
+    {
+      "originalExcerpt": "string",
+      "revisedExcerpt": "string",
+      "explanation": "string"
+    }
+  ]
+}
+
+RULES:
+1) Review the ENTIRE report and produce 5-12 targeted improvements spread throughout the document.
+2) Each suggestion must be a SMALL, RELEVANT excerpt (do NOT rewrite the entire report).
+3) The originalExcerpt must be copied verbatim from the report.
+4) The revisedExcerpt should be an improved version of that excerpt only.
+5) If no changes are needed, return an empty suggestions array.`;
 
     const userPrompt = `Report Content: ${content}\nInstruction: ${instruction}`;
 
     try {
-        return await callOpenAIJSON<{ newContent: string; explanation: string }>(systemPrompt, userPrompt, {
+        return await callOpenAIJSON<{ suggestions: Array<{ originalExcerpt: string; revisedExcerpt: string; explanation: string }> }>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             timeoutMs: REQUEST_TIMEOUT_MS
         });
     } catch (e) {
         console.error("suggestReportEdit error:", e);
-        return { newContent: content, explanation: "Edit failed." };
+        return { suggestions: [] };
     }
 };
 

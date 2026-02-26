@@ -156,7 +156,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           {!collapsed && (
             <div>
               <span className="block text-xl font-extrabold tracking-[-0.02em] text-slate-900 leading-none">ApexMedLaw</span>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-1 block">Admin Access</span>
+              {currentUser.role === 'ADMIN' && (
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-1 block">Admin Access</span>
+              )}
             </div>
           )}
         </div>
