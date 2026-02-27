@@ -246,6 +246,7 @@ export interface Document {
   uploadDate: string;
   size: string;
   driveFileId?: string;
+  storageLocation?: 'firebase' | 'drive';
   storagePath?: string;
   path?: string;
   citation?: string;

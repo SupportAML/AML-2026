@@ -20,6 +20,7 @@ const Settings = React.lazy(() => import('./components/Settings').then(m => ({ d
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
+import { uploadFileToDrive, createDriveFolder, getFileDownloadUrl } from './services/googleDriveService';
 import {
   subscribeToCases,
   subscribeToAnnotations,
@@ -134,6 +135,7 @@ const App: React.FC = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('sidebarCollapsed') === 'true';
   });
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed));
@@ -390,11 +392,157 @@ const App: React.FC = () => {
     const lower = filename.toLowerCase();
     if (lower.endsWith('.pdf')) return 'pdf';
     if (lower.endsWith('.dcm') || lower.endsWith('.dicom') || lower.endsWith('.nii') || lower.endsWith('.nii.gz')) return 'dicom';
+    if (mime === 'application/dicom' || mime === 'application/x-dicom') return 'dicom';
     const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.svg'];
     if (imageExts.some(ext => lower.endsWith(ext)) || mime?.startsWith('image/')) return 'image';
     const videoExts = ['.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.3gp'];
     if (videoExts.some(ext => lower.endsWith(ext)) || mime?.startsWith('video/')) return 'video';
     return 'other';
+  };
+
+  // Prompt the USER to link their own Google account via OAuth consent screen
+  const requestGoogleDriveAuth = async (): Promise<string | null> => {
+    try {
+      const w = window as any;
+
+      // Wait for Google Identity Services to load (it loads async)
+      if (!w.google?.accounts?.oauth2) {
+        // Try waiting up to 3 seconds for the script to load
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r => setTimeout(r, 100));
+          if (w.google?.accounts?.oauth2) break;
+        }
+        if (!w.google?.accounts?.oauth2) {
+          alert('Google Sign-In failed to load. Please check your internet connection and refresh the page.');
+          return null;
+        }
+      }
+
+      // Read client ID from env (set by admin in .env.local)
+      const clientId = import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID || '';
+      if (!clientId) {
+        alert('Google Drive is not configured. Please contact your administrator.');
+        return null;
+      }
+
+      console.log('[DICOM Auth] Starting Google Drive auth flow...');
+      console.log('[DICOM Auth] Client ID:', clientId.substring(0, 20) + '...');
+      console.log('[DICOM Auth] Current origin:', window.location.origin);
+
+      return new Promise((resolve) => {
+        const tokenClient = w.google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/drive.file',
+          prompt: 'consent',
+          error_callback: (error: any) => {
+            // This catches popup blocked, user closed popup, and other errors
+            console.error('[DICOM Auth] OAuth error_callback:', error);
+            if (error?.type === 'popup_closed') {
+              alert('Google sign-in popup was closed. Please try again.');
+            } else if (error?.type === 'popup_failed_to_open') {
+              alert('Popup was blocked by browser. Please allow popups for this site and try again.');
+            } else {
+              alert('Google Drive authentication failed: ' + (error?.message || error?.type || 'Unknown error') +
+                '\n\nIf you see "redirect_uri_mismatch", the app admin needs to add ' + window.location.origin +
+                ' to the Google Cloud Console OAuth client\'s Authorized JavaScript Origins.');
+            }
+            resolve(null);
+          },
+          callback: (response: any) => {
+            if (response.error) {
+              console.error('[DICOM Auth] Token response error:', response.error, response.error_description);
+              alert('Google Drive auth failed: ' + (response.error_description || response.error) +
+                '\n\nIf you see "redirect_uri_mismatch", add ' + window.location.origin +
+                ' to Google Cloud Console → APIs & Credentials → OAuth Client → Authorized JavaScript Origins');
+              resolve(null);
+            } else {
+              console.log('[DICOM Auth] Successfully got access token!');
+              setGoogleAccessToken(response.access_token);
+              resolve(response.access_token);
+            }
+          }
+        });
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      });
+    } catch (e: any) {
+      console.error('[DICOM Auth] Exception:', e);
+      alert('Google Drive auth failed unexpectedly: ' + e.message +
+        '\n\nPlease ensure ' + window.location.origin + ' is added to the Google Cloud Console OAuth Authorized JavaScript Origins.');
+      return null;
+    }
+  };
+
+  // Upload DICOM file(s) to the USER's own Google Drive
+  const handleDicomDriveUpload = async (caseId: string, files: File[]) => {
+    // Step 1: Ensure user has linked their Google account
+    let token = googleAccessToken;
+    if (!token) {
+      token = await requestGoogleDriveAuth();
+      if (!token) {
+        alert('You must link your Google account to upload DICOM files. DICOM imaging files are stored on your personal Google Drive. Please try again.');
+        return;
+      }
+    }
+
+    setIsUploading(true);
+    setUploadTotalFiles(files.length > 1 ? files.length : undefined);
+    setUploadProgress(0);
+
+    try {
+      // Step 2: Create a folder in the user's Drive for this case
+      const caseItem = cases.find(c => c.id === caseId);
+      let folderId = caseItem?.driveFolderId;
+      if (!folderId && caseItem) {
+        setUploadFileName('Creating Drive folder...');
+        const folder = await createDriveFolder(`ApexMedLaw_${caseItem.title}_DICOM`, token);
+        folderId = folder.id;
+        await upsertCase({ ...caseItem, driveFolderId: folderId, driveFolderUrl: folder.url });
+      }
+
+      // Step 3: Upload each file to the user's Drive
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadFileName(file.name);
+        setUploadCurrentFileIndex(files.length > 1 ? i : undefined);
+        setUploadProgress(10);
+
+        const driveFile = await uploadFileToDrive(file, token, folderId);
+        setUploadProgress(80);
+
+        // Step 4: Save metadata to Firestore (only metadata, NO file bytes in Firebase)
+        const newDoc: Document = {
+          id: Math.random().toString(36).substr(2, 9),
+          caseId,
+          name: file.name,
+          type: 'dicom' as DocumentFileType, // Always DICOM — this came from the DICOM upload button
+          mimeType: file.type || 'application/dicom',
+          url: '', // Empty — will be fetched from user's Drive on demand
+          driveFileId: driveFile.id,
+          storageLocation: 'drive',
+          uploadDate: new Date().toISOString(),
+          size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+          reviewStatus: 'pending',
+          path: 'Medical Records/Radiology'
+        };
+        await upsertDocument(newDoc);
+        setUploadProgress(100);
+      }
+    } catch (e: any) {
+      console.error('Drive upload failed:', e);
+      // If token expired, clear it so next attempt re-auths
+      if (e?.message?.includes('401') || e?.message?.includes('403') || e?.message?.includes('unauthorized')) {
+        setGoogleAccessToken(null);
+        alert('Your Google Drive session expired. Please try uploading again — you will be prompted to re-link your Google account.');
+      } else {
+        alert('Google Drive upload failed. Please check your internet connection and try again. DICOM files must be stored on your personal Google Drive.');
+      }
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+      setUploadFileName('');
+      setUploadTotalFiles(undefined);
+      setUploadCurrentFileIndex(undefined);
+    }
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
@@ -405,6 +553,17 @@ const App: React.FC = () => {
       return;
     }
 
+    // DICOM files must be stored on the user's Google Drive (mandatory)
+    const fileType = detectFileType(file.name, file.type);
+    if (fileType === 'dicom') {
+      await handleDicomDriveUpload(caseId, [file]);
+      return;
+    }
+
+    await handleFirebaseUpload(caseId, file);
+  };
+
+  const handleFirebaseUpload = async (caseId: string, file: File) => {
     setIsUploading(true);
     setUploadFileName(file.name);
     setUploadProgress(0);
@@ -856,6 +1015,12 @@ const App: React.FC = () => {
                   onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
                   onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
                   onUpload={handleFileUpload}
+                  onUploadDicom={(caseId: string, files: File[]) => handleDicomDriveUpload(caseId, files)}
+                  isDriveLinked={!!googleAccessToken}
+                  onRequestDriveAuth={async () => {
+                    const token = await requestGoogleDriveAuth();
+                    return !!token;
+                  }}
                   onUploadFolder={handleFolderUpload}
                   onUpdateCase={upsertCase}
                   onDeleteDoc={deleteDocumentFromStore}
@@ -876,7 +1041,7 @@ const App: React.FC = () => {
                   onDeleteAnnotation={deleteAnnotationFromStore}
                   onBack={() => setViewMode(ViewMode.CASE_VIEW)}
                   onOpenClinicalWorkspace={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-                  googleAccessToken={null}
+                  googleAccessToken={googleAccessToken}
                   initialPage={viewerInitialPage}
                   focusedAnnotationId={focusedAnnotationId}
                   isEditingFocused={isEditingAnnotation}
@@ -893,7 +1058,7 @@ const App: React.FC = () => {
               {viewMode === ViewMode.ANNOTATION_ROLLUP && activeCase && (
                 <AnnotationRollup
                   caseItem={activeCase} docs={activeDocuments} annotations={activeAnnotations}
-                  onBack={() => setViewMode(ViewMode.CASE_VIEW)} googleAccessToken={null} onUpdateCase={upsertCase}
+                  onBack={() => setViewMode(ViewMode.CASE_VIEW)} googleAccessToken={googleAccessToken} onUpdateCase={upsertCase}
                   onAddAnnotation={handleAddAnnotation}
                   onUpdateAnnotation={upsertAnnotation}
                   onDeleteAnnotation={deleteAnnotationFromStore}
@@ -1039,6 +1204,7 @@ const App: React.FC = () => {
         totalFiles={uploadTotalFiles}
         currentFileIndex={uploadCurrentFileIndex}
       />
+
     </div>
   );
 };

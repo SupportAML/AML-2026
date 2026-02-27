@@ -43,6 +43,7 @@ export default defineConfig(({ mode }) => {
             'vendor': ['react', 'react-dom'],
             'firebase': ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/storage'],
             'pdfjs': ['pdfjs-dist'],
+            'dwv': ['dwv'],
             'lucide': ['lucide-react']
           }
         }

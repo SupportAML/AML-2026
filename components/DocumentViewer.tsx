@@ -34,6 +34,8 @@ import { Document as DocType, Annotation } from '../types';
 import { processAnnotationInput } from '../services/openaiService';
 import { pdfCacheManager } from '../services/pdfCacheManager';
 import { VoiceTranscriptionOverlay } from './VoiceTranscriptionOverlay';
+import DicomViewer from './DicomViewer';
+import { getFileDownloadUrl } from '../services/googleDriveService';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.mjs`;
 
@@ -638,6 +640,58 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [pendingText, setPendingText] = useState('');
   const [pendingAuthor, setPendingAuthor] = useState(currentUser.name);
   const [pendingDate, setPendingDate] = useState(''); // Leave empty - user manually sets if needed
+
+  // Resolve Drive URL for DICOM files stored on the user's Google Drive
+  const [resolvedDicomUrl, setResolvedDicomUrl] = useState<string | null>(null);
+  const [dicomUrlLoading, setDicomUrlLoading] = useState(false);
+  const [dicomNeedsAuth, setDicomNeedsAuth] = useState(false);
+
+  // Auto-request Google auth if needed to view a Drive-stored DICOM
+  const requestDriveAuthForViewing = async () => {
+    try {
+      const w = window as any;
+      if (!w.google?.accounts?.oauth2) return;
+      const clientId = (import.meta as any).env?.VITE_GOOGLE_DRIVE_CLIENT_ID || localStorage.getItem('drive_client_id') || '';
+      if (!clientId) return;
+      return new Promise<string | null>((resolve) => {
+        const tokenClient = w.google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/drive.file',
+          prompt: '',
+          callback: (response: any) => {
+            if (response.error) resolve(null);
+            else resolve(response.access_token);
+          }
+        });
+        tokenClient.requestAccessToken();
+      });
+    } catch { return null; }
+  };
+
+  useEffect(() => {
+    if (doc.type === 'dicom' && doc.storageLocation === 'drive' && doc.driveFileId) {
+      if (googleAccessToken) {
+        // We have a token — fetch the file from the user's Drive
+        setDicomUrlLoading(true);
+        setDicomNeedsAuth(false);
+        getFileDownloadUrl(doc.driveFileId, googleAccessToken)
+          .then(url => { setResolvedDicomUrl(url); setDicomUrlLoading(false); })
+          .catch(() => {
+            setResolvedDicomUrl(null);
+            setDicomUrlLoading(false);
+            setDicomNeedsAuth(true); // Token may be expired
+          });
+      } else {
+        // No token yet — user needs to re-auth
+        setDicomNeedsAuth(true);
+        setResolvedDicomUrl(null);
+      }
+    } else if (doc.type === 'dicom' && doc.url) {
+      // Fallback: DICOM stored in Firebase (legacy files)
+      setResolvedDicomUrl(doc.url);
+      setDicomNeedsAuth(false);
+    }
+  }, [doc.id, doc.type, doc.storageLocation, doc.driveFileId, googleAccessToken]);
   const [pendingTime, setPendingTime] = useState(''); // Leave empty - user manually sets if needed
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [cacheStatus, setCacheStatus] = useState<'idle' | 'cached' | 'downloading'>('idle');
@@ -1291,21 +1345,66 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                     <p className="text-xs text-slate-400 mt-1">{doc.size}</p>
                   </div>
                 </div>
+              ) : doc.type === 'dicom' ? (
+                /* DICOM viewer - built-in viewer fetches from user's Google Drive */
+                <div className="w-full h-full max-w-6xl" style={{ minHeight: '500px' }}>
+                  {dicomUrlLoading ? (
+                    <div className="flex flex-col items-center justify-center h-full">
+                      <Loader2Icon className="w-10 h-10 text-cyan-400 animate-spin mb-4" />
+                      <p className="text-sm text-slate-400">Fetching DICOM from your Google Drive...</p>
+                    </div>
+                  ) : resolvedDicomUrl ? (
+                    <DicomViewer
+                      fileUrl={resolvedDicomUrl}
+                      fileName={doc.name}
+                    />
+                  ) : dicomNeedsAuth ? (
+                    <div className="flex flex-col items-center justify-center h-full">
+                      <div className="bg-white rounded-2xl shadow-xl border border-cyan-200 p-10 max-w-md text-center">
+                        <div className="w-16 h-16 bg-cyan-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                          <ScanIcon className="w-8 h-8 text-cyan-600" />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-700 mb-2">DICOM Viewer</h3>
+                        <p className="text-sm text-slate-500 mb-1">{doc.name}</p>
+                        <p className="text-xs text-slate-400 mb-5">{doc.size}</p>
+                        <p className="text-sm text-cyan-700 bg-cyan-50 rounded-xl px-4 py-3 mb-5 border border-cyan-100">
+                          This DICOM file is stored on your Google Drive. Please link your Google account to view it in the built-in viewer.
+                        </p>
+                        <button
+                          onClick={async () => {
+                            const token = await requestDriveAuthForViewing();
+                            if (token) {
+                              setDicomUrlLoading(true);
+                              setDicomNeedsAuth(false);
+                              try {
+                                const url = await getFileDownloadUrl(doc.driveFileId!, token);
+                                setResolvedDicomUrl(url);
+                              } catch { setDicomNeedsAuth(true); }
+                              setDicomUrlLoading(false);
+                            }
+                          }}
+                          className="inline-flex items-center gap-2 px-6 py-3 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg"
+                        >
+                          <ScanIcon className="w-4 h-4" /> Link Google Drive & View
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                      <ScanIcon className="w-12 h-12 mb-4" />
+                      <p className="text-sm font-medium">Unable to load DICOM file</p>
+                    </div>
+                  )}
+                </div>
               ) : (
-                /* DICOM, or any other file type - show info card with download */
+                /* Any other file type - show info card with download */
                 <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-12 max-w-lg text-center">
-                  <div className={`w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 ${doc.type === 'dicom' ? 'bg-cyan-50 text-cyan-600' : 'bg-slate-100 text-slate-500'
-                    }`}>
-                    {doc.type === 'dicom' ? <ScanIcon className="w-10 h-10" /> : <FileIcon className="w-10 h-10" />}
+                  <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 bg-slate-100 text-slate-500">
+                    <FileIcon className="w-10 h-10" />
                   </div>
                   <h3 className="text-xl font-bold text-slate-700 mb-2">{doc.name}</h3>
                   <p className="text-sm text-slate-400 mb-1">{doc.size}</p>
                   {doc.mimeType && <p className="text-xs text-slate-400 mb-6 font-mono">{doc.mimeType}</p>}
-                  {doc.type === 'dicom' && (
-                    <p className="text-sm text-cyan-700 bg-cyan-50 rounded-xl px-4 py-3 mb-6 border border-cyan-100">
-                      DICOM imaging files require a specialized viewer. Download the file and open it with your preferred DICOM viewer (e.g., Horos, RadiAnt, 3D Slicer).
-                    </p>
-                  )}
                   <a
                     href={doc.url}
                     target="_blank"
