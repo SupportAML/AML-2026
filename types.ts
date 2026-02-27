@@ -56,6 +56,18 @@ export interface StructuredChronology {
   irrelevantFacts: ChronologyEvent[];
 }
 
+export interface BillingEntry {
+  id: string;
+  type: 'retainer' | 'work';
+  description: string;
+  hours: number;
+  date: string;
+  createdBy: string;
+  createdByName: string;
+  fundsReceived?: boolean;
+  fundsReceivedDate?: string;
+}
+
 export interface Case {
   id: string;
   title: string;
@@ -126,6 +138,9 @@ export interface Case {
 
   // Last activity timestamp - auto-updated on any case-related change
   lastActivityAt?: string;
+
+  // Billing & Hours Tracking
+  billingEntries?: BillingEntry[];
 
   // Finalization
   isFinal?: boolean;

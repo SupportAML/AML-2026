@@ -26,9 +26,11 @@ import {
   VideoIcon,
   ImageIcon,
   FileIcon,
-  ScanIcon
+  ScanIcon,
+  DollarSignIcon,
+  AlertTriangleIcon
 } from 'lucide-react';
-import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus } from '../types';
+import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
 
 interface CaseDetailsProps {
   caseItem: Case;
@@ -298,6 +300,15 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [editClientData, setEditClientData] = useState<Partial<Client>>({});
 
+  // Billing state
+  const [showAddBilling, setShowAddBilling] = useState(false);
+  const [newBillingType, setNewBillingType] = useState<'retainer' | 'work'>('work');
+  const [newBillingDesc, setNewBillingDesc] = useState('');
+  const [newBillingHours, setNewBillingHours] = useState('');
+  const [newBillingDate, setNewBillingDate] = useState(new Date().toISOString().split('T')[0]);
+  const [editingBillingId, setEditingBillingId] = useState<string | null>(null);
+  const [editBillingData, setEditBillingData] = useState<Partial<BillingEntry>>({});
+
   const [isAssigning, setIsAssigning] = useState(false);
   const [selectedAssignUserId, setSelectedAssignUserId] = useState('');
   const [isTransferringOwnership, setIsTransferringOwnership] = useState(false);
@@ -459,6 +470,54 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     setDraggedDocId(null);
   };
 
+  // --- Billing handlers ---
+  const billingEntries = caseItem.billingEntries || [];
+  const totalBilled = billingEntries.filter(e => e.type === 'retainer').reduce((s, e) => s + e.hours, 0);
+  const totalWorked = billingEntries.filter(e => e.type === 'work').reduce((s, e) => s + e.hours, 0);
+  const balance = totalBilled - totalWorked;
+  const unpaidHours = billingEntries.filter(e => e.type === 'retainer' && !e.fundsReceived).reduce((s, e) => s + e.hours, 0);
+
+  const handleAddBillingEntry = () => {
+    const hours = parseFloat(newBillingHours);
+    if (!newBillingDesc.trim() || isNaN(hours) || hours <= 0) return;
+    const entry: BillingEntry = {
+      id: Date.now().toString(),
+      type: newBillingType,
+      description: newBillingDesc.trim(),
+      hours,
+      date: newBillingDate,
+      createdBy: currentUser.id,
+      createdByName: currentUser.name
+    };
+    onUpdateCase({ ...caseItem, billingEntries: [...billingEntries, entry] });
+    setNewBillingDesc('');
+    setNewBillingHours('');
+    setNewBillingDate(new Date().toISOString().split('T')[0]);
+    setShowAddBilling(false);
+  };
+
+  const handleDeleteBillingEntry = (entryId: string) => {
+    onUpdateCase({ ...caseItem, billingEntries: billingEntries.filter(e => e.id !== entryId) });
+  };
+
+  const handleToggleFundsReceived = (entryId: string) => {
+    const updated = billingEntries.map(e => {
+      if (e.id !== entryId) return e;
+      return { ...e, fundsReceived: !e.fundsReceived, fundsReceivedDate: !e.fundsReceived ? new Date().toISOString().split('T')[0] : undefined };
+    });
+    onUpdateCase({ ...caseItem, billingEntries: updated });
+  };
+
+  const handleSaveBillingEdit = (entryId: string) => {
+    const updated = billingEntries.map(e => {
+      if (e.id !== entryId) return e;
+      return { ...e, ...editBillingData } as BillingEntry;
+    });
+    onUpdateCase({ ...caseItem, billingEntries: updated });
+    setEditingBillingId(null);
+    setEditBillingData({});
+  };
+
   const buildTree = (): Record<string, TreeNode> => {
     const root: Record<string, TreeNode> = {};
     docs.forEach(doc => {
@@ -501,8 +560,9 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="mb-8">
-        <div className="flex flex-col gap-6">
-          <div className="flex items-start justify-between">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+          {/* Left: Case Title & Description */}
+          <div className="lg:col-span-2">
             <div className="relative group">
               <div className="flex items-center gap-3 mb-2">
                 <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">CASE ID: {caseItem.id}</span>
@@ -521,6 +581,188 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                   {caseItem.description}
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Right: Billing & Hours Tracker */}
+          <div className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm flex flex-col">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                <DollarSignIcon className="w-4 h-4" /> Billing & Hours
+              </h3>
+              <button onClick={() => setShowAddBilling(!showAddBilling)} className="p-1 hover:bg-slate-200 rounded text-slate-500">
+                {showAddBilling ? <XIcon className="w-4 h-4" /> : <PlusIcon className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {/* Balance Summary */}
+            <div className="grid grid-cols-4 gap-3 p-4 border-b border-slate-100 bg-slate-50/50">
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Billed</p>
+                <p className="text-lg font-black text-slate-700">{totalBilled}<span className="text-xs font-medium text-slate-400 ml-0.5">hrs</span></p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Worked</p>
+                <p className="text-lg font-black text-slate-700">{totalWorked}<span className="text-xs font-medium text-slate-400 ml-0.5">hrs</span></p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Balance</p>
+                <p className={`text-lg font-black ${balance < 0 ? 'text-red-600' : balance > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                  {balance > 0 ? '+' : ''}{balance}<span className="text-xs font-medium ml-0.5">hrs</span>
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unpaid</p>
+                <p className={`text-lg font-black ${unpaidHours > 0 ? 'text-amber-600' : 'text-slate-700'}`}>{unpaidHours}<span className="text-xs font-medium ml-0.5">hrs</span></p>
+              </div>
+            </div>
+            {balance < 0 && (
+              <div className="px-4 py-2 bg-red-50 border-b border-red-100 flex items-center gap-2">
+                <AlertTriangleIcon className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                <p className="text-[11px] font-bold text-red-700">Physician has worked {Math.abs(balance)} hrs beyond billed hours — additional billing needed</p>
+              </div>
+            )}
+
+            {/* Add Entry Form */}
+            {showAddBilling && (
+              <div className="p-4 bg-slate-50 border-b border-slate-100 space-y-2 animate-in slide-in-from-top-2 duration-200">
+                <div className="flex gap-2">
+                  <select
+                    className="text-xs p-2 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 bg-white"
+                    value={newBillingType}
+                    onChange={(e) => setNewBillingType(e.target.value as 'retainer' | 'work')}
+                  >
+                    <option value="work">Hours Worked</option>
+                    <option value="retainer">Hours Billed / Retainer</option>
+                  </select>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    className="w-20 text-xs p-2 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                    placeholder="Hours"
+                    value={newBillingHours}
+                    onChange={(e) => setNewBillingHours(e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    className="text-xs p-2 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                    value={newBillingDate}
+                    onChange={(e) => setNewBillingDate(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 text-xs p-2 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                    placeholder={newBillingType === 'retainer' ? 'e.g., Initial 5-hour retainer' : 'e.g., Document review & analysis'}
+                    value={newBillingDesc}
+                    onChange={(e) => setNewBillingDesc(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddBillingEntry(); }}
+                  />
+                  <button
+                    onClick={handleAddBillingEntry}
+                    className="bg-indigo-600 text-white px-4 py-1 rounded-lg text-xs font-bold hover:bg-indigo-700 shadow-sm transition-all"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Billing Entries Table */}
+            <div className="flex-1 overflow-y-auto max-h-64">
+              {billingEntries.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-slate-300">
+                  <DollarSignIcon className="w-8 h-8 mb-2 opacity-20" />
+                  <p className="text-xs italic">No billing entries yet.</p>
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-left">
+                      <th className="px-4 py-2 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Description</th>
+                      <th className="px-2 py-2 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Hours</th>
+                      <th className="px-2 py-2 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Date</th>
+                      <th className="px-2 py-2 font-bold text-slate-400 uppercase tracking-wider text-[10px]">Funds Rec'd</th>
+                      <th className="px-2 py-2 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {[...billingEntries].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map(entry => (
+                      <tr key={entry.id} className="hover:bg-slate-50 transition-colors group/row">
+                        {editingBillingId === entry.id ? (
+                          <>
+                            <td className="px-4 py-2">
+                              <input className="w-full text-xs p-1 border border-slate-200 rounded" value={editBillingData.description || ''} onChange={(e) => setEditBillingData(prev => ({ ...prev, description: e.target.value }))} />
+                            </td>
+                            <td className="px-2 py-2">
+                              <input type="number" step="0.5" className="w-16 text-xs p-1 border border-slate-200 rounded" value={editBillingData.hours || ''} onChange={(e) => setEditBillingData(prev => ({ ...prev, hours: parseFloat(e.target.value) }))} />
+                            </td>
+                            <td className="px-2 py-2">
+                              <input type="date" className="text-xs p-1 border border-slate-200 rounded" value={editBillingData.date || ''} onChange={(e) => setEditBillingData(prev => ({ ...prev, date: e.target.value }))} />
+                            </td>
+                            <td className="px-2 py-2">
+                              <button onClick={() => handleSaveBillingEdit(entry.id)} className="px-2 py-1 bg-indigo-600 text-white rounded text-[10px] font-bold">Save</button>
+                              <button onClick={() => { setEditingBillingId(null); setEditBillingData({}); }} className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-[10px] font-bold ml-1">Cancel</button>
+                            </td>
+                            <td></td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-4 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${entry.type === 'retainer' ? 'bg-indigo-500' : 'bg-emerald-500'}`} />
+                                <span className="font-medium text-slate-700 truncate">{entry.description}</span>
+                                <span className={`text-[8px] font-black px-1 py-0.5 rounded border uppercase tracking-tighter shrink-0 ${entry.type === 'retainer' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>
+                                  {entry.type === 'retainer' ? 'BILLED' : 'WORK'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-400 mt-0.5 ml-3.5">{entry.createdByName}</p>
+                            </td>
+                            <td className="px-2 py-2 font-bold text-slate-700">{entry.hours}</td>
+                            <td className="px-2 py-2 text-slate-500 whitespace-nowrap">
+                              {(() => { try { const d = new Date(entry.date + 'T00:00:00'); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return entry.date; } })()}
+                            </td>
+                            <td className="px-2 py-2">
+                              {entry.type === 'retainer' ? (
+                                <button
+                                  onClick={() => handleToggleFundsReceived(entry.id)}
+                                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors ${entry.fundsReceived ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-400 border border-slate-200 hover:border-emerald-300 hover:text-emerald-600'}`}
+                                >
+                                  {entry.fundsReceived ? <CheckIcon className="w-3 h-3" /> : <ClockIcon className="w-3 h-3" />}
+                                  {entry.fundsReceived ? (
+                                    <span>{(() => { try { const d = new Date(entry.fundsReceivedDate + 'T00:00:00'); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return 'Paid'; } })()}</span>
+                                  ) : 'Pending'}
+                                </button>
+                              ) : (
+                                <span className="text-slate-300 text-[10px]">—</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2">
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover/row:opacity-100 transition-all">
+                                <button
+                                  onClick={() => { setEditingBillingId(entry.id); setEditBillingData(entry); }}
+                                  className="p-1 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded"
+                                  title="Edit"
+                                >
+                                  <PencilIcon className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteBillingEntry(entry.id)}
+                                  className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded"
+                                  title="Delete"
+                                >
+                                  <Trash2Icon className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>
