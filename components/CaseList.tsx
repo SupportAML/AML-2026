@@ -84,12 +84,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
     const [filterPhysician, setFilterPhysician] = useState('');
     const [filterDateFrom, setFilterDateFrom] = useState('');
     const [filterDateTo, setFilterDateTo] = useState('');
-    const [showMyCasesOnly, setShowMyCasesOnly] = useState(() => {
-        if (currentUser.role !== 'ADMIN') return false;
-        const stored = localStorage.getItem('apex_dashboard_my_cases_only');
-        if (stored === null) return true; // default to My Cases for admins
-        return stored === 'true';
-    });
+    const [showMyCasesOnly, setShowMyCasesOnly] = useState(currentUser.role === 'ADMIN');
     const filterRef = useRef<HTMLDivElement>(null);
 
     const isAdmin = currentUser.role === 'ADMIN';
@@ -111,11 +106,6 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelect, onCreate, onEdit, 
         localStorage.setItem('apex_dashboard_tab', activeTab);
     }, [activeTab]);
 
-    useEffect(() => {
-        if (isAdmin) {
-            localStorage.setItem('apex_dashboard_my_cases_only', String(showMyCasesOnly));
-        }
-    }, [showMyCasesOnly, isAdmin]);
 
     // Ensure Roboto font is available for this page
     useEffect(() => {
