@@ -629,6 +629,13 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const sidebarScrollRef = useRef<HTMLDivElement>(null);
   const visiblePages = useRef(new Map<number, number>());
 
+  // When switching back to continuous scroll, reset the scroll position to wherever
+  // the user currently is so the page number doesn't jump back to 1
+  useEffect(() => {
+    if (!isContinuous || !scrollRef.current || numPages === 0) return;
+    scrollRef.current.scrollTo({ top: (currentPage - 1) * estimatedHeightPerPage, behavior: 'auto' });
+  }, [isContinuous]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Jump to page state
   const [isEditingPage, setIsEditingPage] = useState(false);
   const [tempPageInput, setTempPageInput] = useState('');
@@ -643,7 +650,36 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [cacheStatus, setCacheStatus] = useState<'idle' | 'cached' | 'downloading'>('idle');
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const pdfDocRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
+  const hasRestoredPage = useRef(false);
   const estimatedHeightPerPage = (ESTIMATED_PAGE_HEIGHT * (scale / 1.2)) + PAGE_GAP;
+
+  // Persist the current page so the viewer reopens on the same page
+  useEffect(() => {
+    if (!doc.id || currentPage <= 0) return;
+    localStorage.setItem(`apex_pdf_page_${doc.id}`, String(currentPage));
+  }, [currentPage, doc.id]);
+
+  // After a PDF finishes loading, jump to the last-read page (unless a specific
+  // page was requested via the initialPage prop, e.g. from an annotation link)
+  useEffect(() => {
+    if (!pdfDoc || numPages === 0 || hasRestoredPage.current) return;
+    hasRestoredPage.current = true;
+
+    const targetPage = initialPage && initialPage > 1
+      ? initialPage
+      : parseInt(localStorage.getItem(`apex_pdf_page_${doc.id}`) || '1', 10);
+
+    const clampedPage = Math.min(Math.max(1, targetPage), numPages);
+    if (clampedPage <= 1) return;
+
+    setCurrentPage(clampedPage);
+    // Delay scroll until the virtual pages have had a chance to render
+    setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTo({ top: (clampedPage - 1) * estimatedHeightPerPage, behavior: 'auto' });
+      }
+    }, 80);
+  }, [pdfDoc, numPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const jumpToPage = (targetPage: number, smooth = true) => {
     const page = Math.max(1, Math.min(numPages, targetPage));
@@ -796,6 +832,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       setLoading(false);
       return;
     }
+
+    hasRestoredPage.current = false;
 
     const loadPdf = async () => {
       setLoading(true);
