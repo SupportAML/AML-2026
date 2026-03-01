@@ -100,6 +100,7 @@ import {
    cleanupChronology,
    suggestReportEdit,
    chatWithLegalWriter,
+   stripHtmlForAI,
    searchMedicalResearch,
    analyzeReportForResearchGaps,
    insertSmartCitation,
@@ -1522,22 +1523,47 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       }
 
       const currentContent = reportContentRef.current || reportContent;
-      if (!currentContent.includes(suggestion.original)) {
-         alert("Could not locate the original excerpt in the document. Please try again.");
+
+      // Try direct match first (works when AI matched HTML exactly)
+      if (currentContent.includes(suggestion.original)) {
+         setUndoStack(prev => [...prev, currentContent].slice(-50));
+         setRedoStack([]);
+         const updated = currentContent.replace(suggestion.original, suggestion.proposed);
+         setReportContent(updated);
+         lastContentRef.current = updated;
+         setEditorHistory(prev => prev.map(item =>
+            item.suggestion?.id === suggestion.id
+               ? { ...item, text: "Change applied successfully.", suggestion: undefined }
+               : item
+         ));
          return;
       }
 
-      // Push current state to undo stack before applying suggestion
-      setUndoStack(prev => [...prev, currentContent].slice(-50));
-      setRedoStack([]);
-      const updated = currentContent.replace(suggestion.original, suggestion.proposed);
-      setReportContent(updated);
-      lastContentRef.current = updated;
-      setEditorHistory(prev => prev.map(item =>
-         item.suggestion?.id === suggestion.id
-            ? { ...item, text: "Change applied successfully.", suggestion: undefined }
-            : item
-      ));
+      // HTML-aware matching: the AI sees plain text but content is HTML.
+      // Build a regex that matches the plain text words while allowing HTML tags between them.
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const words = suggestion.original.trim().split(/\s+/);
+      if (words.length > 0) {
+         // Allow HTML tags and whitespace between each word
+         const pattern = words.map(w => escapeRegex(w)).join('(?:\\s|<[^>]*>)+');
+         const regex = new RegExp(pattern, 'i');
+         const match = currentContent.match(regex);
+         if (match) {
+            setUndoStack(prev => [...prev, currentContent].slice(-50));
+            setRedoStack([]);
+            const updated = currentContent.replace(match[0], suggestion.proposed);
+            setReportContent(updated);
+            lastContentRef.current = updated;
+            setEditorHistory(prev => prev.map(item =>
+               item.suggestion?.id === suggestion.id
+                  ? { ...item, text: "Change applied successfully.", suggestion: undefined }
+                  : item
+            ));
+            return;
+         }
+      }
+
+      alert("Could not locate the original excerpt in the document. The text may have been edited since the suggestion was made.");
    };
 
    const handleApplyAllSuggestions = () => {
@@ -1550,13 +1576,28 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          return;
       }
 
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
       let updated = reportContentRef.current || reportContent;
       const appliedIds = new Set<string>();
 
       for (const s of suggestions) {
+         // Try direct match first
          if (updated.includes(s.original)) {
             updated = updated.replace(s.original, s.proposed);
             appliedIds.add(s.id);
+         } else {
+            // HTML-aware regex matching
+            const words = s.original.trim().split(/\s+/);
+            if (words.length > 0) {
+               const pattern = words.map(w => escapeRegex(w)).join('(?:\\s|<[^>]*>)+');
+               const regex = new RegExp(pattern, 'i');
+               const match = updated.match(regex);
+               if (match) {
+                  updated = updated.replace(match[0], s.proposed);
+                  appliedIds.add(s.id);
+               }
+            }
          }
       }
 

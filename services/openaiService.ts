@@ -62,6 +62,34 @@ const getModelForTask = (taskType: 'simple' | 'complex' | 'critical'): string =>
 };
 
 // ========================================================================
+// HTML UTILITIES
+// ========================================================================
+
+/**
+ * Strips HTML tags and decodes entities to produce clean plain text.
+ * Used to convert contentEditable HTML to plain text before sending to AI.
+ */
+export const stripHtmlForAI = (html: string): string => {
+    if (!html) return '';
+    let text = html
+        // Convert block-level elements to newlines
+        .replace(/<\/?(p|div|br|h[1-6]|li|tr|blockquote|hr|pre)[^>]*>/gi, '\n')
+        // Remove all remaining tags
+        .replace(/<[^>]+>/g, '')
+        // Decode common HTML entities
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        // Collapse multiple newlines into double newlines
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    return text;
+};
+
+// ========================================================================
 // REPORT TEMPLATE RESOLUTION
 // ========================================================================
 
@@ -293,6 +321,7 @@ const callOpenAI = async (
         cache?: boolean;
         timeoutMs?: number;
         messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+        jsonMode?: boolean;
     } = {}
 ): Promise<string> => {
     const modelToUse = options.model || DEFAULT_OPENAI_MODEL;
@@ -315,12 +344,17 @@ const callOpenAI = async (
 
     const requestTimeoutMs = options.timeoutMs || REQUEST_TIMEOUT_MS;
 
-    const reqPromise = openai.chat.completions.create({
+    const createParams: any = {
         model: modelToUse,
         max_tokens: options.maxTokens || 4096,
         temperature: options.temperature ?? 0.7,
         messages
-    });
+    };
+    if (options.jsonMode) {
+        createParams.response_format = { type: 'json_object' };
+    }
+
+    const reqPromise = openai.chat.completions.create(createParams);
 
     const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('OpenAI request timed out')), requestTimeoutMs)
@@ -401,10 +435,11 @@ const callOpenAIJSON = async <T>(
         temperature?: number;
         cache?: boolean;
         timeoutMs?: number;
+        messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
     } = {}
 ): Promise<T> => {
-    const enhancedSystemPrompt = `${systemPrompt}\n\nYou MUST respond with valid JSON only. Do not include any text before or after the JSON object.`;
-    const response = await callOpenAI(enhancedSystemPrompt, userPrompt, options);
+    const enhancedSystemPrompt = `${systemPrompt}\n\nRespond with valid JSON.`;
+    const response = await callOpenAI(enhancedSystemPrompt, userPrompt, { ...options, jsonMode: true });
 
     let jsonText = String(response || '').trim();
     if (jsonText.startsWith('```json')) {
@@ -1099,7 +1134,8 @@ RULES:
 4) The revisedExcerpt should be an improved version of that excerpt only.
 5) If no changes are needed, return an empty suggestions array.`;
 
-    const userPrompt = `Report Content: ${content}\nInstruction: ${instruction}`;
+    const cleanContent = stripHtmlForAI(content);
+    const userPrompt = `Report Content: ${cleanContent}\nInstruction: ${instruction}`;
 
     try {
         return await callOpenAIJSON<{ suggestions: Array<{ originalExcerpt: string; revisedExcerpt: string; explanation: string }> }>(systemPrompt, userPrompt, {
@@ -1180,7 +1216,7 @@ ${annotationsSummary ? `**KEY ANNOTATIONS:**\n${annotationsSummary}` : ''}
 ${context.freehandNotes ? `**EXPERT'S FREEHAND NOTES:**\n${context.freehandNotes}` : ''}
 
 **CURRENT REPORT DRAFT:**
-${context.reportContent ? context.reportContent.substring(0, 15000) : 'No draft yet.'}
+${context.reportContent ? stripHtmlForAI(context.reportContent).substring(0, 15000) : 'No draft yet.'}
 
 ---
 
@@ -1223,8 +1259,8 @@ RULES:
             instruction,
             {
                 model: getModelForTask('critical'),
-                maxTokens: 4096,
-                timeoutMs: REQUEST_TIMEOUT_MS,
+                maxTokens: 8192,
+                timeoutMs: LONG_REQUEST_TIMEOUT_MS,
                 messages
             }
         );
