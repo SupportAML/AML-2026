@@ -1170,6 +1170,7 @@ export interface WriterChatContext {
 export interface WriterChatResponse {
     message: string;
     suggestions?: Array<{ originalExcerpt: string; revisedExcerpt: string; explanation: string }>;
+    rewrittenReport?: string;
     researchQuery?: string;
 }
 
@@ -1222,30 +1223,32 @@ ${context.reportContent ? stripHtmlForAI(context.reportContent).substring(0, 150
 
 YOUR CAPABILITIES:
 1. **Conversational responses**: Answer questions, brainstorm ideas, explain legal/medical concepts, suggest structure improvements, discuss strategy.
-2. **Targeted edits**: When the user asks you to change, fix, rewrite, or improve specific parts of the report, provide exact find-and-replace suggestions.
-3. **Research triggers**: When the user asks for research, citations, or evidence on a medical/legal topic, indicate that research is needed.
+2. **Targeted edits**: When the user asks to tweak, fix, or improve a specific sentence or paragraph, provide find-and-replace suggestions.
+3. **Direct rewrites**: When the user asks you to rewrite a section, reformat the report, add new sections, restructure, or make sweeping changes — rewrite the full report with those changes applied and return it in "rewrittenReport".
+4. **Research triggers**: When the user asks for research, citations, or evidence on a medical/legal topic, indicate that research is needed.
 
-RESPONSE FORMAT — You MUST respond with valid JSON:
+RESPONSE FORMAT — respond with valid JSON:
 {
-  "message": "Your conversational response here. Use markdown formatting. Be helpful, specific, and reference the case context when relevant.",
+  "message": "Your conversational response. Use markdown. Explain what you did or are suggesting.",
   "suggestions": [
     {
-      "originalExcerpt": "Exact text from the current report to replace (verbatim copy)",
-      "revisedExcerpt": "The improved replacement text",
-      "explanation": "Brief explanation of this change"
+      "originalExcerpt": "Exact text from the current report (verbatim)",
+      "revisedExcerpt": "The replacement text",
+      "explanation": "Brief explanation"
     }
   ],
-  "researchQuery": "medical/legal search query if research was requested, or null"
+  "rewrittenReport": "The complete updated report text with changes applied (markdown format)",
+  "researchQuery": "search query if research was requested, or null"
 }
 
 RULES:
-- "message" is ALWAYS required. Use it to explain your thinking, provide context, or answer the user's question.
-- "suggestions" is OPTIONAL. Only include it when the user explicitly asks for edits, rewrites, or improvements to specific report text. Each originalExcerpt must be a verbatim copy from the current report.
-- "researchQuery" is OPTIONAL. Include it only when the user asks for research, evidence, citations, or literature on a topic.
-- Be conversational and helpful. You are a collaborative writing partner, not just an editor.
-- Reference the timeline, annotations, and case facts when they are relevant to the user's question.
-- When suggesting edits, keep them focused and targeted. Don't rewrite the entire report.
-- When the user asks for new content to add (not replacing existing text), put the new content in "message" and explain where it should be inserted — do NOT use suggestions for purely new content that has no original text to replace.`;
+- "message" is ALWAYS required.
+- Use "suggestions" for SMALL, targeted changes (fixing a sentence, rephrasing a paragraph). Each originalExcerpt must be verbatim from the report.
+- Use "rewrittenReport" when the user asks to: rewrite a section, add new content, restructure the report, reformat the document, apply a change you can't express as a small find-and-replace, or when they say to put something directly into the report. Write the COMPLETE report in markdown with the requested changes applied. Do not truncate or summarize unchanged sections — include the full document.
+- Never use both "suggestions" and "rewrittenReport" in the same response. Pick whichever fits the scope of the request.
+- "researchQuery" is OPTIONAL. Include only when the user asks for research, evidence, or literature.
+- Be a collaborative writing partner. Reference the timeline, annotations, and case facts when relevant.
+- When in doubt about whether to use suggestions vs rewrittenReport, prefer rewrittenReport — it's more reliable and gives the user exactly what they asked for.`;
 
     // Convert conversation history to OpenAI message format
     const messages = conversationHistory.map(m => ({
@@ -1259,7 +1262,7 @@ RULES:
             instruction,
             {
                 model: getModelForTask('critical'),
-                maxTokens: 8192,
+                maxTokens: 16000,
                 timeoutMs: LONG_REQUEST_TIMEOUT_MS,
                 messages
             }
@@ -1268,6 +1271,7 @@ RULES:
         return {
             message: result.message || 'I wasn\'t able to generate a response. Please try rephrasing your request.',
             suggestions: result.suggestions?.filter(s => s.originalExcerpt && s.revisedExcerpt) || undefined,
+            rewrittenReport: result.rewrittenReport?.trim() || undefined,
             researchQuery: result.researchQuery || undefined
         };
     } catch (e) {

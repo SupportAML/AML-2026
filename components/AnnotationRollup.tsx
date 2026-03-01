@@ -1460,8 +1460,26 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          setEditorHistory(prev => [...prev, { role: 'model', text: result.message }]);
       }
 
-      // Add edit suggestions if any were returned
-      if (result.suggestions && result.suggestions.length > 0) {
+      // Handle direct report rewrite — apply immediately to the editor
+      if (result.rewrittenReport) {
+         const currentContent = reportContentRef.current || reportContent;
+         if (currentContent.trim()) {
+            setUndoStack(prev => [...prev, currentContent].slice(-50));
+            setRedoStack([]);
+         }
+         const html = parse(result.rewrittenReport) as string;
+         setReportContent(html);
+         lastContentRef.current = html;
+         setWriterContentKey(prev => prev + 1);
+         // Save immediately
+         try {
+            await onUpdateCase({ ...caseItemRef.current, reportContent: html });
+         } catch (err) {
+            console.error('Failed to save rewritten report:', err);
+         }
+      }
+      // Add edit suggestions if any were returned (only when no full rewrite)
+      else if (result.suggestions && result.suggestions.length > 0) {
          const suggestions = result.suggestions
             .filter(s => s.originalExcerpt && s.revisedExcerpt)
             .slice(0, 12)
