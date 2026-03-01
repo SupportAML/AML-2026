@@ -83,7 +83,8 @@ import {
    SlidersHorizontalIcon,
    TableIcon,
    GitMergeIcon,
-   ImageIcon
+   ImageIcon,
+   DownloadIcon
 } from 'lucide-react';
 import { Case, Document, Annotation, UserProfile, ChatMessage, ReportComment, Suggestion, StrategyAnalysis, StructuredChronology, DepoFeedback, ChronologyEvent, ResearchArticle, ResearchGap } from '../types';
 import { DepositionSimulation } from './DepositionSimulation';
@@ -1911,6 +1912,141 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       }
    };
 
+   const exportChronologyAsPDF = () => {
+      try {
+         if (!liveChronology || (liveChronology.years.length === 0 && liveChronology.irrelevantFacts.length === 0)) {
+            alert('No chronology data to export.');
+            return;
+         }
+
+         const fileName = `${caseItem.title.replace(/[^a-z0-9]/gi, '_')}_Chronology.pdf`;
+         trackExport('pdf', fileName);
+
+         // Build chronology HTML content organized by year/month
+         let bodyHtml = '';
+
+         // Title block
+         bodyHtml += `<h1>${caseItem.title}</h1>`;
+         bodyHtml += `<h2 style="text-align:center; font-size:13pt; margin-bottom:6pt;">Medical Chronology</h2>`;
+         bodyHtml += `<p style="text-align:center; font-size:10pt; color:#666; margin-bottom:24pt;">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>`;
+         bodyHtml += `<hr style="border:none; border-top:2px solid #000; margin-bottom:24pt;" />`;
+
+         // Summary counts
+         let totalDated = 0;
+         liveChronology.years.forEach(yr => yr.months.forEach(m => { totalDated += m.events.length; }));
+         const totalUndated = liveChronology.irrelevantFacts.length;
+         bodyHtml += `<p style="font-size:11pt; margin-bottom:18pt;"><strong>Total Events:</strong> ${totalDated + totalUndated} (${totalDated} dated, ${totalUndated} undated)</p>`;
+
+         // Dated events by year/month
+         liveChronology.years.forEach(yr => {
+            bodyHtml += `<h2 style="font-size:14pt; margin-top:24pt; margin-bottom:12pt; border-bottom:1px solid #ccc; padding-bottom:4pt;">${yr.year}</h2>`;
+
+            yr.months.forEach(m => {
+               bodyHtml += `<h3 style="font-size:12pt; margin-top:16pt; margin-bottom:8pt; color:#333;">${m.month} ${yr.year}</h3>`;
+
+               m.events.forEach(ev => {
+                  const ann = annotations.find(a => a.id === ev.id);
+                  const src = getEventSourceInfo(ev.id);
+                  const category = ann?.category || '';
+                  const displayDate = formatDisplayDate(ev.date) || ev.date;
+
+                  bodyHtml += `<div style="margin-bottom:12pt; padding-left:16pt; border-left:3px solid #4f46e5;">`;
+                  bodyHtml += `<p style="margin:0; line-height:1.6;"><strong>${displayDate}</strong>`;
+                  if (category) {
+                     bodyHtml += ` <span style="font-size:9pt; padding:1pt 6pt; border:1px solid #999; border-radius:3pt; margin-left:6pt;">${category}</span>`;
+                  }
+                  bodyHtml += `</p>`;
+                  bodyHtml += `<p style="margin:2pt 0 0 0; line-height:1.6;">${ev.formattedText}</p>`;
+                  if (src) {
+                     bodyHtml += `<p style="margin:2pt 0 0 0; font-size:9pt; color:#666;">Source: ${src.name} — Page ${src.page}</p>`;
+                  }
+                  bodyHtml += `</div>`;
+               });
+            });
+         });
+
+         // Undated events section
+         if (liveChronology.irrelevantFacts.length > 0) {
+            bodyHtml += `<h2 style="font-size:14pt; margin-top:30pt; margin-bottom:12pt; border-bottom:1px solid #ccc; padding-bottom:4pt;">Undated Events</h2>`;
+
+            liveChronology.irrelevantFacts.forEach(fact => {
+               const ann = annotations.find(a => a.id === fact.id);
+               const src = getEventSourceInfo(fact.id);
+               const category = ann?.category || '';
+
+               bodyHtml += `<div style="margin-bottom:12pt; padding-left:16pt; border-left:3px solid #d97706;">`;
+               if (category) {
+                  bodyHtml += `<p style="margin:0; line-height:1.6;"><span style="font-size:9pt; padding:1pt 6pt; border:1px solid #999; border-radius:3pt;">${category}</span></p>`;
+               }
+               bodyHtml += `<p style="margin:2pt 0 0 0; line-height:1.6;">${fact.formattedText}</p>`;
+               if (src) {
+                  bodyHtml += `<p style="margin:2pt 0 0 0; font-size:9pt; color:#666;">Source: ${src.name} — Page ${src.page}</p>`;
+               }
+               bodyHtml += `</div>`;
+            });
+         }
+
+         const printWindow = window.open('', '_blank');
+         if (!printWindow) {
+            alert('Please allow popups to export PDF');
+            return;
+         }
+
+         const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+   <meta charset="UTF-8">
+   <title>${caseItem.title} - Medical Chronology</title>
+   <style>
+      @page {
+         size: letter;
+         margin: 0;
+      }
+      body {
+         font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
+         font-size: 12pt;
+         line-height: 1.6;
+         color: #000;
+         margin: 1in;
+         padding: 0;
+         background: white;
+      }
+      h1, h2, h3 {
+         font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
+         font-weight: bold;
+         page-break-after: avoid;
+      }
+      h1 { font-size: 16pt; text-align: center; margin-bottom: 4pt; }
+      h2 { font-size: 13pt; }
+      h3 { font-size: 12pt; }
+      p {
+         margin: 0;
+         orphans: 3;
+         widows: 3;
+      }
+      div { page-break-inside: avoid; }
+   </style>
+</head>
+<body>
+   ${bodyHtml}
+   <script>
+      window.onload = () => {
+         window.print();
+         setTimeout(() => window.close(), 100);
+      };
+   </script>
+</body>
+</html>`;
+
+         printWindow.document.write(htmlContent);
+         printWindow.document.close();
+      } catch (error) {
+         console.error('Chronology PDF export error:', error);
+         alert('Failed to export chronology PDF. Please try again.');
+      }
+   };
+
    const handleRestoreVersion = async (version: any) => {
       if (window.confirm(`Restore this version from ${new Date(version.date).toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })}?`)) {
          try {
@@ -2343,7 +2479,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     {mergeMode ? 'Cancel Merge' : 'Merge'}
                                  </button>
                               )}
-                              {/* Organize button removed */}
+                              <button
+                                 onClick={exportChronologyAsPDF}
+                                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all bg-white text-slate-600 border border-slate-200 hover:border-indigo-300 hover:text-indigo-600"
+                                 title="Export chronology as PDF"
+                              >
+                                 <DownloadIcon className="w-3.5 h-3.5" />
+                                 Export PDF
+                              </button>
                            </div>
                         </div>
 
