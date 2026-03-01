@@ -309,7 +309,9 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       const sel = window.getSelection();
       if (sel && sel.rangeCount > 0 && !sel.isCollapsed && editableDivRef.current?.contains(sel.anchorNode)) {
          setSelectedEditorText(sel.toString().trim());
-      } else {
+      } else if (sel && sel.anchorNode && editableDivRef.current?.contains(sel.anchorNode)) {
+         // Only clear when the collapsed selection is inside the editor (user clicked within editor)
+         // Don't clear when focus moves to sidebar input
          setSelectedEditorText('');
       }
    }, []);
