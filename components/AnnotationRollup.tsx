@@ -94,12 +94,9 @@ import WriterCommentSidebar from './WriterCommentSidebar';
 import { SkeletonLoader } from './SkeletonLoader';
 import { VoiceInputButton } from './VoiceInputButton';
 import {
-   draftMedicalLegalReport,
-   draftMedicalLegalReportStream,
    runFullCaseStrategy,
    chatWithDepositionCoach,
    cleanupChronology,
-   suggestReportEdit,
    searchMedicalResearch,
    analyzeReportForResearchGaps,
    insertSmartCitation,
@@ -107,8 +104,15 @@ import {
    rewordClinicalNotes,
    extractHandwrittenNotesFromImage
 } from '../services/openaiService';
+import {
+   chatWithClaude,
+   generateReport,
+   suggestEdit,
+   buildCaseContext,
+   LegalChatMessage,
+   SuggestionItem
+} from '../services/claudeService';
 import { extractPdfTextForAnnotations } from '../services/pdfTextService';
-import LegalChat from './LegalChat';
 
 interface AnnotationRollupProps {
    caseItem: Case;
@@ -139,13 +143,6 @@ interface AnnotationRollupProps {
    currentUser: UserProfile;
 }
 
-interface EditorSuggestion {
-   id: string;
-   original: string;
-   proposed: string;
-   explanation: string;
-   diff: Diff.Change[];
-}
 
 
 export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
@@ -208,14 +205,15 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [commentInput, setCommentInput] = useState('');
    const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string } | null>(null);
 
-   // AI Editor State
-   const [editorHistory, setEditorHistory] = useState<{ role: 'user' | 'model', text: string, suggestion?: EditorSuggestion }[]>([]);
-   const [editorInput, setEditorInput] = useState('');
-
-   // Legal Chat (Claude) State
-   const [showLegalChat, setShowLegalChat] = useState(false);
-   const [legalChatPdfContext, setLegalChatPdfContext] = useState('');
-   const [editorViewMode, setEditorViewMode] = useState<'PREVIEW' | 'EDIT' | 'SPLIT'>('EDIT');
+   // Claude AI Sidebar State
+   const [sidebarMessages, setSidebarMessages] = useState<LegalChatMessage[]>([]);
+   const [sidebarInput, setSidebarInput] = useState('');
+   const [sidebarStreaming, setSidebarStreaming] = useState(false);
+   const [sidebarStreamText, setSidebarStreamText] = useState('');
+   const [sidebarSuggestions, setSidebarSuggestions] = useState<(SuggestionItem & { id: string; diff: Diff.Change[] })[]>([]);
+   const [selectedEditorText, setSelectedEditorText] = useState('');
+   const [sidebarPdfContext, setSidebarPdfContext] = useState('');
+   const sidebarScrollRef = useRef<HTMLDivElement>(null);
 
    // Preview Panel State
    const [previewSource, setPreviewSource] = useState<{ documentId: string, page: number, annotationId?: string } | null>(null);
@@ -303,16 +301,47 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const researchSearchRef = useRef<HTMLDivElement>(null);
 
    const handleQuickEdit = (prompt: string) => {
-      setEditorInput(prompt);
-      // We don't auto-submit so the user can see what's happening or add to it
+      setSidebarInput(prompt);
    };
+
+   // Track text selection from the editor for highlight-based rewriting
+   const trackEditorSelection = useCallback(() => {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed && editableDivRef.current?.contains(sel.anchorNode)) {
+         setSelectedEditorText(sel.toString().trim());
+      } else {
+         setSelectedEditorText('');
+      }
+   }, []);
+
+   useEffect(() => {
+      document.addEventListener('selectionchange', trackEditorSelection);
+      return () => document.removeEventListener('selectionchange', trackEditorSelection);
+   }, [trackEditorSelection]);
+
+   // Auto-scroll sidebar to bottom
+   useEffect(() => {
+      if (sidebarScrollRef.current) {
+         sidebarScrollRef.current.scrollTop = sidebarScrollRef.current.scrollHeight;
+      }
+   }, [sidebarMessages, sidebarStreamText, sidebarSuggestions]);
+
+   // Load sidebar PDF context once
+   useEffect(() => {
+      if (!sidebarPdfContext && annotations.length > 0) {
+         extractPdfTextForAnnotations(docs, annotations, {
+            perPageCharLimit: 1500,
+            totalCharLimit: 12000
+         }).then(ctx => setSidebarPdfContext(ctx)).catch(() => {});
+      }
+   }, [annotations.length]);
 
    // Research State
    const [researchQuery, setResearchQuery] = useState('');
    // Research State - Initialize from case data if available
    const [researchResults, setResearchResults] = useState<ResearchArticle[]>(caseItem.researchResults || []);
    const [researchGaps, setResearchGaps] = useState<{ topic: string; reason: string }[]>(caseItem.researchGaps || []);
-   const [activeCitationProposal, setActiveCitationProposal] = useState<EditorSuggestion | null>(null);
+   const [activeCitationProposal, setActiveCitationProposal] = useState<{ id: string; original: string; proposed: string; explanation: string; diff: Diff.Change[] } | null>(null);
 
 
 
@@ -1427,106 +1456,218 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       alert("Citation copied to clipboard");
    };
 
-   // --- Handlers: Writer (AI Editor) ---
-   const handleEditorSubmit = async (e: React.FormEvent) => {
+   // --- Handlers: Writer (Claude AI Sidebar) ---
+   const handleSidebarSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!editorInput.trim()) return;
+      const userText = sidebarInput.trim();
+      if (!userText || sidebarStreaming) return;
 
-      const userText = editorInput;
-      setEditorInput('');
-      setEditorHistory(prev => [...prev, { role: 'user', text: userText }]);
-      setIsGenerating(true);
+      // If text is selected in editor, route to structured suggestions
+      if (selectedEditorText) {
+         setSidebarInput('');
+         setSidebarStreaming(true);
+         const userMsg: LegalChatMessage = {
+            id: Date.now().toString(),
+            role: 'user',
+            content: `[Selection: "${selectedEditorText.slice(0, 80)}${selectedEditorText.length > 80 ? '...' : ''}"]\n${userText}`,
+            timestamp: Date.now(),
+         };
+         setSidebarMessages(prev => [...prev, userMsg]);
 
-      const result = await suggestReportEdit(reportContent, userText);
-      const suggestions = (result.suggestions || [])
-         .filter(s => s.originalExcerpt && s.revisedExcerpt)
-         .slice(0, 12)
-         .map((s, idx) => {
-            const diff = Diff.diffWords(s.originalExcerpt, s.revisedExcerpt);
-            const suggestion: EditorSuggestion = {
-               id: `${Date.now()}_${idx}`,
-               original: s.originalExcerpt,
-               proposed: s.revisedExcerpt,
-               explanation: s.explanation || 'Suggested edit',
-               diff
+         try {
+            const result = await suggestEdit(selectedEditorText, userText, true);
+            const suggestions = (result.suggestions || [])
+               .filter(s => s.original && s.suggested)
+               .slice(0, 6)
+               .map((s, idx) => ({
+                  ...s,
+                  id: `${Date.now()}_${idx}`,
+                  diff: Diff.diffWords(s.original, s.suggested),
+               }));
+            setSidebarSuggestions(suggestions);
+
+            const assistantMsg: LegalChatMessage = {
+               id: (Date.now() + 1).toString(),
+               role: 'assistant',
+               content: suggestions.length > 0
+                  ? `Found ${suggestions.length} suggested edit${suggestions.length > 1 ? 's' : ''} for your selection.`
+                  : 'No edits suggested for this selection.',
+               timestamp: Date.now(),
             };
-            return suggestion;
-         });
-
-      if (suggestions.length === 0) {
-         setEditorHistory(prev => [...prev, { role: 'model', text: "No edits suggested for this request." }]);
-      } else {
-         const cards = suggestions.map((s, i) => ({
-            role: 'model' as const,
-            text: i === 0 ? `Suggested ${suggestions.length} targeted edits:` : s.explanation,
-            suggestion: s
-         }));
-         setEditorHistory(prev => [...prev, ...cards]);
-      }
-      setIsGenerating(false);
-   };
-
-  const handleApplySuggestion = (suggestion: EditorSuggestion) => {
-      if (!suggestion.original.trim() || !suggestion.proposed.trim()) {
-         alert("No valid excerpt to apply.");
+            setSidebarMessages(prev => [...prev, assistantMsg]);
+         } catch (err: any) {
+            const errMsg: LegalChatMessage = {
+               id: (Date.now() + 1).toString(),
+               role: 'assistant',
+               content: `Error: ${err.message || 'Failed to get suggestions.'}`,
+               timestamp: Date.now(),
+            };
+            setSidebarMessages(prev => [...prev, errMsg]);
+         } finally {
+            setSidebarStreaming(false);
+         }
          return;
       }
 
+      // No selection — route to full-document suggestions if it looks like an edit instruction
+      const isEditRequest = /\b(make|rewrite|rephrase|improve|fix|change|revise|edit|authoritative|concise|critique|summarize|shorten|expand)\b/i.test(userText);
+
+      if (isEditRequest && reportContent.trim()) {
+         setSidebarInput('');
+         setSidebarStreaming(true);
+         const userMsg: LegalChatMessage = {
+            id: Date.now().toString(),
+            role: 'user',
+            content: userText,
+            timestamp: Date.now(),
+         };
+         setSidebarMessages(prev => [...prev, userMsg]);
+
+         try {
+            const result = await suggestEdit(reportContent, userText, false);
+            const suggestions = (result.suggestions || [])
+               .filter(s => s.original && s.suggested)
+               .slice(0, 8)
+               .map((s, idx) => ({
+                  ...s,
+                  id: `${Date.now()}_${idx}`,
+                  diff: Diff.diffWords(s.original, s.suggested),
+               }));
+            setSidebarSuggestions(suggestions);
+
+            const assistantMsg: LegalChatMessage = {
+               id: (Date.now() + 1).toString(),
+               role: 'assistant',
+               content: suggestions.length > 0
+                  ? `Found ${suggestions.length} suggested edit${suggestions.length > 1 ? 's' : ''} across the document.`
+                  : 'No edits suggested for this request.',
+               timestamp: Date.now(),
+            };
+            setSidebarMessages(prev => [...prev, assistantMsg]);
+         } catch (err: any) {
+            const errMsg: LegalChatMessage = {
+               id: (Date.now() + 1).toString(),
+               role: 'assistant',
+               content: `Error: ${err.message || 'Failed to get suggestions.'}`,
+               timestamp: Date.now(),
+            };
+            setSidebarMessages(prev => [...prev, errMsg]);
+         } finally {
+            setSidebarStreaming(false);
+         }
+         return;
+      }
+
+      // General chat — conversation with Claude (streaming)
+      setSidebarInput('');
+      setSidebarStreaming(true);
+      setSidebarStreamText('');
+      const userMsg: LegalChatMessage = {
+         id: Date.now().toString(),
+         role: 'user',
+         content: userText,
+         timestamp: Date.now(),
+      };
+      const updatedMessages = [...sidebarMessages, userMsg];
+      setSidebarMessages(updatedMessages);
+
+      try {
+         const caseContext = buildCaseContext(
+            caseItem,
+            docs,
+            annotations,
+            sidebarPdfContext,
+            currentUser,
+            reportContentRef.current
+         );
+
+         const fullResponse = await chatWithClaude(
+            updatedMessages,
+            caseContext,
+            (accumulated) => setSidebarStreamText(accumulated)
+         );
+
+         const assistantMsg: LegalChatMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: fullResponse,
+            timestamp: Date.now(),
+         };
+         const finalMessages = [...updatedMessages, assistantMsg];
+         setSidebarMessages(finalMessages);
+         setSidebarStreamText('');
+
+         // Persist to case
+         onUpdateCase({
+            ...caseItemRef.current,
+            legalChatHistory: finalMessages.slice(-50),
+         });
+      } catch (err: any) {
+         const errMsg: LegalChatMessage = {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            content: `Error: ${err.message || 'Failed to get response from Claude.'}`,
+            timestamp: Date.now(),
+         };
+         setSidebarMessages(prev => [...prev, errMsg]);
+      } finally {
+         setSidebarStreaming(false);
+      }
+   };
+
+   const handleAcceptSuggestion = (suggestion: SuggestionItem & { id: string }) => {
       const currentContent = reportContentRef.current || reportContent;
       if (!currentContent.includes(suggestion.original)) {
-         alert("Could not locate the original excerpt in the document. Please try again.");
+         alert("Could not locate the original excerpt in the document.");
          return;
       }
-
-      // Push current state to undo stack before applying suggestion
       setUndoStack(prev => [...prev, currentContent].slice(-50));
       setRedoStack([]);
-      const updated = currentContent.replace(suggestion.original, suggestion.proposed);
+      const updated = currentContent.replace(suggestion.original, suggestion.suggested);
       setReportContent(updated);
       lastContentRef.current = updated;
-      setEditorHistory(prev => prev.map(item =>
-         item.suggestion?.id === suggestion.id
-            ? { ...item, text: "Change applied successfully.", suggestion: undefined }
-            : item
-      ));
+      setWriterContentKey(prev => prev + 1);
+      setSidebarSuggestions(prev => prev.filter(s => s.id !== suggestion.id));
    };
 
-   const handleApplyAllSuggestions = () => {
-      const suggestions = editorHistory
-         .map(m => m.suggestion)
-         .filter((s): s is EditorSuggestion => !!s);
+   const handleRejectSuggestion = (id: string) => {
+      setSidebarSuggestions(prev => prev.filter(s => s.id !== id));
+   };
 
-      if (suggestions.length === 0) {
-         alert("No suggestions to apply.");
-         return;
-      }
-
+   const handleAcceptAllSuggestions = () => {
+      if (sidebarSuggestions.length === 0) return;
       let updated = reportContentRef.current || reportContent;
-      const appliedIds = new Set<string>();
-
-      for (const s of suggestions) {
-         if (updated.includes(s.original)) {
-            updated = updated.replace(s.original, s.proposed);
-            appliedIds.add(s.id);
-         }
-      }
-
-      if (appliedIds.size === 0) {
-         alert("No matching excerpts found in the document.");
-         return;
-      }
-
       setUndoStack(prev => [...prev, updated].slice(-50));
       setRedoStack([]);
+      for (const s of sidebarSuggestions) {
+         if (updated.includes(s.original)) {
+            updated = updated.replace(s.original, s.suggested);
+         }
+      }
       setReportContent(updated);
       lastContentRef.current = updated;
+      setWriterContentKey(prev => prev + 1);
+      setSidebarSuggestions([]);
+   };
 
-      setEditorHistory(prev => prev.map(item => {
-         if (item.suggestion && appliedIds.has(item.suggestion.id)) {
-            return { ...item, text: "Change applied successfully.", suggestion: undefined };
-         }
-         return item;
-      }));
+   const handleInsertFromChat = (markdownContent: string) => {
+      const html = parse(markdownContent) as string;
+      const currentContent = reportContentRef.current || reportContent;
+      setUndoStack(prev => [...prev, currentContent].slice(-50));
+      setRedoStack([]);
+      const updatedHtml = currentContent + html;
+      setReportContent(updatedHtml);
+      lastContentRef.current = updatedHtml;
+      setWriterContentKey(prev => prev + 1);
+      onUpdateCase({ ...caseItemRef.current, reportContent: updatedHtml });
+   };
+
+   const handleClearSidebar = () => {
+      if (!confirm('Clear all chat history?')) return;
+      setSidebarMessages([]);
+      setSidebarSuggestions([]);
+      setSidebarStreamText('');
+      onUpdateCase({ ...caseItemRef.current, legalChatHistory: [] });
    };
 
    // --- Handlers: Writer (Comments) ---
@@ -3521,27 +3662,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               {reportContent ? 'Regenerate Draft' : 'Generate Draft'}
                            </button>
 
-                           <button
-                              onClick={async () => {
-                                 // Pre-extract PDF context for the chat session
-                                 if (!legalChatPdfContext) {
-                                    try {
-                                       const ctx = await extractPdfTextForAnnotations(docs, annotations, {
-                                          perPageCharLimit: 1500,
-                                          totalCharLimit: 12000
-                                       });
-                                       setLegalChatPdfContext(ctx);
-                                    } catch (err) {
-                                       console.warn('PDF text extraction failed for chat:', err);
-                                    }
-                                 }
-                                 setShowLegalChat(true);
-                              }}
-                              className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all"
-                           >
-                              <SparklesIcon className="w-4 h-4" />
-                              Chat with Claude
-                           </button>
 
                            {/* Save Version Button - Explicitly saves current version to history */}
                            <button
@@ -3741,150 +3861,195 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            />
                         )}
 
-                        {/* MODE: AI ASSISTANT */}
+                        {/* MODE: AI ASSISTANT (Claude) */}
                         {writerSidebarMode === 'AI' && (
-                           <>
-                              <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 text-center">
-                                 <BrainCircuitIcon className="w-6 h-6 text-emerald-500 mx-auto mb-1" />
-                                 <p className="text-xs text-emerald-800 font-bold">AI Editing Partner</p>
-                                 <p className="text-[10px] text-emerald-600">I can rewrite, rephrase, or critique your draft.</p>
-                              </div>
-                              <button
-                                 onClick={handleApplyAllSuggestions}
-                                 disabled={!editorHistory.some(m => m.suggestion)}
-                                 className="w-full bg-emerald-700 text-white py-2 rounded-lg text-xs font-bold hover:bg-emerald-800 disabled:opacity-50 shadow-sm"
-                              >
-                                 Apply All Changes
-                              </button>
-
-                              {editorHistory.map((msg, idx) => (
-                                 <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                                    {msg.role === 'user' ? (
-                                       <div className="bg-emerald-600 text-white px-3 py-2 rounded-2xl rounded-br-none text-xs max-w-[90%] mb-2">
-                                          {msg.text}
-                                       </div>
-                                    ) : (
-                                       <div className="w-full mb-4">
-                                          {/* Suggestion Card */}
-                                          {msg.suggestion ? (
-                                             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden w-full">
-                                                <div className="bg-slate-50 p-2 border-b border-slate-100 flex justify-between items-center">
-                                                   <span className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Proposed Change</span>
-                                                   <span className="text-[10px] font-bold text-emerald-600">{msg.suggestion.explanation}</span>
-                                                </div>
-                                                <div className="p-3 text-[10px] font-mono bg-slate-50/50 max-h-60 overflow-y-auto">
-                                                   {msg.suggestion.diff.map((part, i) => (
-                                                      <span
-                                                         key={i}
-                                                         className={
-                                                            part.added ? 'bg-green-100 text-green-800 decoration-clone' :
-                                                               part.removed ? 'bg-red-100 text-red-800 line-through decoration-clone' : 'text-slate-500'
-                                                         }
-                                                      >
-                                                         {part.value}
-                                                      </span>
-                                                   ))}
-                                                </div>
-                                                <div className="p-2 border-t border-slate-100 flex gap-2">
-                                                   <button
-                                                      onClick={() => handleApplySuggestion(msg.suggestion!)}
-                                                      className="flex-1 bg-emerald-600 text-white py-1.5 rounded-lg text-xs font-bold hover:bg-emerald-700 flex items-center justify-center gap-2"
-                                                   >
-                                                      <CheckIcon className="w-3 h-3" /> Approve
-                                                   </button>
-                                                </div>
-                                             </div>
-                                          ) : (
-                                             <div className="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-2xl rounded-bl-none text-xs shadow-sm">
-                                                {msg.text}
-                                             </div>
-                                          )}
-                                       </div>
+                           <div className="flex flex-col h-full -m-4">
+                              {/* Sidebar Header */}
+                              <div className="px-4 py-3 border-b border-slate-200 bg-violet-50/60 flex items-center justify-between shrink-0">
+                                 <div className="flex items-center gap-2">
+                                    <SparklesIcon className="w-4 h-4 text-violet-500" />
+                                    <span className="text-xs font-bold text-violet-800">Claude AI</span>
+                                 </div>
+                                 <div className="flex items-center gap-1">
+                                    {selectedEditorText && (
+                                       <span className="text-[9px] font-bold text-violet-600 bg-violet-100 px-2 py-0.5 rounded-full">
+                                          Selection active
+                                       </span>
+                                    )}
+                                    {sidebarMessages.length > 0 && (
+                                       <button onClick={handleClearSidebar} className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors" title="Clear chat">
+                                          <Trash2Icon className="w-3.5 h-3.5" />
+                                       </button>
                                     )}
                                  </div>
-                              ))}
+                              </div>
 
-                              {isGenerating && (
-                                 <div className="flex items-center gap-2 text-slate-400 text-xs">
-                                    <Loader2Icon className="w-3 h-3 animate-spin" /> Thinking...
-                                 </div>
-                              )}
+                              {/* Scrollable Messages + Suggestions */}
+                              <div ref={sidebarScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ scrollBehavior: 'smooth' }}>
+                                 {/* Empty state */}
+                                 {sidebarMessages.length === 0 && sidebarSuggestions.length === 0 && !sidebarStreaming && (
+                                    <div className="text-center py-6">
+                                       <SparklesIcon className="w-8 h-8 text-violet-300 mx-auto mb-2" />
+                                       <p className="text-xs text-slate-500 font-medium mb-1">Ask Claude anything about your case</p>
+                                       <p className="text-[10px] text-slate-400">Select text in the editor for focused rewriting</p>
+                                    </div>
+                                 )}
 
-                              {/* AI Input Area */}
-                              <div className="pt-2 sticky bottom-0 bg-slate-50 space-y-3">
-                                 <div className="flex flex-wrap gap-2 px-1">
+                                 {/* Chat messages */}
+                                 {sidebarMessages.map((msg) => (
+                                    <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                       {msg.role === 'user' ? (
+                                          <div className="bg-violet-600 text-white px-3 py-2 rounded-2xl rounded-br-none text-xs max-w-[90%]">
+                                             {msg.content}
+                                          </div>
+                                       ) : (
+                                          <div className="w-full">
+                                             <div className="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-2xl rounded-bl-none text-xs shadow-sm prose prose-sm prose-slate max-w-none prose-p:my-1 prose-li:my-0"
+                                                dangerouslySetInnerHTML={{ __html: parse(msg.content) as string }}
+                                             />
+                                             {!msg.content.startsWith('Error:') && !msg.content.startsWith('Found ') && (
+                                                <div className="flex items-center gap-1 mt-1 ml-1">
+                                                   <button
+                                                      onClick={() => navigator.clipboard.writeText(msg.content)}
+                                                      className="text-[9px] font-bold text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                                                   >
+                                                      Copy
+                                                   </button>
+                                                   <button
+                                                      onClick={() => handleInsertFromChat(msg.content)}
+                                                      className="text-[9px] font-bold text-emerald-500 hover:text-emerald-700 px-1.5 py-0.5 rounded hover:bg-emerald-50 transition-colors"
+                                                   >
+                                                      Insert
+                                                   </button>
+                                                </div>
+                                             )}
+                                          </div>
+                                       )}
+                                    </div>
+                                 ))}
+
+                                 {/* Streaming text */}
+                                 {sidebarStreaming && sidebarStreamText && (
+                                    <div className="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-2xl rounded-bl-none text-xs shadow-sm prose prose-sm prose-slate max-w-none prose-p:my-1"
+                                       dangerouslySetInnerHTML={{ __html: parse(sidebarStreamText) as string }}
+                                    />
+                                 )}
+
+                                 {/* Loading indicator */}
+                                 {sidebarStreaming && !sidebarStreamText && (
+                                    <div className="flex items-center gap-2 text-slate-400 text-xs py-2">
+                                       <Loader2Icon className="w-3 h-3 animate-spin" /> Claude is thinking...
+                                    </div>
+                                 )}
+
+                                 {/* Suggestion Cards (Accept / Reject) */}
+                                 {sidebarSuggestions.length > 0 && (
+                                    <div className="space-y-3 pt-2">
+                                       <div className="flex items-center justify-between">
+                                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                                             {sidebarSuggestions.length} Suggested Edit{sidebarSuggestions.length > 1 ? 's' : ''}
+                                          </span>
+                                          {sidebarSuggestions.length > 1 && (
+                                             <button
+                                                onClick={handleAcceptAllSuggestions}
+                                                className="text-[10px] font-bold text-emerald-600 hover:text-emerald-800 px-2 py-0.5 rounded hover:bg-emerald-50 transition-colors"
+                                             >
+                                                Accept All
+                                             </button>
+                                          )}
+                                       </div>
+                                       {sidebarSuggestions.map((s) => (
+                                          <div key={s.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                             <div className="bg-slate-50 px-3 py-1.5 border-b border-slate-100">
+                                                <span className="text-[10px] font-bold text-slate-600">{s.reason}</span>
+                                             </div>
+                                             <div className="p-2.5 text-[10px] font-mono bg-slate-50/50 max-h-48 overflow-y-auto leading-relaxed">
+                                                {s.diff.map((part, i) => (
+                                                   <span
+                                                      key={i}
+                                                      className={
+                                                         part.added ? 'bg-green-100 text-green-800' :
+                                                            part.removed ? 'bg-red-100 text-red-800 line-through' : 'text-slate-500'
+                                                      }
+                                                   >
+                                                      {part.value}
+                                                   </span>
+                                                ))}
+                                             </div>
+                                             <div className="p-2 border-t border-slate-100 flex gap-2">
+                                                <button
+                                                   onClick={() => handleAcceptSuggestion(s)}
+                                                   className="flex-1 bg-emerald-600 text-white py-1.5 rounded-lg text-[10px] font-bold hover:bg-emerald-700 flex items-center justify-center gap-1"
+                                                >
+                                                   <CheckIcon className="w-3 h-3" /> Accept
+                                                </button>
+                                                <button
+                                                   onClick={() => handleRejectSuggestion(s.id)}
+                                                   className="flex-1 bg-white text-slate-500 py-1.5 rounded-lg text-[10px] font-bold hover:bg-red-50 hover:text-red-600 border border-slate-200 flex items-center justify-center gap-1"
+                                                >
+                                                   <XIcon className="w-3 h-3" /> Reject
+                                                </button>
+                                             </div>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 )}
+                              </div>
+
+                              {/* Input Area (pinned to bottom) */}
+                              <div className="shrink-0 border-t border-slate-200 bg-white p-3 space-y-2">
+                                 {/* Selection indicator */}
+                                 {selectedEditorText && (
+                                    <div className="flex items-center gap-2 px-2 py-1.5 bg-violet-50 border border-violet-200 rounded-lg">
+                                       <Edit3Icon className="w-3 h-3 text-violet-500 shrink-0" />
+                                       <span className="text-[10px] text-violet-700 font-medium truncate">
+                                          Editing: "{selectedEditorText.slice(0, 60)}{selectedEditorText.length > 60 ? '...' : ''}"
+                                       </span>
+                                    </div>
+                                 )}
+
+                                 {/* Quick edit chips */}
+                                 <div className="flex flex-wrap gap-1.5">
                                     {[
                                        { label: 'Authoritative', prompt: 'Make the tone more authoritative and expert-driven.' },
-                                       { label: 'Concise', prompt: 'Make this section more concise and clinically direct.' },
-                                       { label: 'Critique', prompt: 'Critique this draft for any clinical inconsistencies or weak logic.' },
-                                       { label: 'Summarize', prompt: 'Summarize the core clinical findings in this section.' }
+                                       { label: 'Concise', prompt: 'Make this more concise and clinically direct.' },
+                                       { label: 'Critique', prompt: 'Critique for clinical inconsistencies or weak logic.' },
+                                       { label: 'Expand', prompt: 'Expand with deeper clinical reasoning and analysis.' }
                                     ].map(chip => (
                                        <button
                                           key={chip.label}
                                           onClick={() => handleQuickEdit(chip.prompt)}
-                                          className="text-[10px] font-bold px-2.5 py-1 bg-white border border-slate-200 rounded-full text-slate-500 hover:border-emerald-500 hover:text-emerald-600 transition-all shadow-sm"
+                                          className="text-[10px] font-bold px-2 py-0.5 bg-white border border-slate-200 rounded-full text-slate-500 hover:border-violet-400 hover:text-violet-600 transition-all shadow-sm"
                                        >
                                           {chip.label}
                                        </button>
                                     ))}
                                  </div>
-                                 <form onSubmit={handleEditorSubmit} className="relative">
+
+                                 {/* Input */}
+                                 <form onSubmit={handleSidebarSubmit} className="relative">
                                     <input
-                                       className="w-full pl-3 pr-10 py-3 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm"
-                                       placeholder="e.g. 'Make tone more authoritative'"
-                                       value={editorInput}
-                                       onChange={(e) => setEditorInput(e.target.value)}
-                                       disabled={isGenerating}
+                                       className="w-full pl-3 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all shadow-sm"
+                                       placeholder={selectedEditorText ? "Describe how to rewrite the selection..." : "Ask Claude or describe an edit..."}
+                                       value={sidebarInput}
+                                       onChange={(e) => setSidebarInput(e.target.value)}
+                                       disabled={sidebarStreaming}
                                     />
                                     <button
                                        type="submit"
-                                       disabled={!editorInput.trim() || isGenerating}
-                                       className="absolute right-1.5 top-1/2 -translate-y-1/2 p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
+                                       disabled={!sidebarInput.trim() || sidebarStreaming}
+                                       className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 shadow-sm"
                                     >
-                                       <ArrowRightIcon className="w-4 h-4" />
+                                       <ArrowRightIcon className="w-3.5 h-3.5" />
                                     </button>
                                  </form>
                               </div>
-                           </>
+                           </div>
                         )}
                      </div>
                   </div>
 
                   {/* Template Selector Modal */}
-                  {/* Legal Chat Panel (Claude) */}
-                  {showLegalChat && (
-                     <LegalChat
-                        caseItem={caseItem}
-                        docs={docs}
-                        annotations={annotations}
-                        currentUser={currentUser}
-                        pdfTextContext={legalChatPdfContext}
-                        reportContent={reportContentRef.current}
-                        onInsertIntoDraft={(html) => {
-                           if (editableDivRef.current) {
-                              setUndoStack(prev => [...prev, reportContentRef.current].slice(-50));
-                              setRedoStack([]);
-                              const currentHtml = editableDivRef.current.innerHTML;
-                              const updatedHtml = currentHtml + html;
-                              setReportContent(updatedHtml);
-                              lastContentRef.current = updatedHtml;
-                              setWriterContentKey(prev => prev + 1);
-                              onUpdateCase({ ...caseItemRef.current, reportContent: updatedHtml });
-                           }
-                        }}
-                        onReplaceDraft={(html) => {
-                           setUndoStack(prev => [...prev, reportContentRef.current].slice(-50));
-                           setRedoStack([]);
-                           setReportContent(html);
-                           lastContentRef.current = html;
-                           setWriterContentKey(prev => prev + 1);
-                           onUpdateCase({ ...caseItemRef.current, reportContent: html });
-                        }}
-                        onUpdateCase={onUpdateCase}
-                        onClose={() => setShowLegalChat(false)}
-                     />
-                  )}
-
                   {showTemplateSelector && (
                      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
                         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -3909,7 +4074,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     onClick={() => {
                                        setSelectedTemplate(tpl.id);
                                        setShowTemplateSelector(false);
-                                       // Trigger generation
+                                       // Trigger generation via Anthropic
                                           setTimeout(async () => {
                                             setIsGenerating(true);
                                             try {
@@ -3926,23 +4091,24 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                } catch (err) {
                                                   console.warn('PDF text extraction failed:', err);
                                                }
-                                               const expertLabel = currentUser.name
-                                                  ? `${currentUser.name}${currentUser.qualifications ? `, ${currentUser.qualifications}` : ''}`
-                                                  : (currentUser.qualifications || '');
                                                const commentsText = (caseItem.reportComments || [])
                                                   .map(c => `- ${c.author}: ${c.text}${c.context ? ` (Context: ${c.context})` : ''}`)
                                                   .join('\n');
-                                               const generatedReport = await draftMedicalLegalReportStream(
-                                                  { ...caseItem, reportTemplate: tpl.id },
+
+                                               const caseContext = buildCaseContext(
+                                                  caseItem,
                                                   docs,
                                                   annotations,
                                                   pdfTextContext,
-                                                  commentsText,
-                                                  additionalContext,
-                                                  expertLabel,
+                                                  currentUser,
+                                                  '',
+                                                  commentsText
+                                               );
+
+                                               const generatedReport = await generateReport(
+                                                  caseContext,
+                                                  tpl.id,
                                                   (chunk) => {
-                                                     // Parse markdown chunk to HTML for live preview
-                                                     // This ensures we always store HTML in state, matching the contentEditable behavior
                                                    const html = parse(chunk) as string;
                                                    setReportContent(html);
                                                    lastContentRef.current = html;
@@ -3951,7 +4117,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                              const html = parse(generatedReport) as string;
 
                                              // CRITICAL: Save immediately to prevent data loss if user switches tabs
-                                             // Only save the reportContent, don't auto-create a version
                                              await onUpdateCase({ ...caseItemRef.current, reportContent: html });
 
                                              setReportContent(html);
