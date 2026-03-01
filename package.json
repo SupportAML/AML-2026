@@ -27,6 +27,7 @@
     "react-dom": "^19.2.3"
   },
   "devDependencies": {
+    "@originjs/vite-plugin-commonjs": "^1.0.3",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "rollup-plugin-visualizer": "^6.0.5",

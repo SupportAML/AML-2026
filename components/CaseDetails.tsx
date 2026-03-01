@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, lazy, Suspense } from 'react';
 import {
   FileTextIcon,
   UploadIcon,
@@ -28,9 +28,24 @@ import {
   FileIcon,
   ScanIcon,
   DollarSignIcon,
-  AlertTriangleIcon
+  AlertTriangleIcon,
+  Loader2Icon
 } from 'lucide-react';
 import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
+
+const DicomViewerComponent = lazy(() => import('./DicomViewer'));
+const DicomViewerLazy = () => (
+  <Suspense fallback={<div className="flex items-center justify-center py-12 text-slate-400 text-sm">Loading DICOM viewer...</div>}>
+    <DicomViewerComponent />
+  </Suspense>
+);
+
+const Cornerstone3DViewerComponent = lazy(() => import('./Cornerstone3DViewer'));
+const Cornerstone3DViewerLazy = () => (
+  <Suspense fallback={<div className="flex items-center justify-center py-12 bg-slate-900 rounded-2xl"><Loader2Icon className="w-8 h-8 text-emerald-400 animate-spin" /></div>}>
+    <Cornerstone3DViewerComponent />
+  </Suspense>
+);
 
 interface CaseDetailsProps {
   caseItem: Case;
@@ -41,9 +56,6 @@ interface CaseDetailsProps {
   onRemoveUser: (caseId: string, userId: string) => void;
   onOpenDoc: (doc: Document) => void;
   onUpload: (caseId: string, file: File) => void;
-  onUploadDicom: (caseId: string, files: File[]) => void;
-  isDriveLinked: boolean;
-  onRequestDriveAuth: () => Promise<boolean>;
   onUploadFolder: (caseId: string, files: FileList | File[]) => void;
   onUpdateCase: (updatedCase: Case) => Promise<void> | void;
   onDeleteDoc: (docId: string) => void;
@@ -270,12 +282,11 @@ const FileTreeItem: React.FC<{
 };
 
 const CaseDetails: React.FC<CaseDetailsProps> = ({
-  caseItem, docs, onOpenDoc, onUpload, onUploadDicom, isDriveLinked, onRequestDriveAuth, onUploadFolder, onUpdateCase, onDeleteDoc,
+  caseItem, docs, onOpenDoc, onUpload, onUploadFolder, onUpdateCase, onDeleteDoc,
   currentUser, allUsers, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const dicomInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const el = folderInputRef.current;
     if (el) el.setAttribute('webkitdirectory', '');
@@ -1193,43 +1204,11 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             <FolderPlusIcon className="w-4 h-4" />
             New Folder
           </button>
-          <button
-            onClick={async () => {
-              if (!isDriveLinked) {
-                // First click: link Google Drive (auth popup)
-                await onRequestDriveAuth();
-                // After auth, button text changes to "Upload DICOM" — user clicks again to pick files
-                return;
-              }
-              // Already linked: open file picker directly
-              dicomInputRef.current?.click();
-            }}
-            title="DICOM files (CT/MRI/X-ray) are stored on your Google Drive. You will be prompted to link your Google account on first upload."
-            className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg shadow-cyan-100"
-          >
-            <ScanIcon className="w-4 h-4" />
-            {isDriveLinked ? 'Upload DICOM' : 'Link Drive & Upload DICOM'}
-          </button>
           <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" multiple />
           <input
             type="file"
             ref={folderInputRef}
             onChange={handleFolderChange}
-            className="hidden"
-            multiple
-          />
-          <input
-            type="file"
-            ref={dicomInputRef}
-            accept=".dcm,.dicom,.nii,.nii.gz,*/*"
-            onChange={(e) => {
-              const files = e.target.files;
-              if (files && files.length > 0) {
-                // All files from the DICOM button go directly to user's Google Drive
-                onUploadDicom(caseItem.id, Array.from(files));
-              }
-              e.target.value = '';
-            }}
             className="hidden"
             multiple
           />
@@ -1341,6 +1320,22 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             Drag & drop PDF files here to add more documents
           </p>
         )}
+      </div>
+
+      {/* ===== Cornerstone3D Viewer Section ===== */}
+      <div className="mt-10 mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-xl font-serif font-black text-slate-800 flex items-center gap-2">
+              <ScanIcon className="w-5 h-5 text-emerald-600" />
+              Cornerstone3D Viewer (Advanced)
+            </h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Alternative DICOM viewer powered by Cornerstone3D — supports stack scrolling, window/level, zoom, and pan tools
+            </p>
+          </div>
+        </div>
+        <Cornerstone3DViewerLazy />
       </div>
 
       <button

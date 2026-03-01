@@ -1015,12 +1015,6 @@ const App: React.FC = () => {
                   onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
                   onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
                   onUpload={handleFileUpload}
-                  onUploadDicom={(caseId: string, files: File[]) => handleDicomDriveUpload(caseId, files)}
-                  isDriveLinked={!!googleAccessToken}
-                  onRequestDriveAuth={async () => {
-                    const token = await requestGoogleDriveAuth();
-                    return !!token;
-                  }}
                   onUploadFolder={handleFolderUpload}
                   onUpdateCase={upsertCase}
                   onDeleteDoc={deleteDocumentFromStore}
