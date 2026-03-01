@@ -108,6 +108,7 @@ import {
    extractHandwrittenNotesFromImage
 } from '../services/openaiService';
 import { extractPdfTextForAnnotations } from '../services/pdfTextService';
+import LegalChat from './LegalChat';
 
 interface AnnotationRollupProps {
    caseItem: Case;
@@ -210,6 +211,10 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    // AI Editor State
    const [editorHistory, setEditorHistory] = useState<{ role: 'user' | 'model', text: string, suggestion?: EditorSuggestion }[]>([]);
    const [editorInput, setEditorInput] = useState('');
+
+   // Legal Chat (Claude) State
+   const [showLegalChat, setShowLegalChat] = useState(false);
+   const [legalChatPdfContext, setLegalChatPdfContext] = useState('');
    const [editorViewMode, setEditorViewMode] = useState<'PREVIEW' | 'EDIT' | 'SPLIT'>('EDIT');
 
    // Preview Panel State
@@ -3516,6 +3521,28 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               {reportContent ? 'Regenerate Draft' : 'Generate Draft'}
                            </button>
 
+                           <button
+                              onClick={async () => {
+                                 // Pre-extract PDF context for the chat session
+                                 if (!legalChatPdfContext) {
+                                    try {
+                                       const ctx = await extractPdfTextForAnnotations(docs, annotations, {
+                                          perPageCharLimit: 1500,
+                                          totalCharLimit: 12000
+                                       });
+                                       setLegalChatPdfContext(ctx);
+                                    } catch (err) {
+                                       console.warn('PDF text extraction failed for chat:', err);
+                                    }
+                                 }
+                                 setShowLegalChat(true);
+                              }}
+                              className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all"
+                           >
+                              <SparklesIcon className="w-4 h-4" />
+                              Chat with Claude
+                           </button>
+
                            {/* Save Version Button - Explicitly saves current version to history */}
                            <button
                               onClick={handleSaveDraft}
@@ -3824,6 +3851,40 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                   </div>
 
                   {/* Template Selector Modal */}
+                  {/* Legal Chat Panel (Claude) */}
+                  {showLegalChat && (
+                     <LegalChat
+                        caseItem={caseItem}
+                        docs={docs}
+                        annotations={annotations}
+                        currentUser={currentUser}
+                        pdfTextContext={legalChatPdfContext}
+                        reportContent={reportContentRef.current}
+                        onInsertIntoDraft={(html) => {
+                           if (editableDivRef.current) {
+                              setUndoStack(prev => [...prev, reportContentRef.current].slice(-50));
+                              setRedoStack([]);
+                              const currentHtml = editableDivRef.current.innerHTML;
+                              const updatedHtml = currentHtml + html;
+                              setReportContent(updatedHtml);
+                              lastContentRef.current = updatedHtml;
+                              setWriterContentKey(prev => prev + 1);
+                              onUpdateCase({ ...caseItemRef.current, reportContent: updatedHtml });
+                           }
+                        }}
+                        onReplaceDraft={(html) => {
+                           setUndoStack(prev => [...prev, reportContentRef.current].slice(-50));
+                           setRedoStack([]);
+                           setReportContent(html);
+                           lastContentRef.current = html;
+                           setWriterContentKey(prev => prev + 1);
+                           onUpdateCase({ ...caseItemRef.current, reportContent: html });
+                        }}
+                        onUpdateCase={onUpdateCase}
+                        onClose={() => setShowLegalChat(false)}
+                     />
+                  )}
+
                   {showTemplateSelector && (
                      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
                         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in duration-200">
