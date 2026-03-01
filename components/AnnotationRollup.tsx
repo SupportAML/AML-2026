@@ -309,7 +309,9 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       const sel = window.getSelection();
       if (sel && sel.rangeCount > 0 && !sel.isCollapsed && editableDivRef.current?.contains(sel.anchorNode)) {
          setSelectedEditorText(sel.toString().trim());
-      } else {
+      } else if (sel && sel.anchorNode && editableDivRef.current?.contains(sel.anchorNode)) {
+         // Only clear when the collapsed selection is inside the editor (user clicked within editor)
+         // Don't clear when focus moves to sidebar input
          setSelectedEditorText('');
       }
    }, []);
@@ -1703,6 +1705,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       if (selectionPopup) {
          setSelectedTextForComment(selectionPopup.text);
          setWriterSidebarMode('COMMENTS');
+         setSelectionPopup(null);
+      }
+   };
+
+   const handleEditWithAI = () => {
+      if (selectionPopup) {
+         setSelectedEditorText(selectionPopup.text);
+         setWriterSidebarMode('AI');
          setSelectionPopup(null);
       }
    };
@@ -3801,7 +3811,16 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        transform: 'translate(-50%, -100%)',
                                        zIndex: 9999
                                     }}
+                                    className="flex items-center gap-1"
                                  >
+                                    <button
+                                       onClick={handleEditWithAI}
+                                       className="bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium px-3 py-1.5 rounded shadow-lg flex items-center gap-1.5 transition-colors"
+                                       title="Edit selection with AI"
+                                    >
+                                       <SparklesIcon className="w-3 h-3" />
+                                       Edit with AI
+                                    </button>
                                     <button
                                        onClick={handleCreateComment}
                                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-3 py-1.5 rounded shadow-lg flex items-center gap-1.5 transition-colors"
