@@ -82,6 +82,7 @@ export interface Case {
   assignedUserIds?: string[];
   assignedUserEmails?: string[]; // Pre-authorized emails for invited users
   virtualFolders?: string[];
+  dicomFolders?: string[];
 
   // New Fields
   primaryLawyer?: string;

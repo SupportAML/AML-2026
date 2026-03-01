@@ -224,13 +224,15 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   useEffect(() => {
     if (!isInitialized || !viewportDivRef.current || engineRef.current) return;
 
+    const el = viewportDivRef.current;
+
     const engine = new RenderingEngine(ids.engineId);
     engineRef.current = engine;
 
     engine.enableElement({
       viewportId: ids.viewportId,
       type: csEnums.ViewportType.STACK,
-      element: viewportDivRef.current,
+      element: el,
       defaultOptions: { background: [0, 0, 0] as Types.Point3 },
     });
 
@@ -261,23 +263,30 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     }
 
     // Suppress wheel on empty viewport
-    const el = viewportDivRef.current;
-    if (el) {
-      const suppress = (e: WheelEvent) => {
-        try {
-          const vp = engine.getViewport(ids.viewportId) as Types.IStackViewport;
-          if (!vp || !vp.getImageIds || vp.getImageIds().length === 0) e.stopPropagation();
-        } catch { e.stopPropagation(); }
-      };
-      el.addEventListener('wheel', suppress, { capture: true });
-    }
+    const suppress = (e: WheelEvent) => {
+      try {
+        const vp = engine.getViewport(ids.viewportId) as Types.IStackViewport;
+        if (!vp || !vp.getImageIds || vp.getImageIds().length === 0) e.stopPropagation();
+      } catch { e.stopPropagation(); }
+    };
+    el.addEventListener('wheel', suppress, { capture: true });
 
-    // Ensure viewport is properly sized after mount
-    setTimeout(() => {
+    // Resize engine whenever the viewport div changes size
+    const resizeObserver = new ResizeObserver(() => {
       try { engine.resize(); } catch {}
-    }, 100);
+    });
+    resizeObserver.observe(el);
+
+    // Multiple resize passes to handle layout settling
+    setTimeout(() => { try { engine.resize(); } catch {} }, 50);
+    setTimeout(() => { try { engine.resize(); } catch {} }, 200);
+    setTimeout(() => { try { engine.resize(); } catch {} }, 500);
 
     setViewportReady(true);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
   }, [isInitialized]);
 
   // ===== Smooth scroll (1 slice per tick) =====
@@ -449,10 +458,10 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     setStudies(parsedStudies);
     setIsProcessing(false);
 
-    // Auto-load the largest series
+    // Auto-load the largest series (delay to ensure viewport is fully sized)
     if (parsedStudies.length > 0) {
       const best = parsedStudies[0].series.reduce((a, b) => a.fileCount > b.fileCount ? a : b);
-      loadSeries(best);
+      setTimeout(() => loadSeries(best), 150);
     }
   }, [viewportReady, loadSeries]);
 
@@ -464,17 +473,34 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     setActiveSeries(series);
 
     try {
+      // Ensure viewport is properly sized before loading
+      try { engineRef.current.resize(); } catch {}
+
       const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
-      if (!vp) { setIsLoading(false); return; }
+      if (!vp) {
+        console.error('[DicomStudyViewer] Viewport not found');
+        setIsLoading(false);
+        return;
+      }
 
       await vp.setStack(series.imageIds, 0);
+
+      // Resize again after stack is set then render
+      try { engineRef.current.resize(); } catch {}
       vp.render();
 
       setTotalSlices(series.imageIds.length);
       setCurrentSlice(1);
 
-      // Extract metadata
-      setTimeout(() => extractMetadata(series.imageIds[0]), 300);
+      // Extract metadata after image loads
+      setTimeout(() => {
+        extractMetadata(series.imageIds[0]);
+        // One more render pass to ensure image is displayed
+        try {
+          vp.render();
+          engineRef.current?.resize();
+        } catch {}
+      }, 300);
     } catch (err: any) {
       console.error('[DicomStudyViewer] Load error:', err);
     } finally {

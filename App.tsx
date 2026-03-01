@@ -442,9 +442,14 @@ const App: React.FC = () => {
             } else if (error?.type === 'popup_failed_to_open') {
               alert('Popup was blocked by browser. Please allow popups for this site and try again.');
             } else {
-              alert('Google Drive authentication failed: ' + (error?.message || error?.type || 'Unknown error') +
-                '\n\nIf you see "redirect_uri_mismatch", the app admin needs to add ' + window.location.origin +
-                ' to the Google Cloud Console OAuth client\'s Authorized JavaScript Origins.');
+              alert('Google Drive authentication failed.\n\n' +
+                'To fix "redirect_uri_mismatch":\n' +
+                '1. Go to Google Cloud Console → APIs & Services → Credentials\n' +
+                '2. Click your OAuth 2.0 Client ID\n' +
+                '3. Under "Authorized JavaScript Origins", add:\n' +
+                '   ' + window.location.origin + '\n' +
+                '4. Click Save and wait 5 minutes for changes to propagate\n\n' +
+                'Error: ' + (error?.message || error?.type || 'Unknown'));
             }
             resolve(null);
           },
@@ -452,8 +457,8 @@ const App: React.FC = () => {
             if (response.error) {
               console.error('[DICOM Auth] Token response error:', response.error, response.error_description);
               alert('Google Drive auth failed: ' + (response.error_description || response.error) +
-                '\n\nIf you see "redirect_uri_mismatch", add ' + window.location.origin +
-                ' to Google Cloud Console → APIs & Credentials → OAuth Client → Authorized JavaScript Origins');
+                '\n\nTo fix: Go to Google Cloud Console → APIs & Services → Credentials → OAuth Client → ' +
+                'Authorized JavaScript Origins → add ' + window.location.origin);
               resolve(null);
             } else {
               console.log('[DICOM Auth] Successfully got access token!');

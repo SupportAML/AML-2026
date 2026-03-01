@@ -1576,73 +1576,106 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               Upload DICOM folders from your computer or link from Google Drive — opens in a full-screen viewer
             </p>
           </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => dicomFolderInputRef.current?.click()}
+              className="flex items-center gap-2 px-5 py-2.5 bg-slate-600 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-all shadow-lg shadow-slate-100"
+            >
+              <FolderOpenIcon className="w-4 h-4" />
+              Upload Local DICOM
+            </button>
+            <button
+              onClick={() => dicomDriveFolderInputRef.current?.click()}
+              disabled={isDicomUploading}
+              className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg shadow-cyan-100 disabled:opacity-50"
+            >
+              <HardDriveIcon className="w-4 h-4" />
+              {isDicomUploading ? 'Uploading...' : 'Link Drive & Upload'}
+            </button>
+            <button
+              onClick={() => setShowDicomNewFolder(true)}
+              className="flex items-center gap-2 px-5 py-2.5 bg-slate-600 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-all shadow-lg shadow-slate-100"
+            >
+              <FolderPlusIcon className="w-4 h-4" />
+              New Folder
+            </button>
+            <input type="file" ref={dicomFolderInputRef} onChange={handleDicomLocalFolderSelect} className="hidden" multiple />
+            <input type="file" ref={dicomDriveFolderInputRef} onChange={handleDicomDriveFolderSelect} className="hidden" multiple />
+          </div>
         </div>
 
-        <div className="bg-white rounded-2xl border-2 border-slate-200 overflow-hidden shadow-sm">
-          {/* Upload buttons */}
-          <div className="p-5 border-b border-slate-100 bg-slate-50/50">
-            <div className="flex flex-wrap items-center gap-3">
+        {/* Viewer actions bar */}
+        {localDicomStudies.length > 0 && (
+          <div className="flex items-center gap-3 mb-4">
+            {localDicomStudies.some(s => s.selected) && (
               <button
-                onClick={() => dicomFolderInputRef.current?.click()}
-                className="flex items-center gap-2 px-5 py-2.5 bg-slate-600 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-all shadow-lg shadow-slate-100"
+                onClick={openDicomViewer}
+                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
               >
-                <FolderOpenIcon className="w-4 h-4" />
-                Upload Local DICOM Folder
+                <MaximizeIcon className="w-4 h-4" />
+                Open Viewer ({localDicomStudies.filter(s => s.selected).length})
               </button>
+            )}
+            {localDicomStudies.filter(s => s.selected).length > 0 && (
               <button
-                onClick={() => dicomDriveFolderInputRef.current?.click()}
-                disabled={isDicomUploading}
-                className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg shadow-cyan-100 disabled:opacity-50"
+                onClick={() => setLocalDicomStudies(prev => prev.filter(s => !s.selected))}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-all border border-red-200"
               >
-                <HardDriveIcon className="w-4 h-4" />
-                {isDicomUploading ? 'Uploading to Drive...' : 'Link Drive & Upload DICOM'}
+                <Trash2Icon className="w-3 h-3" /> Delete Selected
               </button>
-              {localDicomStudies.length > 0 && (
-                <>
-                  {localDicomStudies.some(s => s.selected) && (
-                    <button
-                      onClick={openDicomViewer}
-                      className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                    >
-                      <MaximizeIcon className="w-4 h-4" />
-                      Open Viewer ({localDicomStudies.filter(s => s.selected).length})
-                    </button>
-                  )}
-                  {localDicomStudies.filter(s => s.selected).length > 0 && (
-                    <button
-                      onClick={() => {
-                        setLocalDicomStudies(prev => prev.filter(s => !s.selected));
-                      }}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-all border border-red-200"
-                    >
-                      <Trash2Icon className="w-3 h-3" /> Delete Selected
-                    </button>
-                  )}
-                </>
-              )}
-              <input
-                type="file"
-                ref={dicomFolderInputRef}
-                onChange={handleDicomLocalFolderSelect}
-                className="hidden"
-                multiple
-              />
-              <input
-                type="file"
-                ref={dicomDriveFolderInputRef}
-                onChange={handleDicomDriveFolderSelect}
-                className="hidden"
-                multiple
-              />
-            </div>
-            <p className="text-[10px] text-slate-400 mt-2">
-              Upload DICOM imaging folders directly, or link via Google Drive for cloud storage. Local uploads are for immediate viewing.
-            </p>
+            )}
           </div>
+        )}
 
-          {/* Study list */}
+        <div className="bg-white rounded-2xl border-2 border-slate-200 overflow-hidden shadow-sm">
+          {/* New folder input */}
+          {showDicomNewFolder && (
+            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
+              <FolderPlusIcon className="w-4 h-4 text-slate-400" />
+              <input
+                autoFocus
+                value={dicomNewFolderName}
+                onChange={(e) => setDicomNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const name = dicomNewFolderName.trim();
+                    if (name) {
+                      const updatedFolders = [...(caseItem.dicomFolders || []), name];
+                      onUpdateCase({ ...caseItem, dicomFolders: updatedFolders });
+                    }
+                    setDicomNewFolderName('');
+                    setShowDicomNewFolder(false);
+                  }
+                  if (e.key === 'Escape') { setShowDicomNewFolder(false); setDicomNewFolderName(''); }
+                }}
+                placeholder="Folder name..."
+                className="flex-1 text-sm bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500"
+              />
+              <button
+                onClick={() => {
+                  const name = dicomNewFolderName.trim();
+                  if (name) {
+                    const updatedFolders = [...(caseItem.dicomFolders || []), name];
+                    onUpdateCase({ ...caseItem, dicomFolders: updatedFolders });
+                  }
+                  setDicomNewFolderName('');
+                  setShowDicomNewFolder(false);
+                }}
+                className="px-3 py-1.5 bg-cyan-600 text-white rounded-lg text-xs font-bold hover:bg-cyan-700"
+              >
+                Create
+              </button>
+              <button
+                onClick={() => { setShowDicomNewFolder(false); setDicomNewFolderName(''); }}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <XIcon className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="p-4">
-            {localDicomStudies.length === 0 && dicomDocs.length === 0 ? (
+            {localDicomStudies.length === 0 && dicomDocs.length === 0 && (caseItem.dicomFolders || []).length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="w-14 h-14 bg-cyan-50 rounded-2xl flex items-center justify-center mb-4">
                   <LayersIcon className="w-7 h-7 text-cyan-400" />
@@ -1653,9 +1686,91 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               </div>
             ) : (
               <div className="space-y-2">
-                {/* Select all / deselect all */}
+                {/* DICOM Folders */}
+                {(caseItem.dicomFolders || []).map((folder) => {
+                  const folderDocs = dicomDocs.filter(d => {
+                    const dp = (d.path || '').replace(/^\/+|\/+$/g, '');
+                    return dp === folder || dp.startsWith(folder + '/');
+                  });
+                  return (
+                    <div key={`dicom-folder-${folder}`} className="rounded-xl border border-slate-200 overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2.5 bg-slate-50 group">
+                        <FolderIcon className="w-4 h-4 text-cyan-500 shrink-0" />
+                        <span className="text-sm font-bold text-slate-700 flex-1">{folder}</span>
+                        <span className="text-[10px] text-slate-400">{folderDocs.length} files</span>
+                        <button
+                          onClick={() => setDeleteConfirm({ type: 'folder', path: `dicom:${folder}`, name: folder })}
+                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <Trash2Icon className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {folderDocs.length > 0 && (
+                        <div className="border-t border-slate-100">
+                          {folderDocs.map(doc => (
+                            <div key={doc.id} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 transition-all group/file">
+                              <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+                                {doc.storageLocation === 'drive' ? <HardDriveIcon className="w-3.5 h-3.5 text-indigo-500" /> : <ScanIcon className="w-3.5 h-3.5 text-cyan-500" />}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold text-slate-700 truncate">{doc.name}</p>
+                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                                  <span>{doc.size}</span>
+                                  {doc.storageLocation === 'drive' && <span className="px-1 py-0.5 bg-indigo-50 text-indigo-500 rounded text-[9px] font-bold">Drive</span>}
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name })}
+                                className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover/file:opacity-100 transition-all"
+                              >
+                                <Trash2Icon className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Unorganized Drive-linked DICOM documents (not in any folder) */}
+                {(() => {
+                  const dicomFolderSet = new Set(caseItem.dicomFolders || []);
+                  const unorganizedDocs = dicomDocs.filter(d => {
+                    const dp = (d.path || '').replace(/^\/+|\/+$/g, '');
+                    return !Array.from(dicomFolderSet).some(f => dp === f || dp.startsWith(f + '/'));
+                  });
+                  if (unorganizedDocs.length === 0) return null;
+                  return unorganizedDocs.map(doc => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                        <HardDriveIcon className="w-5 h-5 text-indigo-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-slate-700 truncate">{doc.name}</p>
+                        <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                          <span>{doc.size}</span>
+                          {doc.storageLocation === 'drive' && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded font-bold">Google Drive</span>}
+                          <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name })}
+                        className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                      >
+                        <Trash2Icon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ));
+                })()}
+
+                {/* Select all / deselect all for local studies */}
                 {localDicomStudies.length > 1 && (
-                  <div className="flex items-center gap-2 pb-2 mb-1 border-b border-slate-100">
+                  <div className="flex items-center gap-2 pb-2 mb-1 border-b border-slate-100 mt-4 pt-3">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mr-2">Local Studies</span>
                     <button
                       onClick={() => {
                         const allSelected = localDicomStudies.every(s => s.selected);
@@ -1667,6 +1782,11 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                     </button>
                     <span className="text-[10px] text-slate-400">·</span>
                     <span className="text-[10px] text-slate-400">{localDicomStudies.length} studies · {localDicomStudies.reduce((a, s) => a + s.files.length, 0)} files</span>
+                  </div>
+                )}
+                {localDicomStudies.length === 1 && (
+                  <div className="pb-1 mb-1 border-b border-slate-100 mt-4 pt-3">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Local Studies</span>
                   </div>
                 )}
                 {/* Local DICOM studies */}
@@ -1698,33 +1818,6 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                       onClick={(e) => {
                         e.stopPropagation();
                         setDeleteConfirm({ type: 'file', name: study.name, id: `dicom-local-${idx}` });
-                      }}
-                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
-                    >
-                      <Trash2Icon className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-                {/* Drive-linked DICOM documents */}
-                {dicomDocs.map(doc => (
-                  <div
-                    key={doc.id}
-                    className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group"
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                      <HardDriveIcon className="w-5 h-5 text-indigo-600" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-slate-700 truncate">{doc.name}</p>
-                      <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                        <span>{doc.size}</span>
-                        {doc.storageLocation === 'drive' && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded font-bold">Google Drive</span>}
-                        <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name });
                       }}
                       className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
                     >
@@ -1767,7 +1860,21 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                   if (deleteConfirm.type === 'batch') {
                     handleBatchDelete();
                   } else if (deleteConfirm.type === 'folder' && deleteConfirm.path) {
-                    handleDeleteFolder(deleteConfirm.path);
+                    if (deleteConfirm.path.startsWith('dicom:')) {
+                      // Delete DICOM folder
+                      const dicomFolder = deleteConfirm.path.replace('dicom:', '');
+                      const updatedDicomFolders = (caseItem.dicomFolders || []).filter(f => f !== dicomFolder);
+                      onUpdateCase({ ...caseItem, dicomFolders: updatedDicomFolders });
+                      // Delete all DICOM docs inside this folder
+                      dicomDocs.forEach(doc => {
+                        const dp = (doc.path || '').replace(/^\/+|\/+$/g, '');
+                        if (dp === dicomFolder || dp.startsWith(dicomFolder + '/')) {
+                          onDeleteDoc(doc.id);
+                        }
+                      });
+                    } else {
+                      handleDeleteFolder(deleteConfirm.path);
+                    }
                     setDeleteConfirm(null);
                   } else if (deleteConfirm.type === 'file' && deleteConfirm.id) {
                     if (deleteConfirm.id.startsWith('dicom-local-')) {
