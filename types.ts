@@ -112,6 +112,9 @@ export interface Case {
   researchResults?: ResearchArticle[];
   researchGaps?: { topic: string; reason: string }[];
 
+  // Legal Chat Persistence (Claude-powered report drafting chat)
+  legalChatHistory?: { id: string; role: 'user' | 'assistant'; content: string; timestamp: number }[];
+
   // Deposition Chat Persistence - Multiple conversations per scenario
   depoChats?: { [scenarioId: string]: ChatMessage[] }; // Map of scenario ID to chat history
   depoStage?: 'ANALYSIS' | 'SIMULATION';
