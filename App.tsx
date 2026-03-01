@@ -683,68 +683,90 @@ const App: React.FC = () => {
       return;
     }
 
-    setIsUploading(true);
-    setUploadTotalFiles(toUpload.length);
-    setUploadCurrentFileIndex(1);
-    setUploadFileName(toUpload.length > 1 ? 'Folder upload' : toUpload[0].name);
-    setUploadProgress(0);
-
-    const getFolderPath = (file: File): string => {
-      const rp = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-      const parts = rp.replace(/\\/g, '/').split('/');
-      parts.pop(); // remove filename
-      return parts.filter(Boolean).join('/');
-    };
-
-    try {
-      for (let i = 0; i < toUpload.length; i++) {
-        const file = toUpload[i];
-        setUploadCurrentFileIndex(i + 1);
-        setUploadFileName(file.name);
-        setUploadProgress(0);
-        let fileData;
-        try {
-          fileData = await uploadFile(caseId, file, (data) => {
-            setUploadProgress(data.progress);
-          });
-        } catch (e) {
-          if (isDemoUser) {
-            fileData = {
-              url: URL.createObjectURL(file),
-              name: file.name,
-              size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
-              storagePath: undefined
-            };
-          } else throw e;
-        }
-        const folderPath = getFolderPath(file);
-        const fileType = detectFileType(fileData.name, file.type);
-        const newDoc: Document = {
-          id: Math.random().toString(36).substr(2, 9),
-          caseId,
-          name: fileData.name,
-          type: fileType,
-          mimeType: file.type || undefined,
-          url: fileData.url,
-          storagePath: (fileData as { storagePath?: string }).storagePath,
-          uploadDate: new Date().toISOString(),
-          size: fileData.size,
-          reviewStatus: 'pending',
-          path: folderPath || undefined
-        };
-        await upsertDocument(newDoc);
+    // Separate DICOM files from non-DICOM files so DICOM goes to Google Drive
+    const dicomFiles: File[] = [];
+    const nonDicomFiles: File[] = [];
+    for (const file of toUpload) {
+      const fileType = detectFileType(file.name, file.type);
+      if (fileType === 'dicom') {
+        dicomFiles.push(file);
+      } else {
+        nonDicomFiles.push(file);
       }
-      const parts: string[] = [`Uploaded ${toUpload.length} file(s).`];
-      if (tooLarge.length) parts.push(`${tooLarge.length} exceeded 5GB`);
-      if (parts.length > 1) console.info(parts.join(' '));
-    } catch (e) {
-      alert("Failed to upload folder. Ensure Firebase Storage is configured or use Demo mode.");
-    } finally {
-      setIsUploading(false);
+    }
+
+    // Upload DICOM files to Google Drive (mandatory for DICOM)
+    if (dicomFiles.length > 0) {
+      await handleDicomDriveUpload(caseId, dicomFiles);
+    }
+
+    // Upload remaining non-DICOM files to Firebase Storage
+    if (nonDicomFiles.length > 0) {
+      setIsUploading(true);
+      setUploadTotalFiles(nonDicomFiles.length);
+      setUploadCurrentFileIndex(1);
+      setUploadFileName(nonDicomFiles.length > 1 ? 'Folder upload' : nonDicomFiles[0].name);
       setUploadProgress(0);
-      setUploadFileName('');
-      setUploadTotalFiles(undefined);
-      setUploadCurrentFileIndex(undefined);
+
+      const getFolderPath = (file: File): string => {
+        const rp = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+        const parts = rp.replace(/\\/g, '/').split('/');
+        parts.pop(); // remove filename
+        return parts.filter(Boolean).join('/');
+      };
+
+      try {
+        for (let i = 0; i < nonDicomFiles.length; i++) {
+          const file = nonDicomFiles[i];
+          setUploadCurrentFileIndex(i + 1);
+          setUploadFileName(file.name);
+          setUploadProgress(0);
+          let fileData;
+          try {
+            fileData = await uploadFile(caseId, file, (data) => {
+              setUploadProgress(data.progress);
+            });
+          } catch (e) {
+            if (isDemoUser) {
+              fileData = {
+                url: URL.createObjectURL(file),
+                name: file.name,
+                size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+                storagePath: undefined
+              };
+            } else throw e;
+          }
+          const folderPath = getFolderPath(file);
+          const fileType = detectFileType(fileData.name, file.type);
+          const newDoc: Document = {
+            id: Math.random().toString(36).substr(2, 9),
+            caseId,
+            name: fileData.name,
+            type: fileType,
+            mimeType: file.type || undefined,
+            url: fileData.url,
+            storagePath: (fileData as { storagePath?: string }).storagePath,
+            uploadDate: new Date().toISOString(),
+            size: fileData.size,
+            reviewStatus: 'pending',
+            path: folderPath || undefined
+          };
+          await upsertDocument(newDoc);
+        }
+        const parts: string[] = [`Uploaded ${nonDicomFiles.length} file(s).`];
+        if (tooLarge.length) parts.push(`${tooLarge.length} exceeded 5GB`);
+        if (parts.length > 1) console.info(parts.join(' '));
+      } catch (e) {
+        alert("Failed to upload folder. Ensure Firebase Storage is configured or use Demo mode.");
+      } finally {
+        setIsUploading(false);
+        setUploadProgress(0);
+        setUploadFileName('');
+        setUploadTotalFiles(undefined);
+        setUploadCurrentFileIndex(undefined);
+      }
+    } else if (tooLarge.length > 0) {
+      console.info(`${tooLarge.length} file(s) exceeded 5GB and were skipped.`);
     }
   };
 

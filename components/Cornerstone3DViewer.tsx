@@ -576,17 +576,15 @@ const Cornerstone3DViewer: React.FC = () => {
             <UploadIcon className="w-3.5 h-3.5" /> Files
           </button>
           <button
-            onClick={() => {
-              const input = folderInputRef.current;
-              if (input) { input.setAttribute('webkitdirectory', ''); input.click(); }
-            }}
+            onClick={() => folderInputRef.current?.click()}
             disabled={!viewportReady}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white text-[11px] font-bold rounded-lg transition-all disabled:opacity-40"
           >
             <FolderOpenIcon className="w-3.5 h-3.5" /> Folder
           </button>
           <input ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,*/*" onChange={handleFileSelect} className="hidden" />
-          <input ref={folderInputRef} type="file" multiple onChange={handleFileSelect} className="hidden" />
+          {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
+          <input ref={folderInputRef} type="file" multiple webkitdirectory="" onChange={handleFileSelect} className="hidden" />
         </div>
       </div>
 
