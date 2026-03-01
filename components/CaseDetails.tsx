@@ -29,21 +29,27 @@ import {
   ScanIcon,
   DollarSignIcon,
   AlertTriangleIcon,
-  Loader2Icon
+  Loader2Icon,
+  HardDriveIcon,
+  FolderOpenIcon,
+  MaximizeIcon,
+  CameraIcon,
+  LayersIcon,
+  CheckSquareIcon,
+  SquareIcon
 } from 'lucide-react';
 import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
 
-const DicomViewerComponent = lazy(() => import('./DicomViewer'));
-const DicomViewerLazy = () => (
-  <Suspense fallback={<div className="flex items-center justify-center py-12 text-slate-400 text-sm">Loading DICOM viewer...</div>}>
-    <DicomViewerComponent />
-  </Suspense>
-);
-
-const Cornerstone3DViewerComponent = lazy(() => import('./Cornerstone3DViewer'));
-const Cornerstone3DViewerLazy = () => (
-  <Suspense fallback={<div className="flex items-center justify-center py-12 bg-slate-900 rounded-2xl"><Loader2Icon className="w-8 h-8 text-emerald-400 animate-spin" /></div>}>
-    <Cornerstone3DViewerComponent />
+const DicomStudyViewerComponent = lazy(() => import('./DicomStudyViewer'));
+const DicomStudyViewerLazy: React.FC<{
+  files: File[];
+  onClose: () => void;
+  onSaveAnnotation?: (data: any) => void;
+  caseId: string;
+  authorName: string;
+}> = (props) => (
+  <Suspense fallback={<div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center"><Loader2Icon className="w-10 h-10 text-cyan-400 animate-spin" /></div>}>
+    <DicomStudyViewerComponent {...props} />
   </Suspense>
 );
 
@@ -62,6 +68,10 @@ interface CaseDetailsProps {
   onUpdateDocStatus: (docId: string, status: ReviewStatus) => void;
   onUpdateDoc: (doc: Document) => void;
   onOpenAnalysis: () => void;
+  onDicomDriveUpload?: (caseId: string, files: File[]) => Promise<void>;
+  onSaveDicomAnnotation?: (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => void;
+  googleAccessToken?: string | null;
+  onRequestDriveAuth?: () => Promise<string | null>;
 }
 
 interface TreeNode {
@@ -283,14 +293,27 @@ const FileTreeItem: React.FC<{
 
 const CaseDetails: React.FC<CaseDetailsProps> = ({
   caseItem, docs, onOpenDoc, onUpload, onUploadFolder, onUpdateCase, onDeleteDoc,
-  currentUser, allUsers, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis
+  currentUser, allUsers, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis,
+  onDicomDriveUpload, onSaveDicomAnnotation, googleAccessToken, onRequestDriveAuth
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const dicomFolderInputRef = useRef<HTMLInputElement>(null);
+  const dicomDriveFolderInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const el = folderInputRef.current;
     if (el) el.setAttribute('webkitdirectory', '');
+    const dicomEl = dicomFolderInputRef.current;
+    if (dicomEl) dicomEl.setAttribute('webkitdirectory', '');
+    const dicomDriveEl = dicomDriveFolderInputRef.current;
+    if (dicomDriveEl) dicomDriveEl.setAttribute('webkitdirectory', '');
   }, []);
+
+  // DICOM viewer state
+  const [showDicomViewer, setShowDicomViewer] = useState(false);
+  const [dicomViewerFiles, setDicomViewerFiles] = useState<File[]>([]);
+  const [localDicomStudies, setLocalDicomStudies] = useState<{ name: string; files: File[]; selected: boolean }[]>([]);
+  const [isDicomUploading, setIsDicomUploading] = useState(false);
   const [isEditingMetadata, setIsEditingMetadata] = useState(false);
   const [editTitle, setEditTitle] = useState(caseItem.title);
   const [editDescription, setEditDescription] = useState(caseItem.description);
@@ -532,6 +555,87 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     setEditingBillingId(null);
     setEditBillingData({});
   };
+
+  // ===== DICOM handlers =====
+  const handleDicomLocalFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const fileArr = Array.from(files).filter(f => !f.name.startsWith('.') && f.size > 0);
+    if (fileArr.length === 0) return;
+    // Group by top-level folder
+    const folderMap = new Map<string, File[]>();
+    for (const file of fileArr) {
+      const relPath = (file as any).webkitRelativePath || file.name;
+      const parts = relPath.split('/');
+      const topFolder = parts.length >= 2 ? parts[0] : 'DICOM Files';
+      if (!folderMap.has(topFolder)) folderMap.set(topFolder, []);
+      folderMap.get(topFolder)!.push(file);
+    }
+    const studies = Array.from(folderMap.entries()).map(([name, files]) => ({
+      name,
+      files,
+      selected: true,
+    }));
+    setLocalDicomStudies(prev => [...prev, ...studies]);
+    e.target.value = '';
+  };
+
+  const handleDicomDriveFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const fileArr = Array.from(files).filter(f => !f.name.startsWith('.') && f.size > 0);
+    if (fileArr.length === 0) return;
+
+    if (onDicomDriveUpload) {
+      setIsDicomUploading(true);
+      try {
+        await onDicomDriveUpload(caseItem.id, fileArr);
+        // Also add to local studies for immediate viewing
+        const folderMap = new Map<string, File[]>();
+        for (const file of fileArr) {
+          const relPath = (file as any).webkitRelativePath || file.name;
+          const parts = relPath.split('/');
+          const topFolder = parts.length >= 2 ? parts[0] : 'DICOM Files';
+          if (!folderMap.has(topFolder)) folderMap.set(topFolder, []);
+          folderMap.get(topFolder)!.push(file);
+        }
+        const studies = Array.from(folderMap.entries()).map(([name, files]) => ({
+          name,
+          files,
+          selected: true,
+        }));
+        setLocalDicomStudies(prev => [...prev, ...studies]);
+      } catch (err) {
+        console.error('DICOM Drive upload failed:', err);
+      } finally {
+        setIsDicomUploading(false);
+      }
+    }
+    e.target.value = '';
+  };
+
+  const toggleDicomStudySelection = (index: number) => {
+    setLocalDicomStudies(prev => prev.map((s, i) => i === index ? { ...s, selected: !s.selected } : s));
+  };
+
+  const removeDicomStudy = (index: number) => {
+    setLocalDicomStudies(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const openDicomViewer = () => {
+    const selectedFiles = localDicomStudies
+      .filter(s => s.selected)
+      .flatMap(s => s.files);
+    if (selectedFiles.length === 0) {
+      alert('Please select at least one DICOM study to view.');
+      return;
+    }
+    setDicomViewerFiles(selectedFiles);
+    setShowDicomViewer(true);
+  };
+
+  // Count existing DICOM docs in the case
+  const dicomDocs = docs.filter(d => d.type === 'dicom');
 
   const buildTree = (): Record<string, TreeNode> => {
     const root: Record<string, TreeNode> = {};
@@ -1322,21 +1426,149 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         )}
       </div>
 
-      {/* ===== Cornerstone3D Viewer Section ===== */}
+      {/* ===== DICOM Studies Section ===== */}
       <div className="mt-10 mb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-xl font-serif font-black text-slate-800 flex items-center gap-2">
-              <ScanIcon className="w-5 h-5 text-emerald-600" />
-              Cornerstone3D Viewer (Advanced)
+              <ScanIcon className="w-5 h-5 text-cyan-600" />
+              DICOM Medical Imaging
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Alternative DICOM viewer powered by Cornerstone3D — supports stack scrolling, window/level, zoom, and pan tools
+              Upload DICOM folders from your computer or link from Google Drive — opens in a full-screen viewer
             </p>
           </div>
         </div>
-        <Cornerstone3DViewerLazy />
+
+        <div className="bg-white rounded-2xl border-2 border-slate-200 overflow-hidden shadow-sm">
+          {/* Upload buttons */}
+          <div className="p-5 border-b border-slate-100 bg-slate-50/50">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => dicomDriveFolderInputRef.current?.click()}
+                disabled={isDicomUploading}
+                className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg shadow-cyan-100 disabled:opacity-50"
+              >
+                <HardDriveIcon className="w-4 h-4" />
+                {isDicomUploading ? 'Uploading to Drive...' : 'Link Drive & Upload DICOM'}
+              </button>
+              <button
+                onClick={() => dicomFolderInputRef.current?.click()}
+                className="flex items-center gap-2 px-5 py-2.5 bg-slate-600 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-all shadow-lg shadow-slate-100"
+              >
+                <FolderOpenIcon className="w-4 h-4" />
+                Upload Local DICOM Folder
+              </button>
+              {localDicomStudies.some(s => s.selected) && (
+                <button
+                  onClick={openDicomViewer}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 ml-auto"
+                >
+                  <MaximizeIcon className="w-4 h-4" />
+                  Open DICOM Viewer ({localDicomStudies.filter(s => s.selected).length} studies)
+                </button>
+              )}
+              <input
+                type="file"
+                ref={dicomFolderInputRef}
+                onChange={handleDicomLocalFolderSelect}
+                className="hidden"
+                multiple
+              />
+              <input
+                type="file"
+                ref={dicomDriveFolderInputRef}
+                onChange={handleDicomDriveFolderSelect}
+                className="hidden"
+                multiple
+              />
+            </div>
+            <p className="text-[10px] text-slate-400 mt-2">
+              DICOM files uploaded via Drive are stored on your Google Drive to keep the app lightweight. Local uploads are for immediate viewing only.
+            </p>
+          </div>
+
+          {/* Study list */}
+          <div className="p-4">
+            {localDicomStudies.length === 0 && dicomDocs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="w-14 h-14 bg-cyan-50 rounded-2xl flex items-center justify-center mb-4">
+                  <LayersIcon className="w-7 h-7 text-cyan-400" />
+                </div>
+                <p className="text-sm font-bold text-slate-500 mb-1">No DICOM studies loaded</p>
+                <p className="text-xs text-slate-400 mb-1">Upload DICOM folders from your computer or Google Drive</p>
+                <p className="text-[10px] text-slate-300">Supports CT, MRI, X-ray, Ultrasound, and all standard DICOM formats</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {/* Local DICOM studies */}
+                {localDicomStudies.map((study, idx) => (
+                  <div
+                    key={`local-${idx}`}
+                    className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                      study.selected
+                        ? 'bg-cyan-50/50 border-cyan-200 ring-1 ring-cyan-100'
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}
+                    onClick={() => toggleDicomStudySelection(idx)}
+                  >
+                    <div className="shrink-0">
+                      {study.selected ? (
+                        <CheckSquareIcon className="w-5 h-5 text-cyan-600" />
+                      ) : (
+                        <SquareIcon className="w-5 h-5 text-slate-300" />
+                      )}
+                    </div>
+                    <div className="w-10 h-10 rounded-lg bg-cyan-100 flex items-center justify-center shrink-0">
+                      <ScanIcon className="w-5 h-5 text-cyan-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-700 truncate">{study.name}</p>
+                      <p className="text-[10px] text-slate-400">{study.files.length} files · Local</p>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeDicomStudy(idx); }}
+                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                    >
+                      <Trash2Icon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                {/* Drive-linked DICOM documents */}
+                {dicomDocs.map(doc => (
+                  <div
+                    key={doc.id}
+                    className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                      <HardDriveIcon className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-700 truncate">{doc.name}</p>
+                      <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                        <span>{doc.size}</span>
+                        {doc.storageLocation === 'drive' && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded font-bold">Google Drive</span>}
+                        <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* DICOM Fullscreen Viewer */}
+      {showDicomViewer && (
+        <DicomStudyViewerLazy
+          files={dicomViewerFiles}
+          onClose={() => setShowDicomViewer(false)}
+          onSaveAnnotation={onSaveDicomAnnotation}
+          caseId={caseItem.id}
+          authorName={currentUser.name}
+        />
+      )}
 
       <button
         onClick={onOpenAnalysis}

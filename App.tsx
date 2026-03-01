@@ -545,6 +545,95 @@ const App: React.FC = () => {
     }
   };
 
+  // Upload DICOM folder(s) to Drive — called from CaseDetails DICOM section
+  const handleDicomFolderDriveUpload = async (caseId: string, files: File[]) => {
+    // Step 1: Ensure user has linked their Google account
+    let token = googleAccessToken;
+    if (!token) {
+      token = await requestGoogleDriveAuth();
+      if (!token) {
+        alert('You must link your Google account to upload DICOM files. DICOM imaging files are stored on your personal Google Drive. Please try again.');
+        return;
+      }
+    }
+
+    setIsUploading(true);
+    setUploadTotalFiles(files.length);
+    setUploadProgress(0);
+
+    try {
+      const caseItem = cases.find(c => c.id === caseId);
+      let folderId = caseItem?.driveFolderId;
+      if (!folderId && caseItem) {
+        setUploadFileName('Creating Drive folder...');
+        const folder = await createDriveFolder(`ApexMedLaw_${caseItem.title}_DICOM`, token);
+        folderId = folder.id;
+        await upsertCase({ ...caseItem, driveFolderId: folderId, driveFolderUrl: folder.url });
+      }
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadFileName(file.name);
+        setUploadCurrentFileIndex(i + 1);
+        setUploadProgress(Math.round(((i) / files.length) * 100));
+
+        const driveFile = await uploadFileToDrive(file, token, folderId);
+
+        const newDoc: Document = {
+          id: Math.random().toString(36).substr(2, 9),
+          caseId,
+          name: file.name,
+          type: 'dicom' as DocumentFileType,
+          mimeType: file.type || 'application/dicom',
+          url: '',
+          driveFileId: driveFile.id,
+          storageLocation: 'drive',
+          uploadDate: new Date().toISOString(),
+          size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+          reviewStatus: 'pending',
+          path: 'Medical Records/Radiology'
+        };
+        await upsertDocument(newDoc);
+      }
+      setUploadProgress(100);
+    } catch (e: any) {
+      console.error('DICOM folder Drive upload failed:', e);
+      if (e?.message?.includes('401') || e?.message?.includes('403') || e?.message?.includes('unauthorized')) {
+        setGoogleAccessToken(null);
+        alert('Your Google Drive session expired. Please try uploading again.');
+      } else {
+        alert('Google Drive upload failed. Please check your internet connection and try again.');
+      }
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+      setUploadFileName('');
+      setUploadTotalFiles(undefined);
+      setUploadCurrentFileIndex(undefined);
+    }
+  };
+
+  // Save DICOM screenshot annotation
+  const handleSaveDicomAnnotation = (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
+    if (!activeCase) return;
+    const annotation: Annotation = {
+      id: Math.random().toString(36).substr(2, 9),
+      documentId: '', // No specific document - DICOM key image
+      caseId: activeCase.id,
+      page: 0,
+      text: `[DICOM Key Image] ${data.text}\nStudy: ${data.studyName}\nDate: ${data.studyDate}\nPatient: ${data.patientInfo}`,
+      author: currentUser?.name || 'Unknown',
+      timestamp: new Date().toISOString(),
+      eventDate: data.studyDate,
+      category: 'Medical',
+      x: 0,
+      y: 0,
+      type: 'area',
+      imageUrl: data.imageUrl,
+    };
+    upsertAnnotation(annotation);
+  };
+
   const handleFileUpload = async (caseId: string, file: File) => {
     // Validate file size - allow up to 5GB for large imaging/video files
     const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5GB in bytes
@@ -1024,6 +1113,10 @@ const App: React.FC = () => {
                   }}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
+                  onDicomDriveUpload={handleDicomFolderDriveUpload}
+                  onSaveDicomAnnotation={handleSaveDicomAnnotation}
+                  googleAccessToken={googleAccessToken}
+                  onRequestDriveAuth={requestGoogleDriveAuth}
                 />
               )}
               {viewMode === ViewMode.DOC_VIEWER && activeDoc && (
