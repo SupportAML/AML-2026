@@ -515,14 +515,15 @@ const DicomViewer: React.FC = () => {
               </div>
               <h3 className="text-base font-bold text-slate-700 mb-1">DICOM Medical Image Viewer</h3>
               <p className="text-xs text-slate-400 mb-5">Upload CT, MRI, X-ray, Ultrasound folders — 100% local</p>
-              <button onClick={() => { const i = folderInputRef.current; if (i) { i.setAttribute('webkitdirectory', ''); i.click(); } }}
+              <button onClick={() => folderInputRef.current?.click()}
                 className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 shadow-lg">
                 <FolderOpenIcon className="w-4 h-4" /> Open DICOM Folder
               </button>
               <p className="text-[10px] text-slate-400 mt-3">Or drag & drop here</p>
             </>
           )}
-          <input type="file" ref={folderInputRef} onChange={(e) => { if (e.target.files) handleFolderSelected(e.target.files); e.target.value = ''; }} className="hidden" multiple />
+          {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
+          <input type="file" ref={folderInputRef} onChange={(e) => { if (e.target.files) handleFolderSelected(e.target.files); e.target.value = ''; }} className="hidden" multiple webkitdirectory="" />
         </div>
       </div>
     );

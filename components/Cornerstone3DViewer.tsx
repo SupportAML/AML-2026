@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   UploadIcon, RotateCcwIcon, Loader2Icon,
-  FileIcon, ScanIcon, InfoIcon, FolderOpenIcon
+  FileIcon, ScanIcon, InfoIcon, FolderOpenIcon,
+  ChevronDownIcon, ChevronRightIcon, LayersIcon,
+  Trash2Icon, PencilIcon, CheckIcon, XIcon, DiscIcon,
+  FolderIcon, ArrowUpIcon, ArrowDownIcon
 } from 'lucide-react';
 
 // ============================================================
@@ -41,6 +44,7 @@ interface UploadedFile {
   path: string;
   isDicom: boolean;
   imageId: string | null;
+  discId?: string;
 }
 
 interface DicomMeta {
@@ -49,6 +53,48 @@ interface DicomMeta {
   seriesDescription?: string;
   modality?: string;
   instanceNumber?: number;
+}
+
+/** Per-file DICOM metadata extracted from standard tags */
+interface FileDicomMeta {
+  studyInstanceUID: string;
+  seriesInstanceUID: string;
+  studyDescription?: string;
+  studyDate?: string;
+  seriesDescription?: string;
+  seriesNumber?: number;
+  instanceNumber?: number;
+  modality?: string;
+  patientName?: string;
+}
+
+/** A folder/disc that was loaded into the viewer */
+interface DicomDisc {
+  id: string;
+  name: string;
+  uploadDate: string;
+  totalFiles: number;
+  dicomFiles: number;
+}
+
+/** Sidebar grouping: Series within a Study */
+interface SeriesGroup {
+  seriesUID: string;
+  seriesDescription: string;
+  seriesNumber: number;
+  modality: string;
+  files: UploadedFile[];
+  representativeImageId: string | null;
+}
+
+/** Sidebar grouping: Study */
+interface StudyGroup {
+  studyUID: string;
+  studyDescription: string;
+  studyDate: string;
+  patientName: string;
+  series: SeriesGroup[];
+  totalFiles: number;
 }
 
 // Non-DICOM extensions to skip
@@ -148,6 +194,13 @@ const Cornerstone3DViewer: React.FC = () => {
   const [activeMeta, setActiveMeta] = useState<DicomMeta | null>(null);
   const [viewportReady, setViewportReady] = useState(false);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [fileMeta, setFileMeta] = useState<Record<string, FileDicomMeta>>({});
+  const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set());
+  const [activeSeriesUID, setActiveSeriesUID] = useState<string | null>(null);
+  const [discs, setDiscs] = useState<DicomDisc[]>([]);
+  const [activeDiscId, setActiveDiscId] = useState<string | null>(null);
+  const [editingDiscId, setEditingDiscId] = useState<string | null>(null);
+  const [editDiscName, setEditDiscName] = useState('');
 
   const viewportDivRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
@@ -309,8 +362,36 @@ const Cornerstone3DViewer: React.FC = () => {
     };
   }, [viewportReady]);
 
+  // ===== Arrow key navigation — Up/Down to scroll through slices =====
+  useEffect(() => {
+    const el = viewportDivRef.current;
+    if (!el || !viewportReady) return;
+
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      if (!engineRef.current) return;
+      try {
+        const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
+        if (!vp) return;
+        const imgIds = vp.getImageIds();
+        if (!imgIds || imgIds.length <= 1) return;
+
+        const direction = e.key === 'ArrowDown' ? 1 : -1;
+        const currentIdx = vp.getCurrentImageIdIndex();
+        const newIdx = Math.max(0, Math.min(imgIds.length - 1, currentIdx + direction));
+        if (newIdx !== currentIdx) {
+          vp.setImageIdIndex(newIdx);
+        }
+        e.preventDefault();
+      } catch {}
+    };
+
+    el.addEventListener('keydown', keyHandler);
+    return () => el.removeEventListener('keydown', keyHandler);
+  }, [viewportReady]);
+
   // ===== Process uploaded files =====
-  const processFiles = useCallback(async (fileList: FileList | File[]) => {
+  const processFiles = useCallback(async (fileList: FileList | File[], discId?: string) => {
     if (!viewportReady) {
       console.warn('[CS3D] Not ready yet');
       return;
@@ -346,6 +427,7 @@ const Cornerstone3DViewer: React.FC = () => {
           path: relPath,
           isDicom: isValidDicom && imageId !== null,
           imageId,
+          discId,
         });
       }
     }
@@ -355,14 +437,20 @@ const Cornerstone3DViewer: React.FC = () => {
 
     setFiles(prev => {
       const newFiles = [...prev, ...processed];
-      // Auto-load stack
-      const allDicom = newFiles.filter(f => f.isDicom && f.imageId);
-      if (allDicom.length > 0) {
-        setTimeout(() => loadStackDirect(allDicom, 0, newFiles), 100);
+      // Auto-load: filter by disc if one is active/just-created
+      const targetDiscId = discId || activeDiscId;
+      const toLoad = targetDiscId
+        ? newFiles.filter(f => f.isDicom && f.imageId && f.discId === targetDiscId)
+        : newFiles.filter(f => f.isDicom && f.imageId);
+      if (toLoad.length > 0) {
+        setTimeout(() => loadStackDirect(toLoad, 0, newFiles), 100);
       }
       return newFiles;
     });
-  }, [viewportReady]);
+
+    // If this was a folder upload, activate it
+    if (discId) setActiveDiscId(discId);
+  }, [viewportReady, activeDiscId]);
 
   // ===== Load DICOM stack =====
   const loadStackDirect = async (
@@ -434,7 +522,92 @@ const Cornerstone3DViewer: React.FC = () => {
     }
   };
 
-  // ===== Click on file in list =====
+  // ===== Filter files by active disc =====
+  const activeFiles = React.useMemo(() => {
+    if (!activeDiscId) return files;
+    return files.filter(f => f.discId === activeDiscId);
+  }, [files, activeDiscId]);
+
+  // ===== Compute study/series grouping from extracted metadata =====
+  const studyGroups: StudyGroup[] = React.useMemo(() => {
+    const dicom = activeFiles.filter(f => f.isDicom && f.imageId);
+    if (dicom.length === 0 || Object.keys(fileMeta).length === 0) return [];
+
+    // Group by Study UID → Series UID
+    const studyMap = new Map<string, { meta: FileDicomMeta; seriesMap: Map<string, UploadedFile[]> }>();
+    for (const f of dicom) {
+      const meta = f.imageId ? fileMeta[f.imageId] : null;
+      const studyUID = meta?.studyInstanceUID || 'unknown-study';
+      const seriesUID = meta?.seriesInstanceUID || 'unknown-series';
+
+      if (!studyMap.has(studyUID)) {
+        studyMap.set(studyUID, { meta: meta || { studyInstanceUID: studyUID, seriesInstanceUID: seriesUID }, seriesMap: new Map() });
+      }
+      const entry = studyMap.get(studyUID)!;
+      if (!entry.seriesMap.has(seriesUID)) {
+        entry.seriesMap.set(seriesUID, []);
+      }
+      entry.seriesMap.get(seriesUID)!.push(f);
+    }
+
+    // Format DICOM date (YYYYMMDD) to readable format
+    const formatDicomDate = (d?: string): string => {
+      if (!d || d.length < 8) return '';
+      return `${d.slice(4, 6)}/${d.slice(6, 8)}/${d.slice(0, 4)}`;
+    };
+
+    const groups: StudyGroup[] = [];
+    for (const [studyUID, { meta: studyMeta, seriesMap }] of studyMap) {
+      const seriesList: SeriesGroup[] = [];
+      for (const [seriesUID, seriesFiles] of seriesMap) {
+        // Sort instances within series by Instance Number
+        seriesFiles.sort((a, b) => {
+          const ma = a.imageId ? fileMeta[a.imageId] : null;
+          const mb = b.imageId ? fileMeta[b.imageId] : null;
+          const na = ma?.instanceNumber ?? 9999;
+          const nb = mb?.instanceNumber ?? 9999;
+          return na - nb;
+        });
+        const firstMeta = seriesFiles[0]?.imageId ? fileMeta[seriesFiles[0].imageId] : null;
+        // Representative thumbnail = middle instance
+        const midIdx = Math.floor(seriesFiles.length / 2);
+        seriesList.push({
+          seriesUID,
+          seriesDescription: firstMeta?.seriesDescription || 'Series',
+          seriesNumber: firstMeta?.seriesNumber ?? 0,
+          modality: firstMeta?.modality || '??',
+          files: seriesFiles,
+          representativeImageId: seriesFiles[midIdx]?.imageId || null,
+        });
+      }
+      // Sort series by Series Number
+      seriesList.sort((a, b) => a.seriesNumber - b.seriesNumber);
+
+      groups.push({
+        studyUID,
+        studyDescription: studyMeta.studyDescription || 'Study',
+        studyDate: formatDicomDate(studyMeta.studyDate),
+        patientName: studyMeta.patientName || 'Unknown Patient',
+        series: seriesList,
+        totalFiles: seriesList.reduce((sum, s) => sum + s.files.length, 0),
+      });
+    }
+    return groups;
+  }, [activeFiles, fileMeta]);
+
+  // ===== Click on a series to load its instances as a stack =====
+  const handleSeriesClick = useCallback((seriesFiles: UploadedFile[], seriesUID: string) => {
+    // Sort by instance number before loading
+    const sorted = [...seriesFiles].sort((a, b) => {
+      const ma = a.imageId ? fileMeta[a.imageId] : null;
+      const mb = b.imageId ? fileMeta[b.imageId] : null;
+      return (ma?.instanceNumber ?? 0) - (mb?.instanceNumber ?? 0);
+    });
+    setActiveSeriesUID(seriesUID);
+    loadStackDirect(sorted, 0, files);
+  }, [files, fileMeta]);
+
+  // ===== Click on file in list (fallback for flat mode) =====
   const handleFileClick = useCallback((index: number) => {
     const f = files[index];
     if (!f.isDicom || !f.imageId) return;
@@ -444,21 +617,48 @@ const Cornerstone3DViewer: React.FC = () => {
     loadStackDirect(dicomFiles, dicomIdx, files);
   }, [files]);
 
-  // ===== Generate thumbnails for DICOM files — fast parallel batches =====
+  // ===== Extract DICOM metadata for a single imageId =====
+  const extractFileMeta = useCallback((imageId: string): FileDicomMeta | null => {
+    try {
+      const patient = metaData.get('patientModule', imageId);
+      const study = metaData.get('generalStudyModule', imageId);
+      const series = metaData.get('generalSeriesModule', imageId);
+      const img = metaData.get('generalImageModule', imageId);
+      return {
+        studyInstanceUID: study?.studyInstanceUID || 'unknown-study',
+        seriesInstanceUID: series?.seriesInstanceUID || 'unknown-series',
+        studyDescription: study?.studyDescription || undefined,
+        studyDate: study?.studyDate || undefined,
+        seriesDescription: series?.seriesDescription || undefined,
+        seriesNumber: series?.seriesNumber != null ? Number(series.seriesNumber) : undefined,
+        instanceNumber: img?.instanceNumber != null ? Number(img.instanceNumber) : undefined,
+        modality: series?.modality || undefined,
+        patientName: patient?.patientName?.Alphabetic || patient?.patientName || undefined,
+      };
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // ===== Generate thumbnails AND extract metadata for DICOM files =====
   const generateThumbnails = useCallback(async (dicomFiles: UploadedFile[]) => {
     const THUMB_SIZE = 128;
-    const BATCH_SIZE = 8; // Process 8 at a time in parallel
+    const BATCH_SIZE = 8;
 
     const { imageLoader } = await import('@cornerstonejs/core');
 
-    const renderThumb = async (imageId: string): Promise<string | null> => {
+    const processOne = async (imageId: string): Promise<{ thumb: string | null; meta: FileDicomMeta | null }> => {
       try {
         const image = await imageLoader.loadAndCacheImage(imageId);
-        if (!image) return null;
+        if (!image) return { thumb: null, meta: null };
 
+        // Extract metadata now that image is loaded
+        const meta = extractFileMeta(imageId);
+
+        // Render thumbnail
         const { rows, columns } = image;
         const pixelData = image.getPixelData();
-        if (!pixelData || !rows || !columns) return null;
+        if (!pixelData || !rows || !columns) return { thumb: null, meta };
 
         let ww = image.windowWidth;
         let wc = image.windowCenter;
@@ -466,7 +666,6 @@ const Cornerstone3DViewer: React.FC = () => {
         if (Array.isArray(wc)) wc = wc[0];
         if (!ww || !wc) {
           let min = Infinity, max = -Infinity;
-          // Sample every 4th pixel for speed on large images
           const step = pixelData.length > 65536 ? 4 : 1;
           for (let k = 0; k < pixelData.length; k += step) {
             if (pixelData[k] < min) min = pixelData[k];
@@ -485,7 +684,7 @@ const Cornerstone3DViewer: React.FC = () => {
         canvas.width = THUMB_SIZE;
         canvas.height = THUMB_SIZE;
         const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
+        if (!ctx) return { thumb: null, meta };
 
         const imgData = ctx.createImageData(THUMB_SIZE, THUMB_SIZE);
         const scaleX = columns / THUMB_SIZE;
@@ -506,29 +705,40 @@ const Cornerstone3DViewer: React.FC = () => {
         }
 
         ctx.putImageData(imgData, 0, 0);
-        return canvas.toDataURL('image/jpeg', 0.6);
+        return { thumb: canvas.toDataURL('image/jpeg', 0.6), meta };
       } catch {
-        return null;
+        return { thumb: null, meta: null };
       }
     };
 
-    // Process in parallel batches and update thumbnails incrementally
+    // Process in parallel batches — extract thumbnails + metadata together
     const toProcess = dicomFiles.filter(f => f.imageId);
     for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
       const batch = toProcess.slice(i, i + BATCH_SIZE);
       const results = await Promise.all(
-        batch.map(f => renderThumb(f.imageId!).then(thumb => ({ imageId: f.imageId!, thumb })))
+        batch.map(f => processOne(f.imageId!).then(r => ({ imageId: f.imageId!, ...r })))
       );
 
       const batchThumbs: Record<string, string> = {};
+      const batchMeta: Record<string, FileDicomMeta> = {};
       for (const r of results) {
         if (r.thumb) batchThumbs[r.imageId] = r.thumb;
+        if (r.meta) batchMeta[r.imageId] = r.meta;
       }
       if (Object.keys(batchThumbs).length > 0) {
         setThumbnails(prev => ({ ...prev, ...batchThumbs }));
       }
+      if (Object.keys(batchMeta).length > 0) {
+        setFileMeta(prev => {
+          const next = { ...prev, ...batchMeta };
+          // Auto-expand all studies on first metadata load
+          const studyUIDs = new Set(Object.values(next).map(m => m.studyInstanceUID));
+          setExpandedStudies(studyUIDs);
+          return next;
+        });
+      }
     }
-  }, []);
+  }, [extractFileMeta]);
 
   // ===== Reset view =====
   const handleResetView = useCallback(() => {
@@ -543,18 +753,91 @@ const Cornerstone3DViewer: React.FC = () => {
     } catch {}
   }, []);
 
-  // ===== File input =====
+  // ===== File input (individual files — no disc) =====
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) processFiles(e.target.files);
     e.target.value = '';
   };
 
-  // ===== Only show DICOM files in sidebar =====
-  const dicomFiles = files.filter(f => f.isDicom);
-  const nonDicomCount = files.length - dicomFiles.length;
+  // ===== Folder input — creates a disc entry =====
+  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) { e.target.value = ''; return; }
+    const fileList = e.target.files;
+    const arr = Array.from(fileList);
+
+    // Derive disc name from root folder in webkitRelativePath
+    const firstPath = (arr[0] as any).webkitRelativePath || '';
+    const rootFolder = firstPath.split('/')[0] || `Disc ${discs.length + 1}`;
+
+    const discId = `disc-${Date.now()}`;
+    const totalFiles = arr.length;
+
+    // Create disc entry (dicomFiles count will be updated after processing)
+    setDiscs(prev => [...prev, {
+      id: discId,
+      name: rootFolder,
+      uploadDate: new Date().toISOString(),
+      totalFiles,
+      dicomFiles: 0, // updated after processing
+    }]);
+
+    processFiles(fileList, discId).then(() => {
+      // Update dicom count after processing completes
+      setFiles(currentFiles => {
+        const dicomCount = currentFiles.filter(f => f.discId === discId && f.isDicom).length;
+        setDiscs(prev => prev.map(d => d.id === discId ? { ...d, dicomFiles: dicomCount } : d));
+        return currentFiles;
+      });
+    });
+    e.target.value = '';
+  };
+
+  // ===== Disc management =====
+  const handleLoadDisc = useCallback((discId: string) => {
+    setActiveDiscId(discId);
+    setActiveSeriesUID(null);
+    const discFiles = files.filter(f => f.discId === discId && f.isDicom && f.imageId);
+    if (discFiles.length > 0) {
+      loadStackDirect(discFiles, 0, files);
+    }
+  }, [files]);
+
+  const handleDeleteDisc = useCallback((discId: string) => {
+    setDiscs(prev => prev.filter(d => d.id !== discId));
+    setFiles(prev => prev.filter(f => f.discId !== discId));
+    if (activeDiscId === discId) {
+      setActiveDiscId(null);
+      setActiveSeriesUID(null);
+    }
+  }, [activeDiscId]);
+
+  const handleRenameDisc = useCallback((discId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setDiscs(prev => prev.map(d => d.id === discId ? { ...d, name: trimmed } : d));
+    setEditingDiscId(null);
+    setEditDiscName('');
+  }, []);
+
+  const handleMoveDisc = useCallback((discId: string, direction: 'up' | 'down') => {
+    setDiscs(prev => {
+      const idx = prev.findIndex(d => d.id === discId);
+      if (idx < 0) return prev;
+      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[targetIdx]] = [next[targetIdx], next[idx]];
+      return next;
+    });
+  }, []);
+
+  // ===== Only show DICOM files in sidebar (filtered by active disc) =====
+  const dicomFiles = activeFiles.filter(f => f.isDicom);
+  const nonDicomCount = activeFiles.length - dicomFiles.length;
 
   // ===== RENDER — viewport div ALWAYS in DOM =====
   return (
+    <>
     <div className="w-full bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700" style={{ minHeight: '580px' }}>
       {/* HEADER */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-800 border-b border-slate-700">
@@ -576,24 +859,22 @@ const Cornerstone3DViewer: React.FC = () => {
             <UploadIcon className="w-3.5 h-3.5" /> Files
           </button>
           <button
-            onClick={() => {
-              const input = folderInputRef.current;
-              if (input) { input.setAttribute('webkitdirectory', ''); input.click(); }
-            }}
+            onClick={() => folderInputRef.current?.click()}
             disabled={!viewportReady}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white text-[11px] font-bold rounded-lg transition-all disabled:opacity-40"
           >
             <FolderOpenIcon className="w-3.5 h-3.5" /> Folder
           </button>
           <input ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,*/*" onChange={handleFileSelect} className="hidden" />
-          <input ref={folderInputRef} type="file" multiple onChange={handleFileSelect} className="hidden" />
+          {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
+          <input ref={folderInputRef} type="file" multiple webkitdirectory="" onChange={handleFolderSelect} className="hidden" />
         </div>
       </div>
 
       {/* MAIN */}
       <div className="flex" style={{ height: '510px' }}>
-        {/* LEFT: Thumbnail sidebar — OHIF-style */}
-        <div className="w-[200px] border-r border-slate-700 flex flex-col overflow-hidden flex-shrink-0" style={{ backgroundColor: '#0d1117' }}>
+        {/* LEFT: Study/Series sidebar — OHIF-style hierarchy */}
+        <div className="w-[220px] border-r border-slate-700 flex flex-col overflow-hidden flex-shrink-0" style={{ backgroundColor: '#0d1117' }}>
           <div className="px-3 py-2 border-b border-slate-700/50">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Studies</span>
           </div>
@@ -603,7 +884,88 @@ const Cornerstone3DViewer: React.FC = () => {
                 <UploadIcon className="w-8 h-8 text-slate-800 mb-3" />
                 <p className="text-[11px] text-slate-600 leading-relaxed">Upload DICOM files<br />or a folder to begin</p>
               </div>
+            ) : studyGroups.length > 0 ? (
+              /* === Grouped by Study → Series using DICOM metadata === */
+              <div className="py-1">
+                {studyGroups.map((study) => {
+                  const isExpanded = expandedStudies.has(study.studyUID);
+                  return (
+                    <div key={study.studyUID} className="mb-1">
+                      {/* Study header */}
+                      <button
+                        onClick={() => setExpandedStudies(prev => {
+                          const next = new Set(prev);
+                          if (next.has(study.studyUID)) next.delete(study.studyUID);
+                          else next.add(study.studyUID);
+                          return next;
+                        })}
+                        className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-slate-800/60 transition-colors text-left"
+                      >
+                        {isExpanded
+                          ? <ChevronDownIcon className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                          : <ChevronRightIcon className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                        }
+                        <LayersIcon className="w-3 h-3 text-emerald-500 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] font-bold text-slate-300 truncate">{study.studyDescription}</p>
+                          <p className="text-[9px] text-slate-500 truncate">
+                            {study.patientName}
+                            {study.studyDate && <> &middot; {study.studyDate}</>}
+                            {' '}&middot; {study.totalFiles} images
+                          </p>
+                        </div>
+                      </button>
+
+                      {/* Series list */}
+                      {isExpanded && study.series.map((series) => {
+                        const isActiveSeries = activeSeriesUID === series.seriesUID;
+                        const repThumb = series.representativeImageId ? thumbnails[series.representativeImageId] : null;
+                        return (
+                          <button
+                            key={series.seriesUID}
+                            onClick={() => handleSeriesClick(series.files, series.seriesUID)}
+                            className={`w-full flex items-start gap-2 px-2 pl-6 py-1.5 transition-all text-left ${
+                              isActiveSeries
+                                ? 'bg-cyan-950/40 border-l-2 border-cyan-500'
+                                : 'hover:bg-slate-800/40 border-l-2 border-transparent'
+                            }`}
+                          >
+                            {/* Series thumbnail */}
+                            <div className={`w-12 h-12 rounded flex-shrink-0 overflow-hidden border ${
+                              isActiveSeries ? 'border-cyan-500' : 'border-slate-700'
+                            }`}>
+                              {repThumb ? (
+                                <img src={repThumb} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-slate-900">
+                                  <ScanIcon className="w-5 h-5 text-slate-700" />
+                                </div>
+                              )}
+                            </div>
+                            {/* Series info */}
+                            <div className="min-w-0 flex-1 py-0.5">
+                              <div className="flex items-center gap-1 mb-0.5">
+                                <span className="text-[8px] font-bold bg-emerald-900/50 text-emerald-400 px-1 py-px rounded">
+                                  {series.modality}
+                                </span>
+                                {series.seriesNumber > 0 && (
+                                  <span className="text-[8px] text-slate-600">#{series.seriesNumber}</span>
+                                )}
+                              </div>
+                              <p className={`text-[10px] truncate ${isActiveSeries ? 'text-cyan-300 font-semibold' : 'text-slate-400'}`}>
+                                {series.seriesDescription}
+                              </p>
+                              <p className="text-[9px] text-slate-600">{series.files.length} images</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
+              /* === Flat fallback while metadata is loading === */
               <div className="p-2 space-y-2">
                 {dicomFiles.map((f, dicomIdx) => {
                   const globalIdx = files.indexOf(f);
@@ -619,27 +981,20 @@ const Cornerstone3DViewer: React.FC = () => {
                           : 'border-transparent hover:border-slate-600'
                       }`}
                     >
-                      {/* Thumbnail image */}
                       <div className="relative w-full aspect-square bg-black">
                         {thumb ? (
-                          <img
-                            src={thumb}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
+                          <img src={thumb} alt="" className="w-full h-full object-cover" />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center bg-slate-900/80">
                             <ScanIcon className={`w-8 h-8 ${isActive ? 'text-cyan-400' : 'text-slate-700'}`} />
                           </div>
                         )}
-                        {/* Series number badge */}
-                        <div className="absolute bottom-1 left-1 flex items-center gap-1">
+                        <div className="absolute bottom-1 left-1">
                           <span className="text-[9px] font-bold text-cyan-400 bg-black/70 px-1.5 py-0.5 rounded">
-                            S:{dicomIdx + 1}
+                            {dicomIdx + 1}
                           </span>
                         </div>
                       </div>
-                      {/* File name below thumbnail */}
                       <div className={`px-1.5 py-1 text-[9px] truncate text-center ${
                         isActive ? 'text-cyan-300 bg-cyan-950/40' : 'text-slate-500 bg-slate-900/60'
                       }`}>
@@ -654,7 +1009,10 @@ const Cornerstone3DViewer: React.FC = () => {
           {dicomFiles.length > 0 && (
             <div className="px-3 py-1.5 border-t border-slate-700/50">
               <p className="text-[9px] text-slate-600 text-center">
-                {dicomFiles.length} images loaded
+                {dicomFiles.length} images &middot; {studyGroups.length > 0
+                  ? `${studyGroups.length} ${studyGroups.length === 1 ? 'study' : 'studies'}, ${studyGroups.reduce((s, g) => s + g.series.length, 0)} series`
+                  : 'loading metadata...'
+                }
               </p>
             </div>
           )}
@@ -723,11 +1081,12 @@ const Cornerstone3DViewer: React.FC = () => {
             </div>
           )}
 
-          {/* Cornerstone3D viewport div — ALWAYS present */}
+          {/* Cornerstone3D viewport div — ALWAYS present, tabIndex for arrow key focus */}
           <div
             ref={viewportDivRef}
-            className="w-full h-full"
+            className="w-full h-full outline-none"
             style={{ background: '#000' }}
+            tabIndex={0}
             onContextMenu={(e) => e.preventDefault()}
           />
         </div>
@@ -772,11 +1131,149 @@ const Cornerstone3DViewer: React.FC = () => {
           <span className="text-slate-700">|</span>
           <span className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-full bg-emerald-400/60" />
-            <strong className="text-slate-300">Scroll Wheel</strong> → Change Slices
+            <strong className="text-slate-300">Scroll / Arrow Keys</strong> → Change Slices
           </span>
         </div>
       </div>
     </div>
+
+    {/* ===== CONNECTED DISCS / FOLDERS SECTION ===== */}
+    {discs.length > 0 && (
+      <div className="mt-4 bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+        <div className="px-5 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <DiscIcon className="w-4 h-4 text-indigo-500" />
+            <h4 className="text-sm font-bold text-slate-700">Connected Discs</h4>
+            <span className="text-[10px] text-slate-400 ml-1">{discs.length} {discs.length === 1 ? 'folder' : 'folders'}</span>
+          </div>
+          {activeDiscId && (
+            <button
+              onClick={() => { setActiveDiscId(null); setActiveSeriesUID(null); }}
+              className="text-[10px] text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              Show all files
+            </button>
+          )}
+        </div>
+        <div className="divide-y divide-slate-100">
+          {discs.map((disc, idx) => {
+            const isActive = activeDiscId === disc.id;
+            const isEditing = editingDiscId === disc.id;
+            return (
+              <div
+                key={disc.id}
+                className={`px-5 py-3 flex items-center gap-3 transition-colors ${
+                  isActive ? 'bg-indigo-50 border-l-4 border-indigo-500' : 'hover:bg-slate-50 border-l-4 border-transparent'
+                }`}
+              >
+                {/* Folder icon */}
+                <FolderIcon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-indigo-500' : 'text-slate-400'}`} />
+
+                {/* Name & info */}
+                <div className="flex-1 min-w-0">
+                  {isEditing ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={editDiscName}
+                        onChange={(e) => setEditDiscName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleRenameDisc(disc.id, editDiscName);
+                          if (e.key === 'Escape') { setEditingDiscId(null); setEditDiscName(''); }
+                        }}
+                        autoFocus
+                        className="text-sm font-semibold text-slate-800 border border-indigo-300 rounded px-2 py-0.5 w-full focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                      <button
+                        onClick={() => handleRenameDisc(disc.id, editDiscName)}
+                        className="p-1 text-emerald-500 hover:text-emerald-700"
+                      >
+                        <CheckIcon className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => { setEditingDiscId(null); setEditDiscName(''); }}
+                        className="p-1 text-slate-400 hover:text-slate-600"
+                      >
+                        <XIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <p className={`text-sm font-semibold truncate ${isActive ? 'text-indigo-700' : 'text-slate-700'}`}>
+                        {disc.name}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {disc.dicomFiles > 0 ? `${disc.dicomFiles} DICOM` : `${disc.totalFiles} files`}
+                        {disc.dicomFiles > 0 && disc.totalFiles > disc.dicomFiles && ` of ${disc.totalFiles} total`}
+                        {' '}&middot; Added {new Date(disc.uploadDate).toLocaleDateString()}
+                      </p>
+                    </>
+                  )}
+                </div>
+
+                {/* Actions */}
+                {!isEditing && (
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {/* Reorder */}
+                    <button
+                      onClick={() => handleMoveDisc(disc.id, 'up')}
+                      disabled={idx === 0}
+                      className="p-1.5 text-slate-400 hover:text-slate-600 disabled:opacity-20 transition-colors"
+                      title="Move up"
+                    >
+                      <ArrowUpIcon className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleMoveDisc(disc.id, 'down')}
+                      disabled={idx === discs.length - 1}
+                      className="p-1.5 text-slate-400 hover:text-slate-600 disabled:opacity-20 transition-colors"
+                      title="Move down"
+                    >
+                      <ArrowDownIcon className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Rename */}
+                    <button
+                      onClick={() => { setEditingDiscId(disc.id); setEditDiscName(disc.name); }}
+                      className="p-1.5 text-slate-400 hover:text-indigo-500 transition-colors"
+                      title="Rename"
+                    >
+                      <PencilIcon className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Delete */}
+                    <button
+                      onClick={() => {
+                        if (confirm(`Remove "${disc.name}" and its ${disc.dicomFiles} images from the viewer?`)) {
+                          handleDeleteDisc(disc.id);
+                        }
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2Icon className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Load / Activate */}
+                    <button
+                      onClick={() => handleLoadDisc(disc.id)}
+                      className={`ml-2 px-3 py-1 text-[11px] font-bold rounded-lg transition-all ${
+                        isActive
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-indigo-100 hover:text-indigo-700'
+                      }`}
+                    >
+                      {isActive ? 'Active' : 'Load'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 
