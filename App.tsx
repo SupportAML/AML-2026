@@ -509,12 +509,23 @@ const App: React.FC = () => {
         const driveFile = await uploadFileToDrive(file, token, folderId);
         setUploadProgress(80);
 
+        // Derive folder path: use original folder structure if from folder upload, else default
+        const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || '';
+        let docPath = 'Medical Records/Radiology';
+        if (relPath) {
+          const parts = relPath.replace(/\\/g, '/').split('/');
+          parts.pop(); // remove filename
+          if (parts.length > 0) {
+            docPath = 'Medical Records/Radiology/' + parts.join('/');
+          }
+        }
+
         // Step 4: Save metadata to Firestore (only metadata, NO file bytes in Firebase)
         const newDoc: Document = {
           id: Math.random().toString(36).substr(2, 9),
           caseId,
           name: file.name,
-          type: 'dicom' as DocumentFileType, // Always DICOM — this came from the DICOM upload button
+          type: 'dicom' as DocumentFileType,
           mimeType: file.type || 'application/dicom',
           url: '', // Empty — will be fetched from user's Drive on demand
           driveFileId: driveFile.id,
@@ -522,7 +533,7 @@ const App: React.FC = () => {
           uploadDate: new Date().toISOString(),
           size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
           reviewStatus: 'pending',
-          path: 'Medical Records/Radiology'
+          path: docPath
         };
         await upsertDocument(newDoc);
         setUploadProgress(100);
