@@ -616,17 +616,20 @@ export const draftMedicalLegalReportStream = async (
     writerComments: string,
     additionalContext: string,
     qualifications: string,
-    onChunk: (text: string) => void
+    onChunk: (text: string) => void,
+    chronologyData?: StructuredChronology | null,
+    freehandNotes?: string
 ): Promise<string> => {
     const systemPrompt = [
         "You are a Physician Expert drafting a formal Medical-Legal Report for litigation.",
         "Tone: authoritative, clinical, precise, and court-ready.",
         "CRITICAL RULES:",
-        "1) Use ONLY the provided case notes, annotations, and document list.",
+        "1) Use ONLY the provided case notes, annotations, timeline, freehand notes, and document list.",
         "2) Do NOT fabricate facts; if a detail is missing, state it as a limitation.",
         "3) Be thorough and comprehensive. Do not be overly concise.",
         "4) Prefer narrative paragraphs over bullet-only sections unless the template demands bullets.",
-        "5) If asked to include U.S. expert disclosure elements, list them and mark missing items as 'Not provided'."
+        "5) If asked to include U.S. expert disclosure elements, list them and mark missing items as 'Not provided'.",
+        "6) When a structured timeline is provided, use it as the primary chronological framework for the report. It represents the expert's curated, verified sequence of events."
     ].join('\n');
 
     const docNameById = new Map(docs.map(d => [d.id, d.name]));
@@ -655,12 +658,34 @@ export const draftMedicalLegalReportStream = async (
         .map(([category, items]) => `\n### ${category}\n${items.join('\n')}`)
         .join('\n') || 'No annotations available';
 
+    // Format structured chronology (timeline) if available
+    let chronologyBlock = '';
+    if (chronologyData && chronologyData.years && chronologyData.years.length > 0) {
+        const timelineLines: string[] = [];
+        for (const yearEntry of chronologyData.years) {
+            for (const monthEntry of yearEntry.months) {
+                for (const event of monthEntry.events) {
+                    const dateStr = event.date || `${monthEntry.month} ${yearEntry.year}`;
+                    const sourceRef = event.sourceDocumentName ? ` (Source: ${event.sourceDocumentName}${event.sourcePage ? `, p. ${event.sourcePage}` : ''})` : '';
+                    timelineLines.push(`- ${dateStr}: ${event.formattedText}${sourceRef}`);
+                }
+            }
+        }
+        if (timelineLines.length > 0) {
+            chronologyBlock = timelineLines.join('\n');
+        }
+    }
+
+    const freehandBlock = freehandNotes?.trim() || '';
+
     const resolvedTemplate = resolveReportTemplate(caseData.reportTemplate);
     const inputChars = [
         annotationsBlock,
         pdfTextContext || '',
         additionalContext || '',
-        writerComments || ''
+        writerComments || '',
+        chronologyBlock,
+        freehandBlock
     ].join('\n').length;
     const minChars = getTargetCharsForTemplate(caseData.reportTemplate, inputChars);
     const userPrompt = `
@@ -689,6 +714,9 @@ ${qualifications || 'Medical Expert'}
 **DOCUMENTS REVIEWED:**
 ${docs.map((d, i) => `${i + 1}. ${d.name}`).join('\n') || 'No documents listed'}
 
+**STRUCTURED TIMELINE / CHRONOLOGY:**
+${chronologyBlock || 'No structured timeline available — rely on annotations and notes for chronological data.'}
+
 **PDF ANNOTATIONS & EVIDENCE EXCERPTS:**
 ${annotationsBlock}
 
@@ -701,9 +729,14 @@ ${writerComments || 'None provided'}
 **CASE NOTES / CLINICAL NOTES:**
 ${additionalContext || 'None provided'}
 
+**FREEHAND NOTES / EXPERT OBSERVATIONS:**
+${freehandBlock || 'None provided'}
+
 ---
 
 **TASK:** Generate a complete, professional Medical-Legal Report.
+
+${chronologyBlock ? 'IMPORTANT: A structured timeline has been provided above. Use it as the authoritative chronological backbone for the Patient History & Timeline section. Cross-reference with annotations for supporting detail.' : ''}
 
 Length guidance: aim for approximately 3200-5200 words unless the provided evidence is very limited; if limited, still provide a full structure and explicitly note limitations.
 Each major section should include multiple paragraphs with reasoning, not just a single short paragraph. Use professional narrative prose.
@@ -1076,6 +1109,136 @@ RULES:
     } catch (e) {
         console.error("suggestReportEdit error:", e);
         return { suggestions: [] };
+    }
+};
+
+/**
+ * Conversational legal writing assistant with full case context.
+ * Supports both free-form conversation (brainstorming, explanations, questions)
+ * and targeted edit suggestions with find-and-replace diffs.
+ */
+export interface WriterChatMessage {
+    role: 'user' | 'assistant';
+    content: string;
+}
+
+export interface WriterChatContext {
+    caseData: Case;
+    reportContent: string;
+    annotations: Annotation[];
+    chronologyData?: StructuredChronology | null;
+    freehandNotes?: string;
+    docs: Document[];
+}
+
+export interface WriterChatResponse {
+    message: string;
+    suggestions?: Array<{ originalExcerpt: string; revisedExcerpt: string; explanation: string }>;
+    researchQuery?: string;
+}
+
+export const chatWithLegalWriter = async (
+    instruction: string,
+    context: WriterChatContext,
+    conversationHistory: WriterChatMessage[] = []
+): Promise<WriterChatResponse> => {
+    // Build timeline summary for context
+    let timelineSummary = '';
+    if (context.chronologyData?.years?.length) {
+        const lines: string[] = [];
+        for (const y of context.chronologyData.years) {
+            for (const m of y.months) {
+                for (const ev of m.events) {
+                    const dateStr = ev.date || `${m.month} ${y.year}`;
+                    lines.push(`- ${dateStr}: ${ev.formattedText}`);
+                }
+            }
+        }
+        if (lines.length > 0) timelineSummary = lines.join('\n');
+    }
+
+    // Build annotations summary (condensed)
+    const annotationsSummary = context.annotations
+        .slice(0, 50)
+        .map(a => `- [${a.category}] ${a.text}${a.eventDate ? ` (${a.eventDate})` : ''}`)
+        .join('\n');
+
+    const systemPrompt = `You are an expert Medical-Legal Writing Assistant embedded in a legal report editor. You help the user refine, improve, and develop their medical-legal report through conversation.
+
+You have access to the full case context:
+
+**CASE:** ${context.caseData.title}
+**DESCRIPTION:** ${context.caseData.description || 'No description'}
+
+**DOCUMENTS REVIEWED:**
+${context.docs.map(d => `- ${d.name}`).join('\n') || 'None'}
+
+${timelineSummary ? `**STRUCTURED TIMELINE (curated by the expert):**\n${timelineSummary}` : ''}
+
+${annotationsSummary ? `**KEY ANNOTATIONS:**\n${annotationsSummary}` : ''}
+
+${context.freehandNotes ? `**EXPERT'S FREEHAND NOTES:**\n${context.freehandNotes}` : ''}
+
+**CURRENT REPORT DRAFT:**
+${context.reportContent ? context.reportContent.substring(0, 15000) : 'No draft yet.'}
+
+---
+
+YOUR CAPABILITIES:
+1. **Conversational responses**: Answer questions, brainstorm ideas, explain legal/medical concepts, suggest structure improvements, discuss strategy.
+2. **Targeted edits**: When the user asks you to change, fix, rewrite, or improve specific parts of the report, provide exact find-and-replace suggestions.
+3. **Research triggers**: When the user asks for research, citations, or evidence on a medical/legal topic, indicate that research is needed.
+
+RESPONSE FORMAT — You MUST respond with valid JSON:
+{
+  "message": "Your conversational response here. Use markdown formatting. Be helpful, specific, and reference the case context when relevant.",
+  "suggestions": [
+    {
+      "originalExcerpt": "Exact text from the current report to replace (verbatim copy)",
+      "revisedExcerpt": "The improved replacement text",
+      "explanation": "Brief explanation of this change"
+    }
+  ],
+  "researchQuery": "medical/legal search query if research was requested, or null"
+}
+
+RULES:
+- "message" is ALWAYS required. Use it to explain your thinking, provide context, or answer the user's question.
+- "suggestions" is OPTIONAL. Only include it when the user explicitly asks for edits, rewrites, or improvements to specific report text. Each originalExcerpt must be a verbatim copy from the current report.
+- "researchQuery" is OPTIONAL. Include it only when the user asks for research, evidence, citations, or literature on a topic.
+- Be conversational and helpful. You are a collaborative writing partner, not just an editor.
+- Reference the timeline, annotations, and case facts when they are relevant to the user's question.
+- When suggesting edits, keep them focused and targeted. Don't rewrite the entire report.
+- When the user asks for new content to add (not replacing existing text), put the new content in "message" and explain where it should be inserted — do NOT use suggestions for purely new content that has no original text to replace.`;
+
+    // Convert conversation history to OpenAI message format
+    const messages = conversationHistory.map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content
+    }));
+
+    try {
+        const result = await callOpenAIJSON<WriterChatResponse>(
+            systemPrompt,
+            instruction,
+            {
+                model: getModelForTask('critical'),
+                maxTokens: 4096,
+                timeoutMs: REQUEST_TIMEOUT_MS,
+                messages
+            }
+        );
+
+        return {
+            message: result.message || 'I wasn\'t able to generate a response. Please try rephrasing your request.',
+            suggestions: result.suggestions?.filter(s => s.originalExcerpt && s.revisedExcerpt) || undefined,
+            researchQuery: result.researchQuery || undefined
+        };
+    } catch (e) {
+        console.error("chatWithLegalWriter error:", e);
+        return {
+            message: 'Sorry, I encountered an error processing your request. Please try again.'
+        };
     }
 };
 

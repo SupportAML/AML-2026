@@ -99,6 +99,7 @@ import {
    chatWithDepositionCoach,
    cleanupChronology,
    suggestReportEdit,
+   chatWithLegalWriter,
    searchMedicalResearch,
    analyzeReportForResearchGaps,
    insertSmartCitation,
@@ -106,6 +107,7 @@ import {
    rewordClinicalNotes,
    extractHandwrittenNotesFromImage
 } from '../services/openaiService';
+import type { WriterChatMessage } from '../services/openaiService';
 import { extractPdfTextForAnnotations } from '../services/pdfTextService';
 
 interface AnnotationRollupProps {
@@ -1431,32 +1433,85 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       setEditorHistory(prev => [...prev, { role: 'user', text: userText }]);
       setIsGenerating(true);
 
-      const result = await suggestReportEdit(reportContent, userText);
-      const suggestions = (result.suggestions || [])
-         .filter(s => s.originalExcerpt && s.revisedExcerpt)
-         .slice(0, 12)
-         .map((s, idx) => {
-            const diff = Diff.diffWords(s.originalExcerpt, s.revisedExcerpt);
-            const suggestion: EditorSuggestion = {
-               id: `${Date.now()}_${idx}`,
-               original: s.originalExcerpt,
-               proposed: s.revisedExcerpt,
-               explanation: s.explanation || 'Suggested edit',
-               diff
-            };
-            return suggestion;
-         });
-
-      if (suggestions.length === 0) {
-         setEditorHistory(prev => [...prev, { role: 'model', text: "No edits suggested for this request." }]);
-      } else {
-         const cards = suggestions.map((s, i) => ({
-            role: 'model' as const,
-            text: i === 0 ? `Suggested ${suggestions.length} targeted edits:` : s.explanation,
-            suggestion: s
+      // Build conversation history from editorHistory for multi-turn context
+      const conversationHistory: WriterChatMessage[] = editorHistory
+         .filter(m => m.role === 'user' || (m.role === 'model' && !m.suggestion))
+         .map(m => ({
+            role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+            content: m.text
          }));
-         setEditorHistory(prev => [...prev, ...cards]);
+
+      const result = await chatWithLegalWriter(
+         userText,
+         {
+            caseData: caseItem,
+            reportContent,
+            annotations,
+            chronologyData,
+            freehandNotes,
+            docs
+         },
+         conversationHistory
+      );
+
+      // Always add the conversational message
+      if (result.message) {
+         setEditorHistory(prev => [...prev, { role: 'model', text: result.message }]);
       }
+
+      // Add edit suggestions if any were returned
+      if (result.suggestions && result.suggestions.length > 0) {
+         const suggestions = result.suggestions
+            .filter(s => s.originalExcerpt && s.revisedExcerpt)
+            .slice(0, 12)
+            .map((s, idx) => {
+               const diff = Diff.diffWords(s.originalExcerpt, s.revisedExcerpt);
+               const suggestion: EditorSuggestion = {
+                  id: `${Date.now()}_${idx}`,
+                  original: s.originalExcerpt,
+                  proposed: s.revisedExcerpt,
+                  explanation: s.explanation || 'Suggested edit',
+                  diff
+               };
+               return suggestion;
+            });
+
+         if (suggestions.length > 0) {
+            const cards = suggestions.map((s, i) => ({
+               role: 'model' as const,
+               text: s.explanation,
+               suggestion: s
+            }));
+            setEditorHistory(prev => [...prev, ...cards]);
+         }
+      }
+
+      // Trigger research if the AI indicated one is needed
+      if (result.researchQuery) {
+         setEditorHistory(prev => [...prev, { role: 'model', text: `Searching for research on: "${result.researchQuery}"...` }]);
+         try {
+            const articles = await searchMedicalResearch(result.researchQuery, caseItem.description || caseItem.title);
+            if (articles && articles.length > 0) {
+               const researchSummary = articles.map(a => `**${a.title}**\n${a.source} — ${a.citation}\n${a.summary}`).join('\n\n');
+               setEditorHistory(prev => [...prev, {
+                  role: 'model',
+                  text: `Found ${articles.length} relevant articles:\n\n${researchSummary}`
+               }]);
+               // Also add to research results state if not already present
+               setResearchResults(prev => {
+                  const existingUrls = new Set(prev.map(r => r.url));
+                  const newArticles = articles.filter(a => !existingUrls.has(a.url));
+                  return [...prev, ...newArticles];
+               });
+            } else {
+               setEditorHistory(prev => [...prev, { role: 'model', text: 'No relevant research articles found for that query.' }]);
+            }
+         } catch (err) {
+            console.error('Research search failed:', err);
+            setEditorHistory(prev => [...prev, { role: 'model', text: 'Research search encountered an error. Please try again.' }]);
+         }
+      }
+
       setIsGenerating(false);
    };
 
@@ -3576,8 +3631,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            <>
                               <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 text-center">
                                  <BrainCircuitIcon className="w-6 h-6 text-emerald-500 mx-auto mb-1" />
-                                 <p className="text-xs text-emerald-800 font-bold">AI Editing Partner</p>
-                                 <p className="text-[10px] text-emerald-600">I can rewrite, rephrase, or critique your draft.</p>
+                                 <p className="text-xs text-emerald-800 font-bold">AI Writing Partner</p>
+                                 <p className="text-[10px] text-emerald-600">Chat with me to brainstorm, edit, research, or improve your draft. I have full context of your case, timeline, and notes.</p>
                               </div>
                               <button
                                  onClick={handleApplyAllSuggestions}
@@ -3625,9 +3680,10 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                 </div>
                                              </div>
                                           ) : (
-                                             <div className="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-2xl rounded-bl-none text-xs shadow-sm">
-                                                {msg.text}
-                                             </div>
+                                             <div
+                                                className="bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-2xl rounded-bl-none text-xs shadow-sm prose prose-xs prose-slate max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_strong]:text-slate-900 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs"
+                                                dangerouslySetInnerHTML={{ __html: parse(msg.text) as string }}
+                                             />
                                           )}
                                        </div>
                                     )}
@@ -3644,10 +3700,10 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               <div className="pt-2 sticky bottom-0 bg-slate-50 space-y-3">
                                  <div className="flex flex-wrap gap-2 px-1">
                                     {[
-                                       { label: 'Authoritative', prompt: 'Make the tone more authoritative and expert-driven.' },
-                                       { label: 'Concise', prompt: 'Make this section more concise and clinically direct.' },
-                                       { label: 'Critique', prompt: 'Critique this draft for any clinical inconsistencies or weak logic.' },
-                                       { label: 'Summarize', prompt: 'Summarize the core clinical findings in this section.' }
+                                       { label: 'Strengthen', prompt: 'Identify the weakest arguments in this draft and suggest how to strengthen them with the available evidence.' },
+                                       { label: 'Critique', prompt: 'Critique this draft for any clinical inconsistencies, weak logic, or gaps in reasoning.' },
+                                       { label: 'Research', prompt: 'What medical literature or clinical guidelines would strengthen the key arguments in this report?' },
+                                       { label: 'Gaps', prompt: 'What important facts from the timeline or case notes are missing from this draft?' }
                                     ].map(chip => (
                                        <button
                                           key={chip.label}
@@ -3661,7 +3717,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                  <form onSubmit={handleEditorSubmit} className="relative">
                                     <input
                                        className="w-full pl-3 pr-10 py-3 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm"
-                                       placeholder="e.g. 'Make tone more authoritative'"
+                                       placeholder="Ask anything — edit, brainstorm, research..."
                                        value={editorInput}
                                        onChange={(e) => setEditorInput(e.target.value)}
                                        disabled={isGenerating}
@@ -3742,7 +3798,9 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                    const html = parse(chunk) as string;
                                                    setReportContent(html);
                                                    lastContentRef.current = html;
-                                                }
+                                                },
+                                                  chronologyData,
+                                                  freehandNotes
                                              );
                                              const html = parse(generatedReport) as string;
 
