@@ -1,14 +1,14 @@
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { Case, AuthorizedUser, Annotation, Document as DocType } from '../types';
 
 // ============================================================================
-// OPENAI API CONFIGURATION FOR ADMIN SERVICES
+// ANTHROPIC (CLAUDE) API CONFIGURATION FOR ADMIN SERVICES
 // ============================================================================
 
-const API_KEY = (import.meta.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY || '') as string;
+const API_KEY = (import.meta.env.VITE_CLAUDE_API_KEY || process.env.CLAUDE_API_KEY || '') as string;
 
 // Default model for admin queries
-const DEFAULT_ADMIN_MODEL = import.meta.env.VITE_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o';
+const DEFAULT_ADMIN_MODEL = import.meta.env.VITE_CLAUDE_MODEL || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
 
 interface PlatformData {
     cases: Case[];
@@ -18,13 +18,13 @@ interface PlatformData {
 }
 
 /**
- * Analyzes platform data using OpenAI to answer admin queries
+ * Analyzes platform data using Claude to answer admin queries
  */
 export async function analyzeDataWithAI(query: string, data: PlatformData): Promise<string> {
     try {
         // Check if API key is configured
         if (!API_KEY) {
-            return 'AI features are currently unavailable. Please configure the OpenAI API key in your environment variables. Add VITE_OPENAI_API_KEY to your .env.local file and restart the dev server.';
+            return 'AI features are currently unavailable. Please configure the Claude API key in your environment variables. Add VITE_CLAUDE_API_KEY to your .env.local file and restart the dev server.';
         }
 
         // Prepare data summary for AI
@@ -83,16 +83,16 @@ export async function analyzeDataWithAI(query: string, data: PlatformData): Prom
             }
         };
 
-        // Initialize OpenAI client
-        const openai = new OpenAI({
+        // Initialize Anthropic client
+        const anthropic = new Anthropic({
             apiKey: API_KEY,
-            dangerouslyAllowBrowser: true // Required for client-side usage
+            dangerouslyAllowBrowser: true
         });
 
-        const systemPrompt = `You are an intelligent admin assistant for ApexMedLaw, a medical-legal platform. 
+        const systemPrompt = `You are an intelligent admin assistant for ApexMedLaw, a medical-legal platform.
 You have access to platform data and should provide clear, concise, and helpful answers.
-If the question asks for specific numbers or lists, provide them. 
-Format your response in a friendly, professional manner. 
+If the question asks for specific numbers or lists, provide them.
+Format your response in a friendly, professional manner.
 Use bullet points or numbered lists for clarity when showing lists.`;
 
         const userPrompt = `Platform Data:
@@ -102,29 +102,30 @@ User Question: ${query}
 
 Please provide a clear and helpful answer based on the data above.`;
 
-        // Call OpenAI
-        const response = await openai.chat.completions.create({
+        // Call Claude
+        const response = await anthropic.messages.create({
             model: DEFAULT_ADMIN_MODEL,
             max_tokens: 2048,
             temperature: 0.7,
+            system: systemPrompt,
             messages: [
-                { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ]
         });
 
-        return response.choices[0]?.message?.content ?? "I apologize, but I couldn't generate a response.";
+        const textBlock = response.content.find(block => block.type === 'text');
+        return (textBlock && textBlock.type === 'text' ? textBlock.text : '') || "I apologize, but I couldn't generate a response.";
 
     } catch (error: any) {
         console.error('Admin AI Service Error:', error);
 
         if (error?.message?.includes('api_key') || error?.status === 401) {
-            return 'I apologize, but the API key is invalid. Please check your OpenAI API configuration in Settings.';
+            return 'I apologize, but the API key is invalid. Please check your Claude API configuration in Settings.';
         }
         if (error?.status === 429) {
             return 'I apologize, but the API rate limit has been exceeded. Please try again in a moment.';
         }
-        if (error?.status === 503) {
+        if (error?.status === 529) {
             return 'I apologize, but the AI service is temporarily overloaded. Please try again shortly.';
         }
 

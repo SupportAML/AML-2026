@@ -31,7 +31,7 @@ import {
   ExternalLinkIcon
 } from 'lucide-react';
 import { Document as DocType, Annotation } from '../types';
-import { processAnnotationInput } from '../services/openaiService';
+import { processAnnotationInput } from '../services/claudeService';
 import { pdfCacheManager } from '../services/pdfCacheManager';
 import { VoiceTranscriptionOverlay } from './VoiceTranscriptionOverlay';
 import DicomViewer from './DicomViewer';

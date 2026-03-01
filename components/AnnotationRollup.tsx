@@ -105,7 +105,7 @@ import {
    extractFactsFromNotes,
    rewordClinicalNotes,
    extractHandwrittenNotesFromImage
-} from '../services/openaiService';
+} from '../services/claudeService';
 import { extractPdfTextForAnnotations } from '../services/pdfTextService';
 
 interface AnnotationRollupProps {

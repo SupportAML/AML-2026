@@ -323,7 +323,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
                                     onChange={() => setSettings({ ...settings, emailServiceEnabled: !settings.emailServiceEnabled })}
                                 />
                             </SettingRow>
-                            <SettingRow label="AI Assistant (Gemini)" description="Enable AI-powered features and insights">
+                            <SettingRow label="AI Assistant (Claude)" description="Enable AI-powered features and insights">
                                 <Toggle
                                     checked={settings.aiAssistantEnabled}
                                     onChange={() => setSettings({ ...settings, aiAssistantEnabled: !settings.aiAssistantEnabled })}
@@ -341,7 +341,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
                                     </p>
                                     <div className="flex gap-2 text-xs">
                                         <span className="px-2 py-1 bg-white rounded border border-cyan-200 text-cyan-700 font-mono">
-                                            VITE_GEMINI_API_KEY
+                                            VITE_CLAUDE_API_KEY
                                         </span>
                                         <span className="px-2 py-1 bg-white rounded border border-cyan-200 text-cyan-700 font-mono">
                                             VITE_BREVO_API_KEY

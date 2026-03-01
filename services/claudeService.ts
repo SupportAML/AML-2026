@@ -1,63 +1,62 @@
 
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { Annotation, Case, Document, ChatMessage, StrategyAnalysis, StructuredChronology, DepoFeedback } from "../types";
 import { aiCache } from "./aiCacheManager";
 
 // ============================================================================
-// OPENAI API CONFIGURATION
+// ANTHROPIC (CLAUDE) API CONFIGURATION
 // ============================================================================
 
-const API_KEY = import.meta.env.VITE_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
+const API_KEY = import.meta.env.VITE_CLAUDE_API_KEY || process.env.CLAUDE_API_KEY || "";
 
 if (!API_KEY) {
-    console.error("❌ OPENAI API KEY IS MISSING!");
-    console.error("   Add VITE_OPENAI_API_KEY to your .env.local file");
-    console.error("   Example: VITE_OPENAI_API_KEY=sk-...");
+    console.error("CLAUDE API KEY IS MISSING!");
+    console.error("   Add VITE_CLAUDE_API_KEY to your .env.local file");
+    console.error("   Example: VITE_CLAUDE_API_KEY=sk-ant-...");
 } else {
-    console.log("✅ OpenAI API Key loaded:", API_KEY.substring(0, 10) + "...");
+    console.log("Claude API Key loaded:", API_KEY.substring(0, 12) + "...");
 }
 
-const openai = new OpenAI({
+const anthropic = new Anthropic({
     apiKey: API_KEY,
-    dangerouslyAllowBrowser: true // Required for client-side usage
+    dangerouslyAllowBrowser: true
 });
 
 // ============================================================================
-// MODEL CONFIGURATION - Valid OpenAI Models
+// MODEL CONFIGURATION - Claude Models
 // ============================================================================
 
 /**
- * GPT-4o-mini - Fast, cost-effective model for simple tasks
+ * Claude Haiku - Fast, cost-effective model for simple tasks
  * Best for: Data extraction, simple queries, form processing
  */
-const GPT_MINI = "gpt-4o-mini";
+const CLAUDE_HAIKU = "claude-haiku-4-5-20251001";
 
 /**
- * GPT-4o - Powerful model for complex reasoning
+ * Claude Sonnet - Powerful model for complex reasoning
  * Best for: AI assistance, legal analysis, medical case analysis, coaching
  */
-const GPT_4O = "gpt-4o";
+const CLAUDE_SONNET = "claude-sonnet-4-20250514";
 
-// Environment override for testing specific models; default to gpt-4o
-const DEFAULT_OPENAI_MODEL = import.meta.env.VITE_OPENAI_MODEL || process.env.OPENAI_MODEL || GPT_4O;
+// Environment override for testing specific models; default to Claude Sonnet
+const DEFAULT_CLAUDE_MODEL = import.meta.env.VITE_CLAUDE_MODEL || process.env.CLAUDE_MODEL || CLAUDE_SONNET;
 
 /**
  * Smart model selection based on task complexity
  */
 const getModelForTask = (taskType: 'simple' | 'complex' | 'critical'): string => {
-    // Allow environment override
-    const envModel = import.meta.env.VITE_OPENAI_MODEL || process.env.OPENAI_MODEL;
+    const envModel = import.meta.env.VITE_CLAUDE_MODEL || process.env.CLAUDE_MODEL;
     if (envModel) return envModel;
 
     switch (taskType) {
         case 'simple':
-            return GPT_MINI;
+            return CLAUDE_HAIKU;
         case 'complex':
-            return GPT_4O;
+            return CLAUDE_SONNET;
         case 'critical':
-            return GPT_4O;
+            return CLAUDE_SONNET;
         default:
-            return GPT_4O;
+            return CLAUDE_SONNET;
     }
 };
 
@@ -162,14 +161,14 @@ const getTargetCharsForTemplate = (reportTemplate: string | undefined, inputChar
 // ============================================================================
 
 const REQUEST_TIMEOUT_MS = Number(
-    import.meta.env.VITE_OPENAI_REQUEST_TIMEOUT_MS ||
-    process.env.OPENAI_REQUEST_TIMEOUT_MS ||
+    import.meta.env.VITE_CLAUDE_REQUEST_TIMEOUT_MS ||
+    process.env.CLAUDE_REQUEST_TIMEOUT_MS ||
     90000
 );
 
 const LONG_REQUEST_TIMEOUT_MS = Number(
-    import.meta.env.VITE_OPENAI_LONG_REQUEST_TIMEOUT_MS ||
-    process.env.OPENAI_LONG_REQUEST_TIMEOUT_MS ||
+    import.meta.env.VITE_CLAUDE_LONG_REQUEST_TIMEOUT_MS ||
+    process.env.CLAUDE_LONG_REQUEST_TIMEOUT_MS ||
     180000
 );
 
@@ -177,7 +176,7 @@ const LONG_REQUEST_TIMEOUT_MS = Number(
 // IN-MEMORY RESPONSE CACHE
 // ============================================================================
 
-const AI_RESPONSE_CACHE_TTL_MS = Number(process.env.OPENAI_RESPONSE_CACHE_TTL_MS || 1000 * 60 * 60); // 1 hour
+const AI_RESPONSE_CACHE_TTL_MS = Number(process.env.CLAUDE_RESPONSE_CACHE_TTL_MS || 1000 * 60 * 60); // 1 hour
 const aiResponseCache = new Map<string, { value: any; expires: number }>();
 
 const cacheGet = (key: string) => {
@@ -266,7 +265,7 @@ REPORT TO EXPAND:
 ${draft}
 `;
 
-    const expanded = await callOpenAI(systemPrompt, userPrompt, {
+    const expanded = await callClaude(systemPrompt, userPrompt, {
         model: getModelForTask('critical'),
         maxTokens: 16000,
         temperature: 0.4,
@@ -281,9 +280,9 @@ ${draft}
 // ============================================================================
 
 /**
- * Core OpenAI chat completion call with timeout and error handling
+ * Core Anthropic (Claude) chat completion call with timeout and error handling
  */
-const callOpenAI = async (
+const callClaude = async (
     systemPrompt: string,
     userPrompt: string,
     options: {
@@ -295,7 +294,7 @@ const callOpenAI = async (
         messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
     } = {}
 ): Promise<string> => {
-    const modelToUse = options.model || DEFAULT_OPENAI_MODEL;
+    const modelToUse = options.model || DEFAULT_CLAUDE_MODEL;
     const isServer = typeof window === 'undefined';
     const cacheKey = `${modelToUse}::${systemPrompt}::${userPrompt}`;
 
@@ -304,8 +303,7 @@ const callOpenAI = async (
         if (cached) return cached as string;
     }
 
-    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemPrompt },
+    const messages: Anthropic.MessageParam[] = [
         ...(options.messages || []).map(m => ({
             role: m.role as 'user' | 'assistant',
             content: m.content
@@ -315,36 +313,38 @@ const callOpenAI = async (
 
     const requestTimeoutMs = options.timeoutMs || REQUEST_TIMEOUT_MS;
 
-    const reqPromise = openai.chat.completions.create({
+    const reqPromise = anthropic.messages.create({
         model: modelToUse,
         max_tokens: options.maxTokens || 4096,
         temperature: options.temperature ?? 0.7,
+        system: systemPrompt,
         messages
     });
 
     const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('OpenAI request timed out')), requestTimeoutMs)
+        setTimeout(() => reject(new Error('Claude request timed out')), requestTimeoutMs)
     );
 
     try {
-        const response = await Promise.race([reqPromise, timeoutPromise]) as OpenAI.Chat.ChatCompletion;
-        const text = response.choices[0]?.message?.content ?? '';
-        if (!text) throw new Error("No text content found in OpenAI response");
+        const response = await Promise.race([reqPromise, timeoutPromise]) as Anthropic.Message;
+        const textBlock = response.content.find(block => block.type === 'text');
+        const text = textBlock && textBlock.type === 'text' ? textBlock.text : '';
+        if (!text) throw new Error("No text content found in Claude response");
         if (options.cache && isServer) cacheSet(cacheKey, text);
         return text;
     } catch (error: any) {
-        console.error("OpenAI API error:", error);
+        console.error("Claude API error:", error);
 
         if (error?.message?.includes('api_key') || error?.status === 401) {
-            throw new Error("Invalid API key. Please check your VITE_OPENAI_API_KEY configuration.");
+            throw new Error("Invalid API key. Please check your VITE_CLAUDE_API_KEY configuration.");
         }
         if (error?.message?.includes('quota') || error?.message?.includes('billing') || error?.status === 402) {
-            throw new Error("OpenAI quota exceeded. Please check your billing at platform.openai.com.");
+            throw new Error("Anthropic quota exceeded. Please check your billing at console.anthropic.com.");
         }
         if (error?.status === 429) {
             throw new Error("Too many requests. Please wait a moment and try again.");
         }
-        if (error?.status === 503) {
+        if (error?.status === 529) {
             throw new Error("Service temporarily overloaded. Please try again.");
         }
         throw error;
@@ -352,38 +352,36 @@ const callOpenAI = async (
 };
 
 /**
- * Stream text response from OpenAI — shows first words quickly
+ * Stream text response from Claude — shows first words quickly
  */
-export const callOpenAIStream = async (
+export const callClaudeStream = async (
     systemPrompt: string,
     userPrompt: string,
     onChunk: (text: string) => void,
     options: { model?: string; maxTokens?: number } = {}
 ): Promise<string> => {
-    const modelToUse = options.model || DEFAULT_OPENAI_MODEL;
+    const modelToUse = options.model || DEFAULT_CLAUDE_MODEL;
     try {
-        const stream = await openai.chat.completions.create({
+        const stream = anthropic.messages.stream({
             model: modelToUse,
             max_tokens: options.maxTokens || 8000,
+            system: systemPrompt,
             messages: [
-                { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
-            ],
-            stream: true
+            ]
         });
 
         let fullText = '';
-        for await (const chunk of stream) {
-            const delta = chunk.choices[0]?.delta?.content || '';
-            if (delta) {
-                fullText += delta;
-                onChunk(fullText);
-            }
-        }
+        stream.on('text', (text) => {
+            fullText += text;
+            onChunk(fullText);
+        });
+
+        await stream.finalMessage();
         return fullText;
     } catch (e) {
         // Fallback to non-streaming
-        const fallback = await callOpenAI(systemPrompt, userPrompt, { maxTokens: options.maxTokens || 8000 });
+        const fallback = await callClaude(systemPrompt, userPrompt, { maxTokens: options.maxTokens || 8000 });
         onChunk(fallback);
         return fallback;
     }
@@ -392,7 +390,7 @@ export const callOpenAIStream = async (
 /**
  * Helper for structured JSON responses
  */
-const callOpenAIJSON = async <T>(
+const callClaudeJSON = async <T>(
     systemPrompt: string,
     userPrompt: string,
     options: {
@@ -404,7 +402,7 @@ const callOpenAIJSON = async <T>(
     } = {}
 ): Promise<T> => {
     const enhancedSystemPrompt = `${systemPrompt}\n\nYou MUST respond with valid JSON only. Do not include any text before or after the JSON object.`;
-    const response = await callOpenAI(enhancedSystemPrompt, userPrompt, options);
+    const response = await callClaude(enhancedSystemPrompt, userPrompt, options);
 
     let jsonText = String(response || '').trim();
     if (jsonText.startsWith('```json')) {
@@ -428,10 +426,10 @@ const callOpenAIJSON = async <T>(
             for (let i = 0; i < (openBraces - closeBraces); i++) fixed += '}';
             try {
                 const result = JSON.parse(fixed);
-                console.log('✅ Auto-completed truncated JSON response');
+                console.log('Auto-completed truncated JSON response');
                 return result;
             } catch {
-                console.warn('⚠️ JSON truncated and auto-completion failed');
+                console.warn('JSON truncated and auto-completion failed');
             }
         }
 
@@ -459,7 +457,7 @@ export const analyzeDocument = async (doc: Document) => {
     try {
         const systemPrompt = "You are a legal document analysis expert. Analyze documents for their legal relevance and provide concise insights.";
         const userPrompt = `Analyze this document metadata for legal relevance: ${JSON.stringify(doc)}`;
-        return await callOpenAI(systemPrompt, userPrompt, { model: getModelForTask('simple') });
+        return await callClaude(systemPrompt, userPrompt, { model: getModelForTask('simple') });
     } catch (e) {
         console.error("analyzeDocument error:", e);
         return "Analysis failed.";
@@ -588,13 +586,13 @@ Format the report professionally with proper sections, clinical terminology, and
 `;
 
     try {
-        const result = await callOpenAI(systemPrompt, userPrompt, {
+        const result = await callClaude(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 12000,
             timeoutMs: LONG_REQUEST_TIMEOUT_MS
         });
         if (!result || result.trim() === '') {
-            console.error("Empty response from OpenAI API");
+            console.error("Empty response from Claude API");
             return "Error: Received empty response from AI. Please try again.";
         }
         const expanded = await expandReportIfTooShort(result, minChars, resolvedTemplate);
@@ -725,7 +723,7 @@ Template selected: ${resolvedTemplate?.label || 'Standard Medical-Legal Report'}
 Format the report professionally with proper sections, clinical terminology, and courtroom-appropriate language. Preserve any source citations that appear in the notes (e.g., ("Source", p. X)).
 `;
     try {
-        const result = await callOpenAIStream(systemPrompt, userPrompt, onChunk, {
+        const result = await callClaudeStream(systemPrompt, userPrompt, onChunk, {
             model: getModelForTask('critical'),
             maxTokens: 12000
         });
@@ -797,7 +795,7 @@ INSTRUCTIONS:
 `;
 
     try {
-        const result = await callOpenAIJSON<StructuredChronology>(systemPrompt, userPrompt, {
+        const result = await callClaudeJSON<StructuredChronology>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             temperature: 0.3
         });
@@ -819,7 +817,7 @@ You MUST respond with valid JSON: an array of objects with "text", "eventDate" (
     const userPrompt = `Extract key clinical facts from these physician notes. eventDate should be YYYY-MM-DD or null. NOTES: "${userNotes}"`;
 
     try {
-        return await callOpenAIJSON<Partial<Annotation>[]>(systemPrompt, userPrompt, {
+        return await callClaudeJSON<Partial<Annotation>[]>(systemPrompt, userPrompt, {
             model: getModelForTask('simple'),
             temperature: 0.3,
             maxTokens: 512,
@@ -859,7 +857,7 @@ Create 3-4 key scenarios. Keep each field concise.`;
     if (cached) return cached;
 
     try {
-        const result = await callOpenAIJSON<StrategyAnalysis>(systemPrompt, userPrompt, {
+        const result = await callClaudeJSON<StrategyAnalysis>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 12000,
             timeoutMs: LONG_REQUEST_TIMEOUT_MS
@@ -880,7 +878,7 @@ export const rewordClinicalNotes = async (rawNotes: string, caseTitle: string): 
         const systemPrompt = "You are a professional medical-legal scribe. Your task is to reword and refine clinical notes to be more professional, authoritative, and clinically precise. \n\nCRITICAL RULES:\n1. Maintain ALL original facts, dates, symptoms, and findings exactly as provided.\n2. PRESERVE CITATIONS: Do NOT alter or remove source links in the format `([\"Source Name\", p. X])` or `(Source Name, p. X)`. Keep them exactly where they are.\n3. Only improve the phrasing, vocabulary, and clarity.\n4. Do not add headers if they aren't there, and do not change the basic structure.";
         const userPrompt = `CASE: "${caseTitle}"\n\nNOTES TO REWORD:\n${rawNotes}`;
 
-        return await callOpenAI(systemPrompt, userPrompt, {
+        return await callClaude(systemPrompt, userPrompt, {
             model: getModelForTask('critical')
         });
     } catch (e) {
@@ -894,10 +892,10 @@ export const rewordClinicalNotes = async (rawNotes: string, caseTitle: string): 
  */
 export const processAnnotationInput = async (rawText: string) => {
     try {
-        console.log('🔍 DEBUG INFO: processAnnotationInput called');
+        console.log('processAnnotationInput called');
         console.log('API Key exists:', !!API_KEY);
         console.log('API Key prefix (first 15 chars):', API_KEY.slice(0, 15));
-        console.log('Default model:', DEFAULT_OPENAI_MODEL);
+        console.log('Default model:', DEFAULT_CLAUDE_MODEL);
     } catch (dbgError) {
         console.warn('Debug logging failed:', dbgError);
     }
@@ -951,7 +949,7 @@ INSTRUCTIONS:
 `;
 
     try {
-        const result = await callOpenAIJSON<{
+        const result = await callClaudeJSON<{
             refinedText: string;
             extractedDate: string | null;
             extractedTime: string | null;
@@ -977,7 +975,7 @@ INSTRUCTIONS:
  * Chat with Deposition Coach.
  */
 export const chatWithDepositionCoach = async (history: ChatMessage[], message: string, context: string) => {
-    const systemPrompt = `You are an aggressive opposing counsel deposition coach. 
+    const systemPrompt = `You are an aggressive opposing counsel deposition coach.
 Your goal is to trap the physician expert with difficult clinical questions.
 After the user responds, analyze their answer:
     1. Score it(1 - 10).
@@ -998,11 +996,10 @@ You MUST respond with valid JSON matching this structure:
                             "betterAnswer": "string"
         },
         "nextQuestion": "string"
-    } `;
+    }`;
 
-    // Build conversation history for OpenAI
-    const conversationMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: 'system', content: systemPrompt },
+    // Build conversation history for Claude
+    const conversationMessages: Anthropic.MessageParam[] = [
         ...history.map(h => ({
             role: (h.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
             content: h.text
@@ -1011,14 +1008,16 @@ You MUST respond with valid JSON matching this structure:
     ];
 
     try {
-        const response = await openai.chat.completions.create({
+        const response = await anthropic.messages.create({
             model: getModelForTask('critical'),
             max_tokens: 2048,
             temperature: 0.8,
+            system: systemPrompt,
             messages: conversationMessages
         });
 
-        let jsonText = response.choices[0]?.message?.content?.trim() || '';
+        const textBlock = response.content.find(block => block.type === 'text');
+        let jsonText = (textBlock && textBlock.type === 'text' ? textBlock.text : '').trim();
 
         if (!jsonText) throw new Error("No text content in response");
         if (jsonText.startsWith('```json')) {
@@ -1069,7 +1068,7 @@ RULES:
     const userPrompt = `Report Content: ${content}\nInstruction: ${instruction}`;
 
     try {
-        return await callOpenAIJSON<{ suggestions: Array<{ originalExcerpt: string; revisedExcerpt: string; explanation: string }> }>(systemPrompt, userPrompt, {
+        return await callClaudeJSON<{ suggestions: Array<{ originalExcerpt: string; revisedExcerpt: string; explanation: string }> }>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             timeoutMs: REQUEST_TIMEOUT_MS
         });
@@ -1084,7 +1083,7 @@ RULES:
  */
 export const searchMedicalResearch = async (query: string, context: string) => {
     try {
-        console.log('🔍 Searching medical literature for:', query);
+        console.log('Searching medical literature for:', query);
 
         const systemPrompt = `You are a medical research librarian with access to comprehensive medical databases (PubMed, MEDLINE, Cochrane Library, medical journals).
 Your task is to generate 4-6 REALISTIC research articles, clinical guidelines, or peer-reviewed studies that would be found when searching medical literature.
@@ -1131,7 +1130,7 @@ Return JSON array format:
         const cached = aiCache.get<Array<{ title: string; source: string; summary: string; url: string; citation: string }>>(cacheKey);
         if (cached) return cached;
 
-        const result = await callOpenAIJSON<Array<{
+        const result = await callClaudeJSON<Array<{
             title: string;
             source: string;
             summary: string;
@@ -1144,7 +1143,7 @@ Return JSON array format:
             timeoutMs: LONG_REQUEST_TIMEOUT_MS
         });
 
-        console.log(`✅ Found ${result.length} research articles`);
+        console.log(`Found ${result.length} research articles`);
         if (result.length) aiCache.set(cacheKey, result);
         return result;
     } catch (error) {
@@ -1185,8 +1184,8 @@ Return ONLY a JSON array. Example format:
 ]`;
 
     try {
-        console.log('🔍 Analyzing report for research gaps (attempt 1/2)...');
-        return await callOpenAIJSON<Array<{ topic: string; reason: string }>>(systemPrompt, userPrompt, {
+        console.log('Analyzing report for research gaps (attempt 1/2)...');
+        return await callClaudeJSON<Array<{ topic: string; reason: string }>>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 16384,
             timeoutMs: LONG_REQUEST_TIMEOUT_MS,
@@ -1194,7 +1193,7 @@ Return ONLY a JSON array. Example format:
         });
     } catch (e: any) {
         if (e?.message?.includes('truncated') || e?.message?.includes('JSON')) {
-            console.warn('⚠️ First attempt truncated, retrying with smaller content...');
+            console.warn('First attempt truncated, retrying with smaller content...');
             try {
                 const shorterContent = content.substring(0, 20000);
                 const retryPrompt = `Analyze this report excerpt and identify the TOP 5 most critical research gaps:
@@ -1203,7 +1202,7 @@ ${shorterContent}
 
 Return ONLY a JSON array with max 5 items. Keep "topic" and "reason" extremely brief.`;
 
-                return await callOpenAIJSON<Array<{ topic: string; reason: string }>>(systemPrompt, retryPrompt, {
+                return await callClaudeJSON<Array<{ topic: string; reason: string }>>(systemPrompt, retryPrompt, {
                     model: getModelForTask('critical'),
                     maxTokens: 8192,
                     timeoutMs: LONG_REQUEST_TIMEOUT_MS,
@@ -1243,7 +1242,7 @@ You MUST respond with valid JSON matching this structure:
     const userPrompt = `Propose a MINIMAL citation insertion for this article into the report. Only modify body paragraphs where the research is relevant. Do NOT touch headers, metadata, or case identification.\n\nArticle: ${JSON.stringify(article)}\n\nReport:\n${content}`;
 
     try {
-        return await callOpenAIJSON<{ newContent: string; explanation: string }>(systemPrompt, userPrompt, {
+        return await callClaudeJSON<{ newContent: string; explanation: string }>(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 8192
         });
@@ -1261,7 +1260,7 @@ export const finalizeLegalReport = async (content: string): Promise<string> => {
         const systemPrompt = "You are a senior medical-legal editor. Your task is to convert a draft report into a final, client-ready format. Remove all markdown artifacts (like double asterisks or hashtags) if they interfere with professional look, ensure consistent typography, and remove any 'working' tags or AI markers. The output should be a clean, perfectly formatted professional report ready for signature.";
         const userPrompt = `FINAL EDIT REQUEST:\n\n${content}\n\n--- \nPlease provide the finalized text below:`;
 
-        return await callOpenAI(systemPrompt, userPrompt, {
+        return await callClaude(systemPrompt, userPrompt, {
             model: getModelForTask('critical'),
             maxTokens: 8000
         });
@@ -1272,7 +1271,7 @@ export const finalizeLegalReport = async (content: string): Promise<string> => {
 };
 
 /**
- * Extract handwritten notes from an image using OpenAI Vision.
+ * Extract handwritten notes from an image using Claude Vision.
  */
 export const extractHandwrittenNotesFromImage = async (
     imageBase64: string,
@@ -1292,18 +1291,20 @@ RULES:
 
     const userPrompt = "Extract all handwritten text from this image and return it as bullet points, one per line, preserving the order as shown in the image.";
 
-    const response = await openai.chat.completions.create({
-        model: DEFAULT_OPENAI_MODEL,
+    const response = await anthropic.messages.create({
+        model: DEFAULT_CLAUDE_MODEL,
         max_tokens: 2048,
+        system: systemPrompt,
         messages: [
-            { role: 'system', content: systemPrompt },
             {
                 role: 'user',
                 content: [
                     {
-                        type: 'image_url',
-                        image_url: {
-                            url: `data:${mediaType};base64,${imageBase64}`
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            media_type: mediaType,
+                            data: imageBase64
                         }
                     },
                     { type: 'text', text: userPrompt }
@@ -1312,7 +1313,8 @@ RULES:
         ]
     });
 
-    const text = response.choices[0]?.message?.content?.trim() || "(No readable text found)";
+    const textBlock = response.content.find(block => block.type === 'text');
+    const text = (textBlock && textBlock.type === 'text' ? textBlock.text : '').trim() || "(No readable text found)";
 
     if (text === "(No readable text found)") return text;
 
