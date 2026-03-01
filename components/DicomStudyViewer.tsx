@@ -129,10 +129,12 @@ function ensureInit(): Promise<void> {
       await csInit();
       await csDicomInit({ maxWebWorkers: navigator.hardwareConcurrency || 1 });
       await csToolsInit();
-      addTool(StackScrollTool);
-      addTool(WindowLevelTool);
-      addTool(ZoomTool);
-      addTool(PanTool);
+      // Wrap in try-catch to avoid errors if tools are already registered
+      // (e.g. if Cornerstone3DViewer module also registers them)
+      try { addTool(StackScrollTool); } catch {}
+      try { addTool(WindowLevelTool); } catch {}
+      try { addTool(ZoomTool); } catch {}
+      try { addTool(PanTool); } catch {}
       csInitDone = true;
     })();
   }
@@ -270,6 +272,11 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       el.addEventListener('wheel', suppress, { capture: true });
     }
 
+    // Ensure viewport is properly sized after mount
+    setTimeout(() => {
+      try { engine.resize(); } catch {}
+    }, 100);
+
     setViewportReady(true);
   }, [isInitialized]);
 
@@ -324,7 +331,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   useEffect(() => {
     if (!viewportReady || files.length === 0) return;
     processFiles(files);
-  }, [viewportReady, files]);
+  }, [viewportReady, files, processFiles]);
 
   // ===== Keyboard shortcuts =====
   useEffect(() => {
@@ -447,7 +454,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       const best = parsedStudies[0].series.reduce((a, b) => a.fileCount > b.fileCount ? a : b);
       loadSeries(best);
     }
-  }, [viewportReady]);
+  }, [viewportReady, loadSeries]);
 
   // ===== Load a series into viewport =====
   const loadSeries = useCallback(async (series: ViewerSeries) => {
