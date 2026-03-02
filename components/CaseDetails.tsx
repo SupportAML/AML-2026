@@ -40,8 +40,9 @@ import {
   GlobeIcon
 } from 'lucide-react';
 import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
-import { getFileDownloadUrl, getRecursiveDicomFiles, downloadDriveFilePartial, DriveDicomFile } from '../services/googleDriveService';
-import { parseDicomFile, groupFilesByDicomStudy, extractDriveFolderIdFromUrl, type DicomMeta } from '../services/dicomParserService';
+import { getRecursiveDicomFiles, downloadDriveFilePartial, DriveDicomFile } from '../services/googleDriveService';
+import { parseDicomFile, type DicomMeta } from '../services/dicomParserService';
+import DriveBrowserModal from './DriveBrowserModal';
 
 const DicomStudyViewerComponent = lazy(() => import('./DicomStudyViewer'));
 
@@ -112,7 +113,6 @@ interface CaseDetailsProps {
   onUpdateDocStatus: (docId: string, status: ReviewStatus) => void;
   onUpdateDoc: (doc: Document) => void;
   onOpenAnalysis: () => void;
-  onDicomDriveUpload?: (caseId: string, files: File[]) => Promise<void>;
   onSaveDicomAnnotation?: (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => void;
   googleAccessToken?: string | null;
   onRequestDriveAuth?: () => Promise<string | null>;
@@ -371,15 +371,14 @@ const FileTreeItem: React.FC<{
 const CaseDetails: React.FC<CaseDetailsProps> = ({
   caseItem, docs, onOpenDoc, onUpload, onUploadFolder, onUpdateCase, onDeleteDoc,
   currentUser, allUsers, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis,
-  onDicomDriveUpload, onSaveDicomAnnotation, googleAccessToken, onRequestDriveAuth
+  onSaveDicomAnnotation, googleAccessToken, onRequestDriveAuth
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const dicomFolderInputRef = useRef<HTMLInputElement>(null);
-  const dicomDriveFolderInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // Set webkitdirectory as a property (not attribute with empty string)
-    for (const ref of [folderInputRef, dicomFolderInputRef, dicomDriveFolderInputRef]) {
+    for (const ref of [folderInputRef, dicomFolderInputRef]) {
       const el = ref.current;
       if (el) {
         (el as any).webkitdirectory = true;
@@ -392,13 +391,11 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [showDicomViewer, setShowDicomViewer] = useState(false);
   const [dicomViewerFiles, setDicomViewerFiles] = useState<File[]>([]);
   const [localDicomStudies, setLocalDicomStudies] = useState<{ name: string; files: File[]; selected: boolean }[]>([]);
-  const [isDicomUploading, setIsDicomUploading] = useState(false);
   const [isDicomDriveLoading, setIsDicomDriveLoading] = useState(false);
   const [dicomDriveLoadProgress, setDicomDriveLoadProgress] = useState('');
-  const [showDriveImportModal, setShowDriveImportModal] = useState(false);
-  const [driveImportUrl, setDriveImportUrl] = useState('');
-  const [driveImportStatus, setDriveImportStatus] = useState('');
-  const [isDriveImporting, setIsDriveImporting] = useState(false);
+  const [showDicomDriveBrowser, setShowDicomDriveBrowser] = useState(false);
+  const [isDicomImporting, setIsDicomImporting] = useState(false);
+  const [dicomImportProgress, setDicomImportProgress] = useState('');
 
   // Multi-select state for Case Files
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
@@ -747,45 +744,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     e.target.value = '';
   };
 
-  const handleDicomDriveFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const fileArr = Array.from(files).filter(f => !f.name.startsWith('.') && f.size > 0);
-    if (fileArr.length === 0) return;
-
-    if (onDicomDriveUpload) {
-      setIsDicomUploading(true);
-      try {
-        await onDicomDriveUpload(caseItem.id, fileArr);
-        // Also add to local studies for immediate viewing
-        const folderMap = new Map<string, File[]>();
-        for (const file of fileArr) {
-          const relPath = (file as any).webkitRelativePath || file.name;
-          const parts = relPath.split('/');
-          const topFolder = parts.length >= 2 ? parts[0] : 'DICOM Files';
-          if (!folderMap.has(topFolder)) folderMap.set(topFolder, []);
-          folderMap.get(topFolder)!.push(file);
-        }
-        const studies = Array.from(folderMap.entries()).map(([name, files]) => ({
-          name,
-          files,
-          selected: true,
-        }));
-        setLocalDicomStudies(prev => [...prev, ...studies]);
-      } catch (err) {
-        console.error('DICOM Drive upload failed:', err);
-      } finally {
-        setIsDicomUploading(false);
-      }
-    }
-    e.target.value = '';
-  };
-
-  const removeDicomStudy = (index: number) => {
-    setLocalDicomStudies(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Open Drive-stored DICOM files in the fullscreen viewer
+  // Open Drive-stored DICOM files in the fullscreen viewer — parallel fetch for speed
   const openDriveDicomViewer = async (driveDocs: Document[]) => {
     const driveFiles = driveDocs.filter(d => d.storageLocation === 'drive' && d.driveFileId);
     if (driveFiles.length === 0) {
@@ -793,7 +752,6 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
       return;
     }
 
-    // Ensure we have a Google access token
     let token = googleAccessToken;
     if (!token && onRequestDriveAuth) {
       token = await onRequestDriveAuth();
@@ -804,35 +762,45 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     }
 
     setIsDicomDriveLoading(true);
-    setDicomDriveLoadProgress(`Fetching 0/${driveFiles.length} files from Drive...`);
+    setDicomDriveLoadProgress(`Streaming ${driveFiles.length} files from Drive...`);
 
     try {
-      const fetchedFiles: File[] = [];
-      for (let i = 0; i < driveFiles.length; i++) {
-        const doc = driveFiles[i];
-        setDicomDriveLoadProgress(`Fetching ${i + 1}/${driveFiles.length}: ${doc.name}`);
+      const CONCURRENCY = 6;
+      const fetchedFiles: File[] = new Array(driveFiles.length);
+      let completed = 0;
+      let failed = 0;
+
+      const fetchOne = async (index: number) => {
+        const doc = driveFiles[index];
         try {
-          const blobUrl = await getFileDownloadUrl(doc.driveFileId!, token!);
-          const response = await fetch(blobUrl);
+          const response = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${doc.driveFileId}?alt=media`,
+            { headers: { 'Authorization': `Bearer ${token}` } }
+          );
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const blob = await response.blob();
-          // Revoke the intermediate blob URL to avoid memory leaks
-          URL.revokeObjectURL(blobUrl);
-          // Convert blob to File object with original name and DICOM mime type
-          const file = new File([blob], doc.name, { type: doc.mimeType || 'application/dicom' });
-          fetchedFiles.push(file);
+          fetchedFiles[index] = new File([blob], doc.name, { type: doc.mimeType || 'application/dicom' });
         } catch (err) {
           console.warn(`[DICOM Drive] Failed to fetch ${doc.name}:`, err);
+          failed++;
         }
+        completed++;
+        setDicomDriveLoadProgress(`Streaming ${completed}/${driveFiles.length} files...${failed > 0 ? ` (${failed} failed)` : ''}`);
+      };
+
+      // Fetch in parallel batches
+      for (let i = 0; i < driveFiles.length; i += CONCURRENCY) {
+        const batch = driveFiles.slice(i, i + CONCURRENCY).map((_, j) => fetchOne(i + j));
+        await Promise.all(batch);
       }
 
-      if (fetchedFiles.length === 0) {
+      const validFiles = fetchedFiles.filter(Boolean);
+      if (validFiles.length === 0) {
         alert('Could not fetch any DICOM files from Drive. Your Google session may have expired — try again.');
-        setIsDicomDriveLoading(false);
-        setDicomDriveLoadProgress('');
         return;
       }
 
-      setDicomViewerFiles(fetchedFiles);
+      setDicomViewerFiles(validFiles);
       setShowDicomViewer(true);
     } catch (err) {
       console.error('[DICOM Drive] Viewer load error:', err);
@@ -843,63 +811,73 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     }
   };
 
-  // Import DICOM studies from a Google Drive shared folder URL
-  const handleDriveImport = async () => {
-    const folderId = extractDriveFolderIdFromUrl(driveImportUrl);
-    if (!folderId) {
-      alert('Invalid Google Drive folder URL. Please paste a URL like:\nhttps://drive.google.com/drive/folders/...');
-      return;
-    }
-
+  // Browse Google Drive for DICOM folders
+  const handleDicomDriveBrowse = async () => {
     let token = googleAccessToken;
     if (!token && onRequestDriveAuth) {
       token = await onRequestDriveAuth();
     }
     if (!token) {
-      alert('Please link your Google account first.');
+      alert('Please link your Google account to browse your Drive for DICOM studies.');
       return;
     }
+    setShowDicomDriveBrowser(true);
+  };
 
-    setIsDriveImporting(true);
-    setDriveImportStatus('Scanning Drive folder structure...');
+  // Handle folder(s) selected from Drive browser — scan, parse metadata, create records
+  const handleDicomFolderSelected = async (folders: { id: string; name: string }[]) => {
+    setShowDicomDriveBrowser(false);
+
+    let token = googleAccessToken;
+    if (!token && onRequestDriveAuth) {
+      token = await onRequestDriveAuth();
+    }
+    if (!token) return;
+
+    setIsDicomImporting(true);
+    setDicomImportProgress('Scanning Drive folder structure...');
 
     try {
-      // 1. List all files recursively
-      const driveFiles = await getRecursiveDicomFiles(token, folderId);
-      if (driveFiles.length === 0) {
-        alert('No files found in the Drive folder. Make sure the folder is shared and contains DICOM files.');
-        setIsDriveImporting(false);
-        setDriveImportStatus('');
+      // Scan all selected folders
+      let allDriveFiles: DriveDicomFile[] = [];
+      for (const folder of folders) {
+        setDicomImportProgress(`Scanning "${folder.name}"...`);
+        const files = await getRecursiveDicomFiles(token, folder.id, '/', folder.name);
+        allDriveFiles = [...allDriveFiles, ...files];
+      }
+
+      if (allDriveFiles.length === 0) {
+        alert('No files found in the selected folder(s).');
         return;
       }
 
-      setDriveImportStatus(`Found ${driveFiles.length} files. Parsing DICOM metadata...`);
+      setDicomImportProgress(`Found ${allDriveFiles.length} files. Parsing DICOM metadata...`);
 
-      // 2. Group files by subfolder
+      // Group by subfolder
       const subfolderGroups = new Map<string, DriveDicomFile[]>();
-      for (const f of driveFiles) {
+      for (const f of allDriveFiles) {
         const key = f.relativePath;
         if (!subfolderGroups.has(key)) subfolderGroups.set(key, []);
         subfolderGroups.get(key)!.push(f);
       }
 
-      // 3. Parse first file of each subfolder for metadata
+      // Parse first file of each subfolder for metadata
       const folderMeta = new Map<string, DicomMeta>();
       let parsedCount = 0;
       for (const [folderPath, files] of subfolderGroups) {
         parsedCount++;
-        setDriveImportStatus(`Parsing metadata (${parsedCount}/${subfolderGroups.size}): ${files[0].subfolderName}`);
+        setDicomImportProgress(`Parsing metadata (${parsedCount}/${subfolderGroups.size}): ${files[0].subfolderName}`);
         try {
           const buf = await downloadDriveFilePartial(files[0].id, token!, 512 * 1024);
           const tempFile = new File([buf], files[0].name, { type: 'application/dicom' });
           const meta = await parseDicomFile(tempFile);
           if (meta) folderMeta.set(folderPath, meta);
         } catch (e) {
-          console.warn('[Drive Import] Failed to parse metadata for', folderPath, e);
+          console.warn('[DICOM Import] Failed to parse metadata for', folderPath, e);
         }
       }
 
-      // 4. Group by Study Instance UID
+      // Group by Study Instance UID
       const studyGroups = new Map<string, { metadata: DicomMeta; files: DriveDicomFile[]; displayName: string }>();
       for (const [folderPath, files] of subfolderGroups) {
         const meta = folderMeta.get(folderPath);
@@ -910,17 +888,16 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
           else if (meta?.seriesDescription) displayName = meta.modality ? `${meta.modality} — ${meta.seriesDescription}` : meta.seriesDescription;
           else if (meta?.modality) displayName = /^\d+$/.test(files[0].subfolderName) ? `${meta.modality} Study` : `${meta.modality} — ${files[0].subfolderName}`;
           else if (!/^\d+$/.test(files[0].subfolderName)) displayName = files[0].subfolderName;
-
           studyGroups.set(studyKey, { metadata: meta || {}, files: [], displayName });
         }
         studyGroups.get(studyKey)!.files.push(...files);
       }
 
-      setDriveImportStatus(`Creating ${studyGroups.size} study records...`);
+      setDicomImportProgress(`Creating ${studyGroups.size} study records...`);
 
-      // 5. Create Document records and DicomStudyRecords
+      // Create Document records and DicomStudyRecords (NO upload — just references)
       const newStudies: DicomStudyRecord[] = [];
-      for (const [_studyKey, group] of studyGroups) {
+      for (const [, group] of studyGroups) {
         const studyId = `study-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
         const docIds: string[] = [];
 
@@ -940,8 +917,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             reviewStatus: 'pending',
             path: `DICOM/${group.displayName}`
           };
-          // We batch these - upsertDocument called for each
-          await onUpdateDoc(newDoc);
+          onUpdateDoc(newDoc);
           docIds.push(docId);
         }
 
@@ -961,25 +937,26 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         });
       }
 
-      // 6. Update case with new studies
       const updatedStudies = [...(caseItem.dicomStudies || []), ...newStudies];
       await onUpdateCase({ ...caseItem, dicomStudies: updatedStudies });
-
-      setShowDriveImportModal(false);
-      setDriveImportUrl('');
-      setDriveImportStatus('');
     } catch (e: any) {
-      console.error('[Drive Import] Failed:', e);
+      console.error('[DICOM Import] Failed:', e);
       if (e?.message?.includes('401') || e?.message?.includes('403')) {
-        alert('Google Drive access denied. Make sure the folder is shared with you and try again.');
+        alert('Google Drive access denied. Make sure you have access to this folder.');
       } else {
         alert('Import failed: ' + (e?.message || 'Unknown error'));
       }
     } finally {
-      setIsDriveImporting(false);
-      setDriveImportStatus('');
+      setIsDicomImporting(false);
+      setDicomImportProgress('');
     }
   };
+
+  // Handle single folder selection from Drive browser (import all from current location)
+  const handleDicomSingleFolderSelected = async (folder: { id: string; name: string }) => {
+    await handleDicomFolderSelected([folder]);
+  };
+
 
   // Count existing DICOM docs in the case
   const dicomDocs = docs.filter(d => d.type === 'dicom');
@@ -1802,7 +1779,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               DICOM Medical Imaging
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Upload DICOM study folders to Google Drive — each subfolder is treated as a separate study
+              Browse your Google Drive to import DICOM studies — files stay on your Drive
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1811,27 +1788,18 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-200 transition-all border border-slate-200"
             >
               <FolderOpenIcon className="w-3.5 h-3.5" />
-              View Local
+              View Local Files
             </button>
             <button
-              onClick={() => setShowDriveImportModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all border border-indigo-200"
-            >
-              <LinkIcon className="w-3.5 h-3.5" />
-              Import from Drive
-            </button>
-            <button
-              onClick={() => dicomDriveFolderInputRef.current?.click()}
-              disabled={isDicomUploading}
+              onClick={handleDicomDriveBrowse}
+              disabled={isDicomImporting}
               className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg shadow-cyan-100 disabled:opacity-50"
             >
               <HardDriveIcon className="w-4 h-4" />
-              {isDicomUploading ? 'Uploading...' : 'Upload DICOM Study'}
+              {isDicomImporting ? 'Importing...' : 'Browse Google Drive'}
             </button>
             {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
             <input type="file" ref={dicomFolderInputRef} onChange={handleDicomLocalFolderSelect} className="hidden" multiple webkitdirectory="" />
-            {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
-            <input type="file" ref={dicomDriveFolderInputRef} onChange={handleDicomDriveFolderSelect} className="hidden" multiple webkitdirectory="" />
           </div>
         </div>
 
@@ -2093,66 +2061,25 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         </div>
       )}
 
-      {/* Drive Import Modal */}
-      {showDriveImportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => { if (!isDriveImporting) { setShowDriveImportModal(false); setDriveImportUrl(''); setDriveImportStatus(''); } }}>
-          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
-                <GlobeIcon className="w-5 h-5 text-indigo-600" />
-              </div>
-              <div>
-                <h4 className="text-lg font-bold text-slate-800">Import from Google Drive</h4>
-                <p className="text-xs text-slate-400">Paste a shared Google Drive folder URL containing DICOM files</p>
-              </div>
-            </div>
+      {/* DICOM Drive Browser Modal */}
+      {showDicomDriveBrowser && googleAccessToken && (
+        <DriveBrowserModal
+          accessToken={googleAccessToken}
+          mode="DICOM_FOLDER"
+          onSelectFolder={handleDicomSingleFolderSelected}
+          onSelectFolders={handleDicomFolderSelected}
+          onClose={() => setShowDicomDriveBrowser(false)}
+        />
+      )}
 
-            <div className="mb-4">
-              <input
-                type="url"
-                value={driveImportUrl}
-                onChange={(e) => setDriveImportUrl(e.target.value)}
-                placeholder="https://drive.google.com/drive/folders/..."
-                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-                disabled={isDriveImporting}
-                onKeyDown={(e) => { if (e.key === 'Enter' && driveImportUrl.trim()) handleDriveImport(); }}
-              />
-            </div>
-
-            {driveImportStatus && (
-              <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-xl">
-                <div className="flex items-center gap-2">
-                  <Loader2Icon className="w-4 h-4 text-indigo-500 animate-spin shrink-0" />
-                  <span className="text-xs text-indigo-700 font-medium">{driveImportStatus}</span>
-                </div>
-              </div>
-            )}
-
-            <div className="bg-slate-50 rounded-xl p-3 mb-4">
-              <p className="text-[11px] text-slate-500 leading-relaxed">
-                The system will scan the folder structure, parse DICOM headers to extract study names,
-                modality, patient info, and dates, then organize them into studies automatically.
-                Files stay in their current Drive location — no re-upload needed.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-3">
-              <button
-                onClick={() => { setShowDriveImportModal(false); setDriveImportUrl(''); setDriveImportStatus(''); }}
-                disabled={isDriveImporting}
-                className="px-4 py-2 text-sm font-bold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDriveImport}
-                disabled={isDriveImporting || !driveImportUrl.trim()}
-                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50"
-              >
-                {isDriveImporting ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
-                {isDriveImporting ? 'Importing...' : 'Import Studies'}
-              </button>
-            </div>
+      {/* DICOM Import Progress Overlay */}
+      {isDicomImporting && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-md text-center shadow-2xl">
+            <Loader2Icon className="w-10 h-10 text-cyan-400 animate-spin mx-auto mb-4" />
+            <h3 className="text-lg font-bold text-white mb-2">Importing DICOM Studies</h3>
+            <p className="text-sm text-slate-400">{dicomImportProgress}</p>
+            <p className="text-xs text-slate-600 mt-3">Files stay on your Google Drive — only references are created</p>
           </div>
         </div>
       )}

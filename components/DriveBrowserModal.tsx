@@ -17,13 +17,14 @@ import {
   SquareIcon,
   SaveIcon
 } from 'lucide-react';
-import { listDriveFiles, createDriveFolder, getRecursiveFiles, DriveImportCandidate } from '../services/googleDriveService';
+import { listDriveFiles, listDriveAllFiles, createDriveFolder, getRecursiveFiles, DriveImportCandidate } from '../services/googleDriveService';
 
 interface DriveBrowserModalProps {
   accessToken: string;
-  mode?: 'FILE' | 'FOLDER' | 'SAVE_DESTINATION';
+  mode?: 'FILE' | 'FOLDER' | 'SAVE_DESTINATION' | 'DICOM_FOLDER';
   onSelectFile?: (files: DriveImportCandidate[]) => void;
   onSelectFolder?: (folder: any) => void;
+  onSelectFolders?: (folders: {id: string, name: string}[]) => void;
   onClose: () => void;
   initialFolderStack?: {id: string, name: string}[];
   onStackChange?: (stack: {id: string, name: string}[]) => void;
@@ -36,11 +37,12 @@ interface DriveItem {
   size?: string;
 }
 
-const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({ 
-  accessToken, 
-  mode = 'FILE', 
-  onSelectFile, 
-  onSelectFolder, 
+const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
+  accessToken,
+  mode = 'FILE',
+  onSelectFile,
+  onSelectFolder,
+  onSelectFolders,
   onClose,
   initialFolderStack,
   onStackChange
@@ -85,7 +87,10 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const files = await listDriveFiles(accessToken, folderId);
+      // DICOM_FOLDER mode shows all files (not just PDFs) so users can see their DICOM data
+      const files = mode === 'DICOM_FOLDER'
+        ? await listDriveAllFiles(accessToken, folderId)
+        : await listDriveFiles(accessToken, folderId);
       setItems(files);
     } catch (err) {
       setError("Failed to load folder content.");
@@ -123,8 +128,12 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
 
   const handleItemClick = (item: DriveItem) => {
     if (item.mimeType === 'application/vnd.google-apps.folder') {
-      // Always navigate into folders on main click, regardless of mode
-      setFolderStack([...folderStack, { id: item.id, name: item.name }]);
+      if (mode === 'DICOM_FOLDER') {
+        // In DICOM mode, clicking a folder navigates into it (checkbox for selection)
+        setFolderStack([...folderStack, { id: item.id, name: item.name }]);
+      } else {
+        setFolderStack([...folderStack, { id: item.id, name: item.name }]);
+      }
     } else if (mode === 'FILE' && item.mimeType === 'application/pdf') {
       toggleSelection(item.id);
     }
@@ -281,15 +290,15 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
         {/* Header */}
         <div className="bg-white border-b border-slate-100 p-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${mode === 'FOLDER' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-50 text-slate-600'}`}>
-              {mode === 'FOLDER' ? <FolderPlusIcon className="w-6 h-6" /> : mode === 'SAVE_DESTINATION' ? <SaveIcon className="w-6 h-6 text-green-600" /> : <CloudIcon className="w-6 h-6" />}
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${mode === 'DICOM_FOLDER' ? 'bg-cyan-50 text-cyan-600' : mode === 'FOLDER' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-50 text-slate-600'}`}>
+              {mode === 'DICOM_FOLDER' ? <FolderDownIcon className="w-6 h-6" /> : mode === 'FOLDER' ? <FolderPlusIcon className="w-6 h-6" /> : mode === 'SAVE_DESTINATION' ? <SaveIcon className="w-6 h-6 text-green-600" /> : <CloudIcon className="w-6 h-6" />}
             </div>
             <div>
               <h3 className="text-lg font-bold text-slate-800">
-                {mode === 'FOLDER' ? 'Select Case Folder' : mode === 'SAVE_DESTINATION' ? 'Select Destination' : 'Import Documents'}
+                {mode === 'DICOM_FOLDER' ? 'Select DICOM Folder' : mode === 'FOLDER' ? 'Select Case Folder' : mode === 'SAVE_DESTINATION' ? 'Select Destination' : 'Import Documents'}
               </h3>
               <p className="text-xs text-slate-500">
-                {mode === 'FOLDER' ? 'Navigate to folder to Link or Import' : mode === 'SAVE_DESTINATION' ? 'Choose where to save the file' : 'Select files or folders to import recursively'}
+                {mode === 'DICOM_FOLDER' ? 'Navigate to the folder containing your DICOM studies' : mode === 'FOLDER' ? 'Navigate to folder to Link or Import' : mode === 'SAVE_DESTINATION' ? 'Choose where to save the file' : 'Select files or folders to import recursively'}
               </p>
             </div>
           </div>
@@ -378,8 +387,8 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
               {items.map(item => {
                 const isFolder = item.mimeType === 'application/vnd.google-apps.folder';
                 const isSelected = selectedFileIds.has(item.id);
-                // In FOLDER mode, disable file interactions. In SAVE mode, only allow folder navigation
-                const isDisabled = (mode === 'FOLDER' || mode === 'SAVE_DESTINATION') && !isFolder;
+                // In FOLDER/SAVE/DICOM modes, non-folder items are dimmed
+                const isDisabled = (mode === 'FOLDER' || mode === 'SAVE_DESTINATION' || mode === 'DICOM_FOLDER') && !isFolder;
 
                 return (
                   <button
@@ -394,9 +403,18 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
                   >
                     {/* Checkbox for FILE Mode */}
                     {mode === 'FILE' && (
-                       <div 
+                       <div
                          onClick={(e) => handleCheckboxClick(e, item)}
                          className={`shrink-0 cursor-pointer p-1 -ml-1 ${isSelected ? 'text-indigo-600' : 'text-slate-300 group-hover:text-slate-400 hover:text-indigo-400'}`}
+                       >
+                         {isSelected ? <CheckSquareIcon className="w-5 h-5" /> : <SquareIcon className="w-5 h-5" />}
+                       </div>
+                    )}
+                    {/* Checkbox for DICOM_FOLDER Mode — only on folders */}
+                    {mode === 'DICOM_FOLDER' && isFolder && (
+                       <div
+                         onClick={(e) => { e.stopPropagation(); toggleSelection(item.id); }}
+                         className={`shrink-0 cursor-pointer p-1 -ml-1 ${isSelected ? 'text-cyan-600' : 'text-slate-300 group-hover:text-slate-400 hover:text-cyan-400'}`}
                        >
                          {isSelected ? <CheckSquareIcon className="w-5 h-5" /> : <SquareIcon className="w-5 h-5" />}
                        </div>
@@ -436,7 +454,54 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
         {/* Footer Actions */}
         <div className="bg-slate-50 border-t border-slate-200 p-4 flex items-center justify-between gap-4">
           
-          {mode === 'FOLDER' ? (
+          {mode === 'DICOM_FOLDER' ? (
+             // DICOM FOLDER MODE ACTIONS
+             <>
+               <div className="text-xs text-slate-500">
+                 {selectedFileIds.size > 0 ? (
+                   <span className="font-bold text-cyan-700">{selectedFileIds.size} folder(s) selected</span>
+                 ) : (
+                   <span>Select folders or import from current location</span>
+                 )}
+               </div>
+               <div className="flex gap-2">
+                 {selectedFileIds.size > 0 ? (
+                   <button
+                     onClick={() => {
+                       if (onSelectFolders) {
+                         const selectedFolders = items
+                           .filter(i => selectedFileIds.has(i.id) && i.mimeType === 'application/vnd.google-apps.folder')
+                           .map(i => ({ id: i.id, name: i.name }));
+                         onSelectFolders(selectedFolders);
+                         onClose();
+                       }
+                     }}
+                     className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl text-sm font-bold hover:bg-cyan-700 shadow-md shadow-cyan-100 transition-colors"
+                   >
+                     <FolderDownIcon className="w-4 h-4" />
+                     Import Selected Folders
+                   </button>
+                 ) : (
+                   <button
+                     onClick={() => {
+                       if (onSelectFolder) {
+                         onSelectFolder({
+                           id: currentFolder.id,
+                           name: currentFolder.name,
+                           url: `https://drive.google.com/drive/folders/${currentFolder.id}`
+                         });
+                         onClose();
+                       }
+                     }}
+                     className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl text-sm font-bold hover:bg-cyan-700 shadow-md shadow-cyan-100 transition-colors"
+                   >
+                     <FolderDownIcon className="w-4 h-4" />
+                     Import All Studies from Here
+                   </button>
+                 )}
+               </div>
+             </>
+          ) : mode === 'FOLDER' ? (
              // FOLDER MODE ACTIONS
              <>
                <div className="flex gap-2">
