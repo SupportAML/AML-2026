@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   XIcon, MaximizeIcon, MinimizeIcon, CameraIcon,
   SunIcon, MoveIcon, LayersIcon, InfoIcon,
@@ -187,6 +187,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [studies, setStudies] = useState<ViewerStudy[]>([]);
+  const [studySortMode, setStudySortMode] = useState<'default' | 'date' | 'modality'>('default');
   const [activeSeries, setActiveSeries] = useState<ViewerSeries | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(true);
@@ -529,9 +530,6 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
               ? `${meta.modality} Study`
               : meta.modality;
           }
-          if (meta.studyDate) {
-            study.displayName += ` — ${meta.studyDate}`;
-          }
           study.patientName = meta.patientName;
           study.studyDate = meta.studyDate;
           study.modality = meta.modality;
@@ -704,6 +702,25 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     setStudies(prev => prev.map(s => s.id === id ? { ...s, isExpanded: !s.isExpanded } : s));
   };
 
+  // ===== Sorted studies for sidebar display =====
+  const sortedStudies = useMemo(() => {
+    if (studySortMode === 'date') {
+      return [...studies].sort((a, b) => {
+        const dateA = a.studyDate ? new Date(a.studyDate).getTime() : 0;
+        const dateB = b.studyDate ? new Date(b.studyDate).getTime() : 0;
+        return dateB - dateA; // newest first
+      });
+    }
+    if (studySortMode === 'modality') {
+      return [...studies].sort((a, b) => {
+        const modA = a.modality || 'ZZZ';
+        const modB = b.modality || 'ZZZ';
+        return modA.localeCompare(modB);
+      });
+    }
+    return studies;
+  }, [studies, studySortMode]);
+
   // ===== Format DICOM date (defensive — handles string or object) =====
   function formatDicomDate(d?: any): string {
     if (!d) return '';
@@ -802,8 +819,28 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT SIDEBAR: Study Tree */}
         <div className="w-56 flex-shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-700/50">
+          <div className="px-3 py-2 border-b border-slate-700/50 flex items-center justify-between">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Studies & Series</span>
+            <div className="flex gap-0.5">
+              <button
+                onClick={() => setStudySortMode(studySortMode === 'date' ? 'default' : 'date')}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${
+                  studySortMode === 'date' ? 'bg-cyan-900/50 text-cyan-400' : 'text-slate-600 hover:text-slate-400'
+                }`}
+                title="Sort by date"
+              >
+                Date
+              </button>
+              <button
+                onClick={() => setStudySortMode(studySortMode === 'modality' ? 'default' : 'modality')}
+                className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all ${
+                  studySortMode === 'modality' ? 'bg-cyan-900/50 text-cyan-400' : 'text-slate-600 hover:text-slate-400'
+                }`}
+                title="Sort by modality"
+              >
+                Type
+              </button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#334155 transparent' }}>
             {isProcessing ? (
@@ -816,7 +853,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
                 <p className="text-[11px] text-slate-600 text-center">No DICOM files found</p>
               </div>
             ) : (
-              studies.map(study => (
+              sortedStudies.map(study => (
                 <div key={study.id}>
                   <button
                     onClick={() => toggleStudy(study.id)}
@@ -827,8 +864,12 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
                     <div className="flex-1 min-w-0">
                       <p className="text-[11px] font-medium text-slate-200 truncate">{study.displayName}</p>
                       <p className="text-[9px] text-slate-500">
-                        {study.patientName && <span className="text-slate-400">{study.patientName} · </span>}
-                        {study.modality && <span className="text-cyan-500 font-bold">{study.modality} · </span>}
+                        {study.modality && <span className="text-cyan-500 font-bold">{study.modality}</span>}
+                        {study.modality && study.studyDate && <span> · </span>}
+                        {study.studyDate && <span className="text-slate-400">{study.studyDate}</span>}
+                      </p>
+                      <p className="text-[9px] text-slate-600">
+                        {study.patientName && <span>{study.patientName} · </span>}
                         {study.totalFiles} images · {study.series.length} series
                       </p>
                     </div>
