@@ -477,29 +477,48 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDisconnectGoogleDrive = () => {
-    const token = googleAccessToken;
-    if (token) {
-      try {
-        const w = window as any;
-        if (w.google?.accounts?.oauth2?.revoke) {
-          w.google.accounts.oauth2.revoke(token, () => {
-            console.log('[Google Drive] Token revoked');
-          });
-        }
-      } catch (e) {
-        console.warn('[Google Drive] Revocation failed (non-critical):', e);
-      }
-    }
-    setGoogleAccessToken(null);
-  };
-
   // Save DICOM screenshot annotation
-  const handleSaveDicomAnnotation = (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
+  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
     if (!activeCase) return;
+
+    // Convert base64 data URL to a File for upload to Firebase Storage
+    const res = await fetch(data.imageUrl);
+    const blob = await res.blob();
+    const fileName = `DICOM_Screenshot_${data.studyName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`;
+    const file = new File([blob], fileName, { type: 'image/png' });
+
+    // Upload to Firebase Storage (fall back to data URL if upload fails)
+    let fileUrl = data.imageUrl;
+    let storagePath: string | undefined;
+    try {
+      const result = await uploadFile(activeCase.id, file);
+      fileUrl = result.url;
+      storagePath = result.storagePath;
+    } catch (e) {
+      console.warn('[DICOM Screenshot] Storage upload failed, using data URL:', e);
+    }
+
+    // Create Document record so the screenshot appears in Case Files
+    const docId = Math.random().toString(36).substr(2, 9);
+    const newDoc: Document = {
+      id: docId,
+      caseId: activeCase.id,
+      name: fileName,
+      type: 'image',
+      mimeType: 'image/png',
+      url: fileUrl,
+      storagePath,
+      uploadDate: new Date().toISOString(),
+      size: (blob.size / 1024).toFixed(1) + ' KB',
+      reviewStatus: 'pending',
+      path: 'DICOM Screenshots',
+    };
+    await upsertDocument(newDoc);
+
+    // Create Annotation record linked to the Document
     const annotation: Annotation = {
       id: Math.random().toString(36).substr(2, 9),
-      documentId: '', // No specific document - DICOM key image
+      documentId: docId,
       caseId: activeCase.id,
       page: 0,
       text: `[DICOM Key Image] ${data.text}\nStudy: ${data.studyName}\nDate: ${data.studyDate}\nPatient: ${data.patientInfo}`,
@@ -510,7 +529,7 @@ const App: React.FC = () => {
       x: 0,
       y: 0,
       type: 'area',
-      imageUrl: data.imageUrl,
+      imageUrl: fileUrl,
     };
     upsertAnnotation(annotation);
   };
@@ -526,7 +545,7 @@ const App: React.FC = () => {
     // DICOM files should be imported from Google Drive, not uploaded individually
     const fileType = detectFileType(file.name, file.type);
     if (fileType === 'dicom') {
-      alert('DICOM files should be imported from Google Drive. Use "Browse Google Drive" in the DICOM Studies section.');
+      alert('DICOM files should be uploaded as a folder. Use "Upload DICOM Folders" in the DICOM Studies section.');
       return;
     }
 
@@ -1020,7 +1039,6 @@ const App: React.FC = () => {
                   onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
-                  onDisconnectGoogleDrive={handleDisconnectGoogleDrive}
                 />
               )}
               {viewMode === ViewMode.DOC_VIEWER && activeDoc && (

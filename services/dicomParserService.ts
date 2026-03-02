@@ -5,6 +5,34 @@
  */
 import dicomParser from 'dicom-parser';
 
+// Extensions that are definitely NOT DICOM files — viewer programs, configs, documents, media, etc.
+const NON_DICOM_EXTENSIONS = new Set([
+  'exe', 'dll', 'sys', 'bat', 'cmd', 'com', 'msi', 'app', 'sh', 'bin', 'so', 'dylib',
+  'inf', 'ini', 'txt', 'config', 'cfg', 'conf', 'reg', 'manifest', 'pdb', 'plist',
+  'html', 'htm', 'css', 'js', 'json', 'xml', 'log', 'yaml', 'yml', 'csv',
+  'jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'ico', 'webp',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'odt',
+  'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'cab',
+  'mp3', 'mp4', 'avi', 'mov', 'wmv', 'wav', 'flac', 'mkv', 'webm',
+  'db', 'sqlite', 'mdb', 'lnk', 'url', 'desktop', 'iso',
+  'ds_store', 'thumbs', 'tmp', 'bak', 'old', 'swp',
+]);
+
+/** Check whether a file is likely a DICOM image (by name/extension/size, not by content). */
+export function isDicomCandidate(file: File): boolean {
+  const name = file.name;
+  if (name.startsWith('.') || name === 'Thumbs.db' || name === 'desktop.ini') return false;
+  if (name.toUpperCase() === 'DICOMDIR') return false;
+  if (file.size < 200) return false;
+  const parts = name.split('.');
+  if (parts.length > 1) {
+    for (let i = 1; i < parts.length; i++) {
+      if (NON_DICOM_EXTENSIONS.has(parts[i].toLowerCase())) return false;
+    }
+  }
+  return true;
+}
+
 export interface DicomMeta {
   patientName?: string;
   patientId?: string;
@@ -74,8 +102,9 @@ export async function parseDicomFile(file: File): Promise<DicomMeta | null> {
 // ============================================================
 export async function groupFilesByDicomStudy(files: File[]): Promise<Map<string, StudyGroup>> {
   // Step 1: Initial folder-based grouping (to limit how many files we parse)
+  // Pre-filter: exclude non-DICOM files (executables, config files, documents, etc.)
   const folderGroups = new Map<string, File[]>();
-  for (const file of files) {
+  for (const file of files.filter(isDicomCandidate)) {
     const relPath = ((file as any).webkitRelativePath || file.name).replace(/\\/g, '/');
     const parts = relPath.split('/').filter(Boolean);
     // Use the deepest folder before the filename
