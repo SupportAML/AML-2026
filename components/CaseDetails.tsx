@@ -39,6 +39,7 @@ import {
   SquareIcon
 } from 'lucide-react';
 import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
+import { getFileDownloadUrl } from '../services/googleDriveService';
 
 const DicomStudyViewerComponent = lazy(() => import('./DicomStudyViewer'));
 
@@ -390,6 +391,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [dicomViewerFiles, setDicomViewerFiles] = useState<File[]>([]);
   const [localDicomStudies, setLocalDicomStudies] = useState<{ name: string; files: File[]; selected: boolean }[]>([]);
   const [isDicomUploading, setIsDicomUploading] = useState(false);
+  const [isDicomDriveLoading, setIsDicomDriveLoading] = useState(false);
+  const [dicomDriveLoadProgress, setDicomDriveLoadProgress] = useState('');
 
   // Multi-select state for Case Files
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
@@ -792,6 +795,64 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     }
     setDicomViewerFiles(selectedFiles);
     setShowDicomViewer(true);
+  };
+
+  // Open Drive-stored DICOM files in the fullscreen viewer
+  const openDriveDicomViewer = async (driveDocs: Document[]) => {
+    const driveFiles = driveDocs.filter(d => d.storageLocation === 'drive' && d.driveFileId);
+    if (driveFiles.length === 0) {
+      alert('No Drive-stored DICOM files found.');
+      return;
+    }
+
+    // Ensure we have a Google access token
+    let token = googleAccessToken;
+    if (!token && onRequestDriveAuth) {
+      token = await onRequestDriveAuth();
+    }
+    if (!token) {
+      alert('Please link your Google account to view Drive-stored DICOM files.');
+      return;
+    }
+
+    setIsDicomDriveLoading(true);
+    setDicomDriveLoadProgress(`Fetching 0/${driveFiles.length} files from Drive...`);
+
+    try {
+      const fetchedFiles: File[] = [];
+      for (let i = 0; i < driveFiles.length; i++) {
+        const doc = driveFiles[i];
+        setDicomDriveLoadProgress(`Fetching ${i + 1}/${driveFiles.length}: ${doc.name}`);
+        try {
+          const blobUrl = await getFileDownloadUrl(doc.driveFileId!, token!);
+          const response = await fetch(blobUrl);
+          const blob = await response.blob();
+          // Revoke the intermediate blob URL to avoid memory leaks
+          URL.revokeObjectURL(blobUrl);
+          // Convert blob to File object with original name and DICOM mime type
+          const file = new File([blob], doc.name, { type: doc.mimeType || 'application/dicom' });
+          fetchedFiles.push(file);
+        } catch (err) {
+          console.warn(`[DICOM Drive] Failed to fetch ${doc.name}:`, err);
+        }
+      }
+
+      if (fetchedFiles.length === 0) {
+        alert('Could not fetch any DICOM files from Drive. Your Google session may have expired — try again.');
+        setIsDicomDriveLoading(false);
+        setDicomDriveLoadProgress('');
+        return;
+      }
+
+      setDicomViewerFiles(fetchedFiles);
+      setShowDicomViewer(true);
+    } catch (err) {
+      console.error('[DICOM Drive] Viewer load error:', err);
+      alert('Failed to load DICOM files from Drive. Please try again.');
+    } finally {
+      setIsDicomDriveLoading(false);
+      setDicomDriveLoadProgress('');
+    }
   };
 
   // Count existing DICOM docs in the case
@@ -1741,6 +1802,15 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                         <FolderIcon className="w-4 h-4 text-cyan-500 shrink-0" />
                         <span className="text-sm font-bold text-slate-700 flex-1">{folder}</span>
                         <span className="text-[10px] text-slate-400">{folderDocs.length} files</span>
+                        {folderDocs.some(d => d.storageLocation === 'drive' && d.driveFileId) && (
+                          <button
+                            onClick={() => openDriveDicomViewer(folderDocs)}
+                            disabled={isDicomDriveLoading}
+                            className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all disabled:opacity-50"
+                          >
+                            <EyeIcon className="w-3 h-3" /> View
+                          </button>
+                        )}
                         <button
                           onClick={() => setDeleteConfirm({ type: 'folder', path: `dicom:${folder}`, name: folder })}
                           className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
@@ -1784,30 +1854,53 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                     return !Array.from(dicomFolderSet).some(f => dp === f || dp.startsWith(f + '/'));
                   });
                   if (unorganizedDocs.length === 0) return null;
-                  return unorganizedDocs.map(doc => (
-                    <div
-                      key={doc.id}
-                      className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group"
-                    >
-                      <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                        <HardDriveIcon className="w-5 h-5 text-indigo-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-slate-700 truncate">{doc.name}</p>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                          <span>{doc.size}</span>
-                          {doc.storageLocation === 'drive' && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded font-bold">Google Drive</span>}
-                          <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
+                  const driveDocs = unorganizedDocs.filter(d => d.storageLocation === 'drive' && d.driveFileId);
+                  return (
+                    <>
+                      {driveDocs.length > 1 && (
+                        <button
+                          onClick={() => openDriveDicomViewer(driveDocs)}
+                          disabled={isDicomDriveLoading}
+                          className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-xs font-bold hover:bg-emerald-100 transition-all disabled:opacity-50 w-full justify-center"
+                        >
+                          <EyeIcon className="w-3.5 h-3.5" /> View All {driveDocs.length} Drive DICOM Files
+                        </button>
+                      )}
+                      {unorganizedDocs.map(doc => (
+                        <div
+                          key={doc.id}
+                          className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group"
+                        >
+                          <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                            <HardDriveIcon className="w-5 h-5 text-indigo-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold text-slate-700 truncate">{doc.name}</p>
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                              <span>{doc.size}</span>
+                              {doc.storageLocation === 'drive' && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded font-bold">Google Drive</span>}
+                              <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                          {doc.storageLocation === 'drive' && doc.driveFileId && (
+                            <button
+                              onClick={() => openDriveDicomViewer([doc])}
+                              disabled={isDicomDriveLoading}
+                              className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                            >
+                              <EyeIcon className="w-3 h-3" /> View
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name })}
+                            className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                          >
+                            <Trash2Icon className="w-4 h-4" />
+                          </button>
                         </div>
-                      </div>
-                      <button
-                        onClick={() => setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name })}
-                        className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
-                      >
-                        <Trash2Icon className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ));
+                      ))}
+                    </>
+                  );
                 })()}
 
                 {/* Select all / deselect all for local studies */}
@@ -1934,6 +2027,18 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* DICOM Drive Loading Overlay */}
+      {isDicomDriveLoading && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-center justify-center backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-md text-center shadow-2xl">
+            <Loader2Icon className="w-10 h-10 text-cyan-400 animate-spin mx-auto mb-4" />
+            <h3 className="text-lg font-bold text-white mb-2">Fetching DICOM Files</h3>
+            <p className="text-sm text-slate-400">{dicomDriveLoadProgress}</p>
+            <p className="text-xs text-slate-600 mt-3">Files are streamed from your Google Drive</p>
           </div>
         </div>
       )}
