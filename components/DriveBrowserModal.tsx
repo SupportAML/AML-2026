@@ -23,7 +23,7 @@ interface DriveBrowserModalProps {
   accessToken: string;
   mode?: 'FILE' | 'FOLDER' | 'SAVE_DESTINATION' | 'DICOM_FOLDER';
   onSelectFile?: (files: DriveImportCandidate[]) => void;
-  onSelectFolder?: (folder: any) => void;
+  onSelectFolder?: (folder: { id: string; name: string }) => void;
   onSelectFolders?: (folders: {id: string, name: string}[]) => void;
   onClose: () => void;
   initialFolderStack?: {id: string, name: string}[];
@@ -149,7 +149,6 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
       onSelectFolder({
         id: currentFolder.id,
         name: currentFolder.name,
-        url: `https://drive.google.com/drive/folders/${currentFolder.id}`
       });
       onClose();
     }
@@ -488,7 +487,6 @@ const DriveBrowserModal: React.FC<DriveBrowserModalProps> = ({
                          onSelectFolder({
                            id: currentFolder.id,
                            name: currentFolder.name,
-                           url: `https://drive.google.com/drive/folders/${currentFolder.id}`
                          });
                          onClose();
                        }

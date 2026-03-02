@@ -31,6 +31,8 @@ import {
   wadouri,
 } from '@cornerstonejs/dicom-image-loader';
 
+import { parseDicomFile, type DicomMeta } from '../services/dicomParserService';
+
 // ============================================================
 // DICOM file filtering (shared logic)
 // ============================================================
@@ -79,6 +81,8 @@ interface ViewerSeries {
   files: File[];
   imageIds: string[];
   fileCount: number;
+  modality?: string;
+  seriesDescription?: string;
 }
 
 interface ViewerStudy {
@@ -88,6 +92,10 @@ interface ViewerStudy {
   series: ViewerSeries[];
   totalFiles: number;
   isExpanded: boolean;
+  patientName?: string;
+  studyDate?: string;
+  modality?: string;
+  studyDescription?: string;
 }
 
 interface StudyMetadata {
@@ -435,13 +443,13 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
 
     for (let i = 0; i < arr.length; i += BATCH) {
       const batch = arr.slice(i, i + BATCH);
-      const checks = await Promise.all(batch.map(f => isDicomFile(f)));
       for (let j = 0; j < batch.length; j++) {
-        if (checks[j]) {
-          try {
-            const imageId = wadouri.fileManager.add(batch[j]);
-            validFiles.push({ file: batch[j], imageId });
-          } catch {}
+        if (!isProbablyDicom(batch[j])) continue;
+        try {
+          const imageId = wadouri.fileManager.add(batch[j]);
+          validFiles.push({ file: batch[j], imageId });
+        } catch {
+          // File couldn't be registered — skip silently
         }
       }
     }
@@ -505,6 +513,50 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
         isExpanded: true,
       });
       idx++;
+    }
+
+    // Extract DICOM metadata from first file of each study to populate sidebar names
+    for (const study of parsedStudies) {
+      const firstFile = study.series[0]?.files[0];
+      if (!firstFile) continue;
+      try {
+        const meta = await parseDicomFile(firstFile);
+        if (meta) {
+          if (meta.studyDescription) {
+            study.displayName = meta.studyDescription;
+          } else if (meta.modality) {
+            study.displayName = study.series.length > 1
+              ? `${meta.modality} Study`
+              : meta.modality;
+          }
+          if (meta.studyDate) {
+            study.displayName += ` — ${meta.studyDate}`;
+          }
+          study.patientName = meta.patientName;
+          study.studyDate = meta.studyDate;
+          study.modality = meta.modality;
+          study.studyDescription = meta.studyDescription;
+
+          // Update series display names from metadata
+          for (const series of study.series) {
+            const seriesFile = series.files[0];
+            if (seriesFile && seriesFile !== firstFile) {
+              try {
+                const seriesMeta = await parseDicomFile(seriesFile);
+                if (seriesMeta?.seriesDescription) {
+                  series.displayName = seriesMeta.seriesDescription;
+                  series.modality = seriesMeta.modality;
+                }
+              } catch {}
+            } else if (meta.seriesDescription) {
+              series.displayName = meta.seriesDescription;
+              series.modality = meta.modality;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[DicomStudyViewer] Failed to extract metadata for study:', study.folderPath, e);
+      }
     }
 
     setStudies(parsedStudies);
@@ -774,7 +826,11 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
                     <FolderIcon className="w-3 h-3 text-cyan-400 shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-[11px] font-medium text-slate-200 truncate">{study.displayName}</p>
-                      <p className="text-[9px] text-slate-500">{study.totalFiles} images · {study.series.length} series</p>
+                      <p className="text-[9px] text-slate-500">
+                        {study.patientName && <span className="text-slate-400">{study.patientName} · </span>}
+                        {study.modality && <span className="text-cyan-500 font-bold">{study.modality} · </span>}
+                        {study.totalFiles} images · {study.series.length} series
+                      </p>
                     </div>
                   </button>
                   {study.isExpanded && study.series.map(series => {
@@ -796,7 +852,10 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
                           <p className={`text-[11px] font-medium truncate ${isActive ? 'text-cyan-300' : 'text-slate-300'}`}>
                             {series.displayName}
                           </p>
-                          <p className="text-[9px] text-slate-500">{series.fileCount} images</p>
+                          <p className="text-[9px] text-slate-500">
+                            {series.modality && <span className="text-cyan-500/70">{series.modality} · </span>}
+                            {series.fileCount} images
+                          </p>
                         </div>
                       </button>
                     );
