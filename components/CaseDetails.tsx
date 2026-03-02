@@ -41,6 +41,45 @@ import {
 import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
 
 const DicomStudyViewerComponent = lazy(() => import('./DicomStudyViewer'));
+
+// ErrorBoundary to prevent DicomStudyViewer crashes from blanking the whole page
+class DicomViewerErrorBoundary extends React.Component<
+  { children: React.ReactNode; onClose: () => void },
+  { hasError: boolean; error: string }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: '' };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error?.message || 'Unknown error' };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[DicomStudyViewer] Render crash:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center">
+          <div className="bg-slate-900 border border-red-800/40 rounded-2xl p-8 max-w-md text-center">
+            <ScanIcon className="w-12 h-12 text-red-400 mx-auto mb-4" />
+            <h3 className="text-lg font-bold text-white mb-2">DICOM Viewer Error</h3>
+            <p className="text-sm text-red-300 mb-1">{this.state.error}</p>
+            <p className="text-xs text-slate-500 mb-6">The viewer encountered an error. Your files are safe.</p>
+            <button
+              onClick={this.props.onClose}
+              className="px-6 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl font-bold text-sm transition-all"
+            >
+              Close Viewer
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const DicomStudyViewerLazy: React.FC<{
   files: File[];
   onClose: () => void;
@@ -48,9 +87,11 @@ const DicomStudyViewerLazy: React.FC<{
   caseId: string;
   authorName: string;
 }> = (props) => (
-  <Suspense fallback={<div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center"><Loader2Icon className="w-10 h-10 text-cyan-400 animate-spin" /></div>}>
-    <DicomStudyViewerComponent {...props} />
-  </Suspense>
+  <DicomViewerErrorBoundary onClose={props.onClose}>
+    <Suspense fallback={<div className="fixed inset-0 z-50 bg-slate-950 flex items-center justify-center"><Loader2Icon className="w-10 h-10 text-cyan-400 animate-spin" /></div>}>
+      <DicomStudyViewerComponent {...props} />
+    </Suspense>
+  </DicomViewerErrorBoundary>
 );
 
 interface CaseDetailsProps {
@@ -1599,8 +1640,10 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               <FolderPlusIcon className="w-4 h-4" />
               New Folder
             </button>
-            <input type="file" ref={dicomFolderInputRef} onChange={handleDicomLocalFolderSelect} className="hidden" multiple />
-            <input type="file" ref={dicomDriveFolderInputRef} onChange={handleDicomDriveFolderSelect} className="hidden" multiple />
+            {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
+            <input type="file" ref={dicomFolderInputRef} onChange={handleDicomLocalFolderSelect} className="hidden" multiple webkitdirectory="" />
+            {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
+            <input type="file" ref={dicomDriveFolderInputRef} onChange={handleDicomDriveFolderSelect} className="hidden" multiple webkitdirectory="" />
           </div>
         </div>
 
