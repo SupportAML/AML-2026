@@ -656,7 +656,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       return new Promise<string | null>((resolve) => {
         const tokenClient = w.google.accounts.oauth2.initTokenClient({
           client_id: clientId,
-          scope: 'https://www.googleapis.com/auth/drive.file',
+          scope: 'https://www.googleapis.com/auth/drive',
           prompt: '',
           callback: (response: any) => {
             if (response.error) resolve(null);

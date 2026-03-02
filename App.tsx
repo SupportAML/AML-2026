@@ -20,8 +20,7 @@ const Settings = React.lazy(() => import('./components/Settings').then(m => ({ d
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
-import { uploadFileToDrive, createDriveFolder, getFileDownloadUrl } from './services/googleDriveService';
-import { groupFilesByDicomStudy } from './services/dicomParserService';
+import { createDriveFolder, getFileDownloadUrl } from './services/googleDriveService';
 import {
   subscribeToCases,
   subscribeToAnnotations,
@@ -433,7 +432,7 @@ const App: React.FC = () => {
       return new Promise((resolve) => {
         const tokenClient = w.google.accounts.oauth2.initTokenClient({
           client_id: clientId,
-          scope: 'https://www.googleapis.com/auth/drive.file',
+          scope: 'https://www.googleapis.com/auth/drive',
           prompt: 'consent',
           error_callback: (error: any) => {
             // This catches popup blocked, user closed popup, and other errors
@@ -478,200 +477,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Upload DICOM file(s) to the USER's own Google Drive
-  const handleDicomDriveUpload = async (caseId: string, files: File[]) => {
-    let token = googleAccessToken;
-    if (!token) {
-      token = await requestGoogleDriveAuth();
-      if (!token) {
-        alert('You must link your Google account to upload DICOM files. DICOM imaging files are stored on your personal Google Drive. Please try again.');
-        return;
-      }
-    }
-
-    setIsUploading(true);
-    setUploadTotalFiles(files.length > 1 ? files.length : undefined);
-    setUploadProgress(0);
-
-    try {
-      const caseItem = cases.find(c => c.id === caseId);
-      if (!caseItem) return;
-
-      let folderId = caseItem.driveFolderId;
-      if (!folderId) {
-        setUploadFileName('Creating Drive folder...');
-        const folder = await createDriveFolder(`ApexMedLaw_${caseItem.title}_DICOM`, token);
-        folderId = folder.id;
-        await upsertCase({ ...caseItem, driveFolderId: folderId, driveFolderUrl: folder.url });
-      }
-
-      const docIds: string[] = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setUploadFileName(file.name);
-        setUploadCurrentFileIndex(files.length > 1 ? i : undefined);
-        setUploadProgress(Math.round(((i) / files.length) * 80) + 10);
-
-        const driveFile = await uploadFileToDrive(file, token, folderId);
-
-        const docId = Math.random().toString(36).substr(2, 9);
-        const newDoc: Document = {
-          id: docId,
-          caseId,
-          name: file.name,
-          type: 'dicom' as DocumentFileType,
-          mimeType: file.type || 'application/dicom',
-          url: '',
-          driveFileId: driveFile.id,
-          storageLocation: 'drive',
-          uploadDate: new Date().toISOString(),
-          size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
-          reviewStatus: 'pending',
-          path: 'DICOM'
-        };
-        await upsertDocument(newDoc);
-        docIds.push(docId);
-      }
-
-      // Create a study record for these files
-      const studyName = files.length === 1 ? files[0].name.replace(/\.[^.]+$/, '') : `DICOM Upload ${new Date().toLocaleDateString()}`;
-      const newStudy: DicomStudyRecord = {
-        id: `study-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        name: studyName,
-        imageCount: files.length,
-        uploadDate: new Date().toISOString(),
-        documentIds: docIds,
-      };
-      const updatedCase = { ...caseItem, driveFolderId: folderId };
-      updatedCase.dicomStudies = [...(caseItem.dicomStudies || []), newStudy];
-      await upsertCase(updatedCase);
-
-      setUploadProgress(100);
-    } catch (e: any) {
-      console.error('Drive upload failed:', e);
-      if (e?.message?.includes('401') || e?.message?.includes('403') || e?.message?.includes('unauthorized')) {
-        setGoogleAccessToken(null);
-        alert('Your Google Drive session expired. Please try uploading again.');
-      } else {
-        alert('Google Drive upload failed. Please check your internet connection and try again.');
-      }
-    } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
-      setUploadFileName('');
-      setUploadTotalFiles(undefined);
-      setUploadCurrentFileIndex(undefined);
-    }
-  };
-
-  // Upload DICOM folder(s) to Drive — called from CaseDetails DICOM section
-  const handleDicomFolderDriveUpload = async (caseId: string, files: File[]) => {
-    // Step 1: Ensure user has linked their Google account
-    let token = googleAccessToken;
-    if (!token) {
-      token = await requestGoogleDriveAuth();
-      if (!token) {
-        alert('You must link your Google account to upload DICOM files. DICOM imaging files are stored on your personal Google Drive. Please try again.');
-        return;
-      }
-    }
-
-    setIsUploading(true);
-    setUploadTotalFiles(files.length);
-    setUploadProgress(0);
-
-    try {
-      const caseItem = cases.find(c => c.id === caseId);
-      if (!caseItem) return;
-
-      let folderId = caseItem.driveFolderId;
-      if (!folderId) {
-        setUploadFileName('Creating Drive folder...');
-        const folder = await createDriveFolder(`ApexMedLaw_${caseItem.title}_DICOM`, token);
-        folderId = folder.id;
-        await upsertCase({ ...caseItem, driveFolderId: folderId, driveFolderUrl: folder.url });
-      }
-
-      // Parse DICOM metadata to group files by actual Study Instance UID
-      // instead of folder names (which are often just "1", "2", "3" on discs)
-      setUploadFileName('Parsing DICOM metadata...');
-      const dicomStudyGroups = await groupFilesByDicomStudy(files);
-
-      let uploadedCount = 0;
-      const newStudies: DicomStudyRecord[] = [];
-
-      for (const [studyKey, group] of dicomStudyGroups) {
-        const studyId = `study-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-        const docIds: string[] = [];
-        const { metadata, displayName } = group;
-
-        for (const file of group.files) {
-          setUploadFileName(`${displayName}: ${file.name}`);
-          setUploadCurrentFileIndex(uploadedCount + 1);
-          setUploadProgress(Math.round((uploadedCount / files.length) * 100));
-
-          const driveFile = await uploadFileToDrive(file, token, folderId);
-          const docId = Math.random().toString(36).substr(2, 9);
-          const newDoc: Document = {
-            id: docId,
-            caseId,
-            name: file.name,
-            type: 'dicom' as DocumentFileType,
-            mimeType: file.type || 'application/dicom',
-            url: '',
-            driveFileId: driveFile.id,
-            storageLocation: 'drive',
-            uploadDate: new Date().toISOString(),
-            size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
-            reviewStatus: 'pending',
-            path: `DICOM/${displayName}`
-          };
-          await upsertDocument(newDoc);
-          docIds.push(docId);
-          uploadedCount++;
-        }
-
-        newStudies.push({
-          id: studyId,
-          name: displayName,
-          patientName: metadata.patientName,
-          patientDob: metadata.patientDob,
-          studyDate: metadata.studyDate,
-          modality: metadata.modality,
-          description: metadata.studyDescription || metadata.seriesDescription,
-          imageCount: group.files.length,
-          uploadDate: new Date().toISOString(),
-          documentIds: docIds,
-          studyInstanceUid: metadata.studyInstanceUid,
-          seriesCount: group.seriesCount,
-          seriesDescriptions: group.seriesDescriptions,
-          institutionName: metadata.institutionName,
-        });
-      }
-
-      // Save study records to the case
-      const updatedCase = { ...caseItem, driveFolderId: folderId };
-      updatedCase.dicomStudies = [...(caseItem.dicomStudies || []), ...newStudies];
-      await upsertCase(updatedCase);
-
-      setUploadProgress(100);
-    } catch (e: any) {
-      console.error('DICOM folder Drive upload failed:', e);
-      if (e?.message?.includes('401') || e?.message?.includes('403') || e?.message?.includes('unauthorized')) {
-        setGoogleAccessToken(null);
-        alert('Your Google Drive session expired. Please try uploading again.');
-      } else {
-        alert('Google Drive upload failed. Please check your internet connection and try again.');
-      }
-    } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
-      setUploadFileName('');
-      setUploadTotalFiles(undefined);
-      setUploadCurrentFileIndex(undefined);
-    }
-  };
-
   // Save DICOM screenshot annotation
   const handleSaveDicomAnnotation = (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
     if (!activeCase) return;
@@ -701,10 +506,10 @@ const App: React.FC = () => {
       return;
     }
 
-    // DICOM files must be stored on the user's Google Drive (mandatory)
+    // DICOM files should be imported from Google Drive, not uploaded individually
     const fileType = detectFileType(file.name, file.type);
     if (fileType === 'dicom') {
-      await handleDicomDriveUpload(caseId, [file]);
+      alert('DICOM files should be imported from Google Drive. Use "Browse Google Drive" in the DICOM Studies section.');
       return;
     }
 
@@ -831,21 +636,22 @@ const App: React.FC = () => {
       return;
     }
 
-    // Separate DICOM files from non-DICOM files so DICOM goes to Google Drive
-    const dicomFiles: File[] = [];
+    // Separate DICOM files from non-DICOM files — DICOM files are skipped here
+    // (they should be imported via "Browse Google Drive" in the DICOM Studies section)
     const nonDicomFiles: File[] = [];
+    let dicomSkipCount = 0;
     for (const file of toUpload) {
       const fileType = detectFileType(file.name, file.type);
       if (fileType === 'dicom') {
-        dicomFiles.push(file);
+        dicomSkipCount++;
       } else {
         nonDicomFiles.push(file);
       }
     }
 
-    // Upload DICOM files to Google Drive (mandatory for DICOM)
-    if (dicomFiles.length > 0) {
-      await handleDicomDriveUpload(caseId, dicomFiles);
+    if (dicomSkipCount > 0 && nonDicomFiles.length === 0) {
+      alert(`${dicomSkipCount} DICOM file(s) detected. Use "Browse Google Drive" in the DICOM Studies section to import DICOM imaging from your Drive.`);
+      return;
     }
 
     // Upload remaining non-DICOM files to Firebase Storage
@@ -1194,7 +1000,6 @@ const App: React.FC = () => {
                   }}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-                  onDicomDriveUpload={handleDicomFolderDriveUpload}
                   onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
