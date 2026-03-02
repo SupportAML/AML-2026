@@ -117,7 +117,7 @@ interface StudyMetadata {
 }
 
 // ============================================================
-// Singleton init — shared with Cornerstone3DViewer via window flag
+// Singleton init — shared across all Cornerstone-based viewers via window flag
 // ============================================================
 const _win = window as any;
 
@@ -312,81 +312,6 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     return () => el.removeEventListener('wheel', handler, { capture: true } as any);
   }, [viewportReady]);
 
-  // ===== Listen for slice changes =====
-  useEffect(() => {
-    const el = viewportDivRef.current;
-    if (!el || !viewportReady) return;
-
-    const handler = () => {
-      if (!engineRef.current) return;
-      try {
-        const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
-        if (vp) {
-          const idx = vp.getCurrentImageIdIndex();
-          setCurrentSlice(idx + 1);
-          // Update metadata for current slice
-          extractMetadata(vp.getImageIds()[idx]);
-        }
-      } catch {}
-    };
-
-    el.addEventListener(csEnums.Events.STACK_NEW_IMAGE, handler);
-    return () => el.removeEventListener(csEnums.Events.STACK_NEW_IMAGE, handler);
-  }, [viewportReady]);
-
-  // ===== Process files on mount =====
-  useEffect(() => {
-    if (!viewportReady || files.length === 0) return;
-    processFiles(files);
-  }, [viewportReady, files, processFiles]);
-
-  // ===== Keyboard shortcuts =====
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (showAnnotationDialog) {
-          setShowAnnotationDialog(false);
-          setScreenshotDataUrl(null);
-        } else if (isBrowserFullscreen) {
-          document.exitFullscreen?.();
-        } else {
-          onClose();
-        }
-      }
-      if (e.key === 'f' || e.key === 'F') {
-        if (!showAnnotationDialog) toggleFullscreen();
-      }
-      if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        captureScreenshot();
-      }
-      // Arrow key navigation through slices
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        if (!engineRef.current) return;
-        try {
-          const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
-          if (!vp) return;
-          const imgIds = vp.getImageIds();
-          if (!imgIds || imgIds.length <= 1) return;
-          const direction = e.key === 'ArrowDown' ? 1 : -1;
-          const currentIdx = vp.getCurrentImageIdIndex();
-          const newIdx = Math.max(0, Math.min(imgIds.length - 1, currentIdx + direction));
-          if (newIdx !== currentIdx) vp.setImageIdIndex(newIdx);
-          e.preventDefault();
-        } catch {}
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [showAnnotationDialog, isBrowserFullscreen]);
-
-  // ===== Fullscreen change listener =====
-  useEffect(() => {
-    const handler = () => setIsBrowserFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', handler);
-    return () => document.removeEventListener('fullscreenchange', handler);
-  }, []);
-
   // ===== Extract comprehensive DICOM metadata =====
   const extractMetadata = useCallback((imageId?: string) => {
     if (!imageId) return;
@@ -573,6 +498,81 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       setTimeout(() => loadSeries(best), 150);
     }
   }, [viewportReady, loadSeries]);
+
+  // ===== Listen for slice changes =====
+  useEffect(() => {
+    const el = viewportDivRef.current;
+    if (!el || !viewportReady) return;
+
+    const handler = () => {
+      if (!engineRef.current) return;
+      try {
+        const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
+        if (vp) {
+          const idx = vp.getCurrentImageIdIndex();
+          setCurrentSlice(idx + 1);
+          // Update metadata for current slice
+          extractMetadata(vp.getImageIds()[idx]);
+        }
+      } catch {}
+    };
+
+    el.addEventListener(csEnums.Events.STACK_NEW_IMAGE, handler);
+    return () => el.removeEventListener(csEnums.Events.STACK_NEW_IMAGE, handler);
+  }, [viewportReady]);
+
+  // ===== Process files on mount =====
+  useEffect(() => {
+    if (!viewportReady || files.length === 0) return;
+    processFiles(files);
+  }, [viewportReady, files, processFiles]);
+
+  // ===== Keyboard shortcuts =====
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showAnnotationDialog) {
+          setShowAnnotationDialog(false);
+          setScreenshotDataUrl(null);
+        } else if (isBrowserFullscreen) {
+          document.exitFullscreen?.();
+        } else {
+          onClose();
+        }
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        if (!showAnnotationDialog) toggleFullscreen();
+      }
+      if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        captureScreenshot();
+      }
+      // Arrow key navigation through slices
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (!engineRef.current) return;
+        try {
+          const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
+          if (!vp) return;
+          const imgIds = vp.getImageIds();
+          if (!imgIds || imgIds.length <= 1) return;
+          const direction = e.key === 'ArrowDown' ? 1 : -1;
+          const currentIdx = vp.getCurrentImageIdIndex();
+          const newIdx = Math.max(0, Math.min(imgIds.length - 1, currentIdx + direction));
+          if (newIdx !== currentIdx) vp.setImageIdIndex(newIdx);
+          e.preventDefault();
+        } catch {}
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [showAnnotationDialog, isBrowserFullscreen]);
+
+  // ===== Fullscreen change listener =====
+  useEffect(() => {
+    const handler = () => setIsBrowserFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
 
   // ===== Reset view =====
   const handleResetView = useCallback(() => {

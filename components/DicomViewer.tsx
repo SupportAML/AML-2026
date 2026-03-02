@@ -159,7 +159,14 @@ function getViewController(app: DwvApp, containerId: string): any {
 // ============================================================
 // DicomViewer Component
 // ============================================================
-const DicomViewer: React.FC = () => {
+interface DicomViewerProps {
+  /** Blob URL or remote URL to a single DICOM file (from Google Drive) */
+  fileUrl?: string;
+  /** Display name for the file */
+  fileName?: string;
+}
+
+const DicomViewer: React.FC<DicomViewerProps> = ({ fileUrl, fileName }) => {
   const [studies, setStudies] = useState<DicomStudy[]>([]);
   const [activeSeries, setActiveSeries] = useState<DicomSeries | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -222,6 +229,126 @@ const DicomViewer: React.FC = () => {
       scrollWheelRef.current = null;
     };
   }, [isReady]);
+
+  // ===== Load from a blob/remote URL (for Drive-stored single DICOMs) =====
+  const loadFromUrl = useCallback((url: string, name?: string) => {
+    if (dwvAppRef.current) {
+      try { dwvAppRef.current.abortLoad(); dwvAppRef.current.reset(); } catch {}
+      dwvAppRef.current = null;
+    }
+    const container = document.getElementById(containerIdRef.current);
+    if (container) container.innerHTML = '';
+
+    // Create a synthetic series for UI consistency
+    const syntheticSeries: DicomSeries = {
+      id: 'url-0', folderPath: '', displayName: name || 'DICOM File',
+      files: [], fileCount: 1,
+    };
+    setStudies([{
+      id: 'st-url', folderPath: '', displayName: name || 'DICOM File',
+      series: [syntheticSeries], totalFiles: 1, isExpanded: true,
+    }]);
+    setActiveSeries(syntheticSeries);
+    setIsLoading(true);
+    setLoadError(null);
+    setLoadProgress(0);
+    setDicomInfo(null);
+    setIsReady(false);
+    setWlDisplay({ w: 0, l: 0 });
+    setSliceDisplay({ current: 0, total: 1 });
+    defaultWLRef.current = null;
+    setShowGrid(false);
+    setGridThumbnails([]);
+
+    setTimeout(() => {
+      if (!mountedRef.current) return;
+
+      const app = new DwvApp();
+      dwvAppRef.current = app;
+
+      const viewConfig = new ViewConfig(containerIdRef.current);
+      const options = new AppOptions({ '*': [viewConfig] });
+      options.tools = {
+        WindowLevel: {},
+        ZoomAndPan: {},
+        Scroll: {},
+        Draw: { options: ['Ruler', 'Arrow', 'Circle', 'Ellipse', 'Rectangle', 'Protractor', 'Roi'] }
+      };
+
+      let hasLoaded = false;
+
+      app.addEventListener('loadprogress', (ev: any) => {
+        if (mountedRef.current && ev.loaded && ev.total) setLoadProgress(Math.round((ev.loaded / ev.total) * 100));
+      });
+
+      app.addEventListener('load', () => {
+        if (!mountedRef.current) return;
+        hasLoaded = true;
+        setIsLoading(false);
+        setLoadProgress(100);
+        setIsReady(true);
+        try { app.setTool('WindowLevel'); setActiveTool('WindowLevel'); } catch {}
+
+        const vc = getViewController(app, containerIdRef.current);
+        if (vc) {
+          try {
+            const wl = vc.getWindowLevel?.();
+            if (wl) {
+              defaultWLRef.current = { center: wl.center, width: wl.width };
+              setWlDisplay({ w: Math.round(wl.width), l: Math.round(wl.center) });
+            }
+          } catch {}
+        }
+
+        try {
+          const ids = app.getDataIds();
+          if (ids.length > 0) {
+            const md = app.getMetaData(ids[0]);
+            if (md) {
+              const gt = (g: string, e: string) => { const t = md[`${g}${e}`]; return t?.value?.length > 0 ? String(t.value[0]) : undefined; };
+              setDicomInfo({
+                patient: gt('0010', '0010'),
+                modality: gt('0008', '0060'),
+                description: gt('0008', '1030'),
+                sliceInfo: name || 'Single file',
+              });
+            }
+          }
+        } catch {}
+      });
+
+      app.addEventListener('wlchange', (ev: any) => {
+        if (mountedRef.current && ev.value) {
+          setWlDisplay({ w: Math.round(ev.value[0] || 0), l: Math.round(ev.value[1] || 0) });
+        }
+      });
+
+      app.addEventListener('loadend', () => {
+        if (mountedRef.current) {
+          setIsLoading(false);
+          if (!hasLoaded) setLoadError('Could not load DICOM file. The file may be incompatible or corrupt.');
+        }
+      });
+
+      app.addEventListener('error', (ev: any) => {
+        console.warn('[DicomViewer] dwv URL load:', ev.error?.message || ev.message || '');
+      });
+
+      try {
+        app.init(options);
+        app.loadURLs([url]);
+      } catch (e: any) {
+        if (mountedRef.current) { setIsLoading(false); setLoadError(e.message); }
+      }
+    }, 100);
+  }, []);
+
+  // ===== Auto-load when fileUrl prop is provided =====
+  useEffect(() => {
+    if (fileUrl) {
+      loadFromUrl(fileUrl, fileName);
+    }
+  }, [fileUrl, fileName, loadFromUrl]);
 
   // ===== Folder upload =====
   const handleFolderSelected = async (fileList: FileList | File[]) => {
@@ -494,8 +621,8 @@ const DicomViewer: React.FC = () => {
     setStudies(p => p.map(s => s.id === id ? { ...s, isExpanded: !s.isExpanded } : s));
   };
 
-  // ========== UPLOAD SCREEN ==========
-  if (studies.length === 0) {
+  // ========== UPLOAD SCREEN (skip if loading from URL prop) ==========
+  if (studies.length === 0 && !fileUrl) {
     return (
       <div className={`w-full rounded-2xl border-2 border-dashed transition-all ${isDragOver ? 'border-cyan-400 bg-cyan-50/50' : 'border-slate-300 bg-slate-50'}`}
         onDragEnter={(e) => { e.preventDefault(); setIsDragOver(true); }}
