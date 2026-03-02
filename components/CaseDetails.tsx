@@ -33,12 +33,11 @@ import {
   HardDriveIcon,
   FolderOpenIcon,
   MaximizeIcon,
-  CameraIcon,
   LayersIcon,
   CheckSquareIcon,
   SquareIcon
 } from 'lucide-react';
-import { Case, Document, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
+import { Case, Document, DicomStudyRecord, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
 import { getFileDownloadUrl } from '../services/googleDriveService';
 
 const DicomStudyViewerComponent = lazy(() => import('./DicomStudyViewer'));
@@ -400,8 +399,6 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'file' | 'folder' | 'batch'; id?: string; path?: string; name?: string } | null>(null);
 
   // DICOM folder management state
-  const [showDicomNewFolder, setShowDicomNewFolder] = useState(false);
-  const [dicomNewFolderName, setDicomNewFolderName] = useState('');
   const [isEditingMetadata, setIsEditingMetadata] = useState(false);
   const [editTitle, setEditTitle] = useState(caseItem.title);
   const [editDescription, setEditDescription] = useState(caseItem.description);
@@ -777,24 +774,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     e.target.value = '';
   };
 
-  const toggleDicomStudySelection = (index: number) => {
-    setLocalDicomStudies(prev => prev.map((s, i) => i === index ? { ...s, selected: !s.selected } : s));
-  };
-
   const removeDicomStudy = (index: number) => {
     setLocalDicomStudies(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const openDicomViewer = () => {
-    const selectedFiles = localDicomStudies
-      .filter(s => s.selected)
-      .flatMap(s => s.files);
-    if (selectedFiles.length === 0) {
-      alert('Please select at least one DICOM study to view.');
-      return;
-    }
-    setDicomViewerFiles(selectedFiles);
-    setShowDicomViewer(true);
   };
 
   // Open Drive-stored DICOM files in the fullscreen viewer
@@ -860,7 +841,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
 
   const buildTree = (): Record<string, TreeNode> => {
     const root: Record<string, TreeNode> = {};
-    docs.forEach(doc => {
+    // Filter out DICOM files — they appear in the dedicated DICOM Studies section
+    docs.filter(d => d.type !== 'dicom').forEach(doc => {
       const cleanPath = (doc.path || '/').replace(/^\/+|\/+$/g, '');
       const parts = cleanPath ? cleanPath.split('/') : [];
       let currentLevel = root;
@@ -1666,7 +1648,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
         )}
       </div>
 
-      {/* ===== DICOM Studies Section ===== */}
+      {/* ===== DICOM Studies Section — Horos-style Study Browser ===== */}
       <div className="mt-10 mb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -1675,16 +1657,16 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               DICOM Medical Imaging
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Upload DICOM folders from your computer or link from Google Drive — opens in a full-screen viewer
+              Upload DICOM study folders to Google Drive — each subfolder is treated as a separate study
             </p>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => dicomFolderInputRef.current?.click()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-slate-600 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-all shadow-lg shadow-slate-100"
+              className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-200 transition-all border border-slate-200"
             >
-              <FolderOpenIcon className="w-4 h-4" />
-              Upload Local DICOM
+              <FolderOpenIcon className="w-3.5 h-3.5" />
+              View Local
             </button>
             <button
               onClick={() => dicomDriveFolderInputRef.current?.click()}
@@ -1692,14 +1674,7 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 text-white rounded-xl font-bold text-sm hover:bg-cyan-700 transition-all shadow-lg shadow-cyan-100 disabled:opacity-50"
             >
               <HardDriveIcon className="w-4 h-4" />
-              {isDicomUploading ? 'Uploading...' : 'Link Drive & Upload'}
-            </button>
-            <button
-              onClick={() => setShowDicomNewFolder(true)}
-              className="flex items-center gap-2 px-5 py-2.5 bg-slate-600 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-all shadow-lg shadow-slate-100"
-            >
-              <FolderPlusIcon className="w-4 h-4" />
-              New Folder
+              {isDicomUploading ? 'Uploading...' : 'Upload DICOM Study'}
             </button>
             {/* @ts-expect-error — webkitdirectory is a non-standard attribute for folder selection */}
             <input type="file" ref={dicomFolderInputRef} onChange={handleDicomLocalFolderSelect} className="hidden" multiple webkitdirectory="" />
@@ -1708,262 +1683,174 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
           </div>
         </div>
 
-        {/* Viewer actions bar */}
+        {/* Local viewer quick-action bar */}
         {localDicomStudies.length > 0 && (
-          <div className="flex items-center gap-3 mb-4">
-            {localDicomStudies.some(s => s.selected) && (
-              <button
-                onClick={openDicomViewer}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-              >
-                <MaximizeIcon className="w-4 h-4" />
-                Open Viewer ({localDicomStudies.filter(s => s.selected).length})
-              </button>
-            )}
-            {localDicomStudies.filter(s => s.selected).length > 0 && (
-              <button
-                onClick={() => setLocalDicomStudies(prev => prev.filter(s => !s.selected))}
-                className="flex items-center gap-1 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-all border border-red-200"
-              >
-                <Trash2Icon className="w-3 h-3" /> Delete Selected
-              </button>
-            )}
+          <div className="flex items-center gap-3 mb-4 p-3 bg-cyan-50 border border-cyan-200 rounded-xl">
+            <ScanIcon className="w-4 h-4 text-cyan-600 shrink-0" />
+            <span className="text-xs text-cyan-700 font-medium flex-1">
+              {localDicomStudies.length} local {localDicomStudies.length === 1 ? 'study' : 'studies'} loaded ({localDicomStudies.reduce((a, s) => a + s.files.length, 0)} files)
+            </span>
+            <button
+              onClick={() => {
+                const allFiles = localDicomStudies.flatMap(s => s.files);
+                setDicomViewerFiles(allFiles);
+                setShowDicomViewer(true);
+              }}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all"
+            >
+              <MaximizeIcon className="w-3.5 h-3.5" /> Open Viewer
+            </button>
+            <button
+              onClick={() => setLocalDicomStudies([])}
+              className="p-1.5 text-cyan-400 hover:text-red-500 rounded-lg transition-all"
+            >
+              <XIcon className="w-4 h-4" />
+            </button>
           </div>
         )}
 
+        {/* Study Browser Table */}
         <div className="bg-white rounded-2xl border-2 border-slate-200 overflow-hidden shadow-sm">
-          {/* New folder input */}
-          {showDicomNewFolder && (
-            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
-              <FolderPlusIcon className="w-4 h-4 text-slate-400" />
-              <input
-                autoFocus
-                value={dicomNewFolderName}
-                onChange={(e) => setDicomNewFolderName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const name = dicomNewFolderName.trim();
-                    if (name) {
-                      const updatedFolders = [...(caseItem.dicomFolders || []), name];
-                      onUpdateCase({ ...caseItem, dicomFolders: updatedFolders });
-                    }
-                    setDicomNewFolderName('');
-                    setShowDicomNewFolder(false);
-                  }
-                  if (e.key === 'Escape') { setShowDicomNewFolder(false); setDicomNewFolderName(''); }
-                }}
-                placeholder="Folder name..."
-                className="flex-1 text-sm bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500"
-              />
-              <button
-                onClick={() => {
-                  const name = dicomNewFolderName.trim();
-                  if (name) {
-                    const updatedFolders = [...(caseItem.dicomFolders || []), name];
-                    onUpdateCase({ ...caseItem, dicomFolders: updatedFolders });
-                  }
-                  setDicomNewFolderName('');
-                  setShowDicomNewFolder(false);
-                }}
-                className="px-3 py-1.5 bg-cyan-600 text-white rounded-lg text-xs font-bold hover:bg-cyan-700"
-              >
-                Create
-              </button>
-              <button
-                onClick={() => { setShowDicomNewFolder(false); setDicomNewFolderName(''); }}
-                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
-              >
-                <XIcon className="w-4 h-4" />
-              </button>
-            </div>
-          )}
+          {(() => {
+            const studies = caseItem.dicomStudies || [];
+            const hasStudies = studies.length > 0;
 
-          <div className="p-4">
-            {localDicomStudies.length === 0 && dicomDocs.length === 0 && (caseItem.dicomFolders || []).length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="w-14 h-14 bg-cyan-50 rounded-2xl flex items-center justify-center mb-4">
-                  <LayersIcon className="w-7 h-7 text-cyan-400" />
+            if (!hasStudies && localDicomStudies.length === 0 && dicomDocs.length === 0) {
+              return (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <div className="w-16 h-16 bg-cyan-50 rounded-2xl flex items-center justify-center mb-4">
+                    <LayersIcon className="w-8 h-8 text-cyan-300" />
+                  </div>
+                  <p className="text-sm font-bold text-slate-500 mb-1">No imaging studies</p>
+                  <p className="text-xs text-slate-400 mb-1">Upload a DICOM folder — subfolders become individual studies</p>
+                  <p className="text-[10px] text-slate-300">CT, MRI, X-ray, Ultrasound, and all standard DICOM formats</p>
                 </div>
-                <p className="text-sm font-bold text-slate-500 mb-1">No DICOM studies loaded</p>
-                <p className="text-xs text-slate-400 mb-1">Upload DICOM folders from your computer or Google Drive</p>
-                <p className="text-[10px] text-slate-300">Supports CT, MRI, X-ray, Ultrasound, and all standard DICOM formats</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {/* DICOM Folders */}
-                {(caseItem.dicomFolders || []).map((folder) => {
-                  const folderDocs = dicomDocs.filter(d => {
-                    const dp = (d.path || '').replace(/^\/+|\/+$/g, '');
-                    return dp === folder || dp.startsWith(folder + '/');
-                  });
-                  return (
-                    <div key={`dicom-folder-${folder}`} className="rounded-xl border border-slate-200 overflow-hidden">
-                      <div className="flex items-center gap-2 px-3 py-2.5 bg-slate-50 group">
-                        <FolderIcon className="w-4 h-4 text-cyan-500 shrink-0" />
-                        <span className="text-sm font-bold text-slate-700 flex-1">{folder}</span>
-                        <span className="text-[10px] text-slate-400">{folderDocs.length} files</span>
-                        {folderDocs.some(d => d.storageLocation === 'drive' && d.driveFileId) && (
-                          <button
-                            onClick={() => openDriveDicomViewer(folderDocs)}
-                            disabled={isDicomDriveLoading}
-                            className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all disabled:opacity-50"
-                          >
-                            <EyeIcon className="w-3 h-3" /> View
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setDeleteConfirm({ type: 'folder', path: `dicom:${folder}`, name: folder })}
-                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-all"
-                        >
-                          <Trash2Icon className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      {folderDocs.length > 0 && (
-                        <div className="border-t border-slate-100">
-                          {folderDocs.map(doc => (
-                            <div key={doc.id} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 transition-all group/file">
-                              <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
-                                {doc.storageLocation === 'drive' ? <HardDriveIcon className="w-3.5 h-3.5 text-indigo-500" /> : <ScanIcon className="w-3.5 h-3.5 text-cyan-500" />}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-semibold text-slate-700 truncate">{doc.name}</p>
-                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
-                                  <span>{doc.size}</span>
-                                  {doc.storageLocation === 'drive' && <span className="px-1 py-0.5 bg-indigo-50 text-indigo-500 rounded text-[9px] font-bold">Drive</span>}
-                                </div>
-                              </div>
-                              <button
-                                onClick={() => setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name })}
-                                className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded opacity-0 group-hover/file:opacity-100 transition-all"
-                              >
-                                <Trash2Icon className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+              );
+            }
 
-                {/* Unorganized Drive-linked DICOM documents (not in any folder) */}
-                {(() => {
-                  const dicomFolderSet = new Set(caseItem.dicomFolders || []);
-                  const unorganizedDocs = dicomDocs.filter(d => {
-                    const dp = (d.path || '').replace(/^\/+|\/+$/g, '');
-                    return !Array.from(dicomFolderSet).some(f => dp === f || dp.startsWith(f + '/'));
-                  });
-                  if (unorganizedDocs.length === 0) return null;
-                  const driveDocs = unorganizedDocs.filter(d => d.storageLocation === 'drive' && d.driveFileId);
-                  return (
-                    <>
-                      {driveDocs.length > 1 && (
-                        <button
-                          onClick={() => openDriveDicomViewer(driveDocs)}
-                          disabled={isDicomDriveLoading}
-                          className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-xs font-bold hover:bg-emerald-100 transition-all disabled:opacity-50 w-full justify-center"
-                        >
-                          <EyeIcon className="w-3.5 h-3.5" /> View All {driveDocs.length} Drive DICOM Files
-                        </button>
-                      )}
-                      {unorganizedDocs.map(doc => (
-                        <div
-                          key={doc.id}
-                          className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group"
-                        >
-                          <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
-                            <HardDriveIcon className="w-5 h-5 text-indigo-600" />
+            return (
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="text-left px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Study Name</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Patient</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Study Date</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Modality</th>
+                    <th className="text-left px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Description</th>
+                    <th className="text-right px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Images</th>
+                    <th className="text-right px-4 py-2.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {studies.map((study, idx) => {
+                    const studyDocs = docs.filter(d => study.documentIds.includes(d.id));
+                    return (
+                      <tr
+                        key={study.id}
+                        className={`border-b border-slate-100 hover:bg-cyan-50/30 transition-colors group ${idx % 2 === 1 ? 'bg-slate-50/30' : ''}`}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <ScanIcon className="w-4 h-4 text-cyan-500 shrink-0" />
+                            <span className="text-sm font-bold text-slate-700">{study.name}</span>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-bold text-slate-700 truncate">{doc.name}</p>
-                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                              <span>{doc.size}</span>
-                              {doc.storageLocation === 'drive' && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-500 rounded font-bold">Google Drive</span>}
-                              <span>{new Date(doc.uploadDate).toLocaleDateString()}</span>
-                            </div>
-                          </div>
-                          {doc.storageLocation === 'drive' && doc.driveFileId && (
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-500">{study.patientName || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-slate-500">
+                          {study.studyDate || new Date(study.uploadDate).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3">
+                          {study.modality ? (
+                            <span className="px-2 py-0.5 bg-cyan-50 text-cyan-700 text-[10px] font-bold rounded-md border border-cyan-100">
+                              {study.modality}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-300">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-500 max-w-[200px] truncate">{study.description || '—'}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="text-xs font-mono text-slate-600">{study.imageCount}</span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
                             <button
-                              onClick={() => openDriveDicomViewer([doc])}
-                              disabled={isDicomDriveLoading}
-                              className="flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                              onClick={() => openDriveDicomViewer(studyDocs)}
+                              disabled={isDicomDriveLoading || studyDocs.length === 0}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-[11px] font-bold hover:bg-emerald-700 transition-all disabled:opacity-40"
                             >
                               <EyeIcon className="w-3 h-3" /> View
                             </button>
-                          )}
+                            <button
+                              onClick={() => {
+                                if (confirm(`Delete study "${study.name}" and its ${study.imageCount} images?`)) {
+                                  // Delete all associated documents
+                                  for (const docId of study.documentIds) {
+                                    onDeleteDoc(docId);
+                                  }
+                                  // Remove study record from case
+                                  const updatedStudies = (caseItem.dicomStudies || []).filter(s => s.id !== study.id);
+                                  onUpdateCase({ ...caseItem, dicomStudies: updatedStudies });
+                                }
+                              }}
+                              className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                              <Trash2Icon className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* Legacy: DICOM docs not in any study record (backwards compat) */}
+                  {(() => {
+                    const studyDocIds = new Set((caseItem.dicomStudies || []).flatMap(s => s.documentIds));
+                    const orphanDocs = dicomDocs.filter(d => !studyDocIds.has(d.id));
+                    if (orphanDocs.length === 0) return null;
+                    return (
+                      <tr className="border-b border-slate-100 bg-amber-50/20">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <HardDriveIcon className="w-4 h-4 text-amber-500 shrink-0" />
+                            <span className="text-sm font-medium text-slate-600">Unorganized Files</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-400">—</td>
+                        <td className="px-4 py-3 text-xs text-slate-400">—</td>
+                        <td className="px-4 py-3 text-xs text-slate-400">—</td>
+                        <td className="px-4 py-3 text-xs text-amber-600">Legacy uploads (pre-study browser)</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="text-xs font-mono text-slate-600">{orphanDocs.length}</span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
                           <button
-                            onClick={() => setDeleteConfirm({ type: 'file', id: doc.id, name: doc.name })}
-                            className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                            onClick={() => openDriveDicomViewer(orphanDocs)}
+                            disabled={isDicomDriveLoading}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-[11px] font-bold hover:bg-emerald-700 transition-all disabled:opacity-40 ml-auto"
                           >
-                            <Trash2Icon className="w-4 h-4" />
+                            <EyeIcon className="w-3 h-3" /> View
                           </button>
-                        </div>
-                      ))}
-                    </>
-                  );
-                })()}
-
-                {/* Select all / deselect all for local studies */}
-                {localDicomStudies.length > 1 && (
-                  <div className="flex items-center gap-2 pb-2 mb-1 border-b border-slate-100 mt-4 pt-3">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mr-2">Local Studies</span>
-                    <button
-                      onClick={() => {
-                        const allSelected = localDicomStudies.every(s => s.selected);
-                        setLocalDicomStudies(prev => prev.map(s => ({ ...s, selected: !allSelected })));
-                      }}
-                      className="text-[11px] font-bold text-cyan-600 hover:text-cyan-700"
-                    >
-                      {localDicomStudies.every(s => s.selected) ? 'Deselect All' : 'Select All'}
-                    </button>
-                    <span className="text-[10px] text-slate-400">·</span>
-                    <span className="text-[10px] text-slate-400">{localDicomStudies.length} studies · {localDicomStudies.reduce((a, s) => a + s.files.length, 0)} files</span>
-                  </div>
+                        </td>
+                      </tr>
+                    );
+                  })()}
+                </tbody>
+                {studies.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-slate-50">
+                      <td colSpan={5} className="px-4 py-2 text-[10px] text-slate-400">
+                        {studies.length} {studies.length === 1 ? 'study' : 'studies'} on Google Drive
+                      </td>
+                      <td className="px-4 py-2 text-right text-[10px] text-slate-400 font-mono">
+                        {studies.reduce((a, s) => a + s.imageCount, 0)} total
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
                 )}
-                {localDicomStudies.length === 1 && (
-                  <div className="pb-1 mb-1 border-b border-slate-100 mt-4 pt-3">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Local Studies</span>
-                  </div>
-                )}
-                {/* Local DICOM studies */}
-                {localDicomStudies.map((study, idx) => (
-                  <div
-                    key={`local-${idx}`}
-                    className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer group ${
-                      study.selected
-                        ? 'bg-cyan-50/50 border-cyan-200 ring-1 ring-cyan-100'
-                        : 'bg-white border-slate-200 hover:bg-slate-50'
-                    }`}
-                    onClick={() => toggleDicomStudySelection(idx)}
-                  >
-                    <div className="shrink-0">
-                      {study.selected ? (
-                        <CheckSquareIcon className="w-5 h-5 text-cyan-600" />
-                      ) : (
-                        <SquareIcon className="w-5 h-5 text-slate-300" />
-                      )}
-                    </div>
-                    <div className="w-10 h-10 rounded-lg bg-cyan-100 flex items-center justify-center shrink-0">
-                      <ScanIcon className="w-5 h-5 text-cyan-600" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-slate-700 truncate">{study.name}</p>
-                      <p className="text-[10px] text-slate-400">{study.files.length} files · Local</p>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteConfirm({ type: 'file', name: study.name, id: `dicom-local-${idx}` });
-                      }}
-                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0"
-                    >
-                      <Trash2Icon className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+              </table>
+            );
+          })()}
         </div>
       </div>
 

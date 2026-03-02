@@ -68,6 +68,19 @@ export interface BillingEntry {
   fundsReceivedDate?: string;
 }
 
+export interface DicomStudyRecord {
+  id: string;
+  name: string;
+  patientName?: string;
+  patientDob?: string;
+  studyDate?: string;
+  modality?: string;
+  description?: string;
+  imageCount: number;
+  uploadDate: string;
+  documentIds: string[];
+}
+
 export interface Case {
   id: string;
   title: string;
@@ -83,6 +96,7 @@ export interface Case {
   assignedUserEmails?: string[]; // Pre-authorized emails for invited users
   virtualFolders?: string[];
   dicomFolders?: string[];
+  dicomStudies?: DicomStudyRecord[];
 
   // New Fields
   primaryLawyer?: string;
