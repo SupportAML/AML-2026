@@ -166,6 +166,77 @@ export const getRecursiveFiles = async (accessToken: string, folderId: string, c
   return results;
 };
 
+/**
+ * List ALL files in a Drive folder (not just PDFs) — for DICOM import.
+ */
+export const listDriveAllFiles = async (accessToken: string, folderId: string): Promise<{ id: string; name: string; mimeType: string; size?: string }[]> => {
+  if (accessToken === 'mock-access-token') return [];
+  const query = `'${folderId}' in parents and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&orderBy=folder,name&pageSize=1000`;
+  const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+  if (!response.ok) throw new Error('Failed to list files');
+  const data = await response.json();
+  return data.files || [];
+};
+
+export interface DriveDicomFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  /** Folder path relative to the import root, e.g. "/CT_Head/" */
+  relativePath: string;
+  /** The subfolder name this file belongs to */
+  subfolderName: string;
+}
+
+/**
+ * Recursively list all files in a Drive folder tree — for DICOM import.
+ * Returns all files (not just PDFs) with their relative paths.
+ */
+export const getRecursiveDicomFiles = async (
+  accessToken: string,
+  folderId: string,
+  currentPath: string = '/',
+  folderName: string = 'Root'
+): Promise<DriveDicomFile[]> => {
+  let results: DriveDicomFile[] = [];
+  try {
+    const files = await listDriveAllFiles(accessToken, folderId);
+    for (const file of files) {
+      if (file.mimeType === 'application/vnd.google-apps.folder') {
+        const subFiles = await getRecursiveDicomFiles(accessToken, file.id, `${currentPath}${file.name}/`, file.name);
+        results = [...results, ...subFiles];
+      } else {
+        results.push({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          size: file.size,
+          relativePath: currentPath,
+          subfolderName: folderName,
+        });
+      }
+    }
+  } catch (e) { console.error(e); }
+  return results;
+};
+
+/**
+ * Download a partial range of a Drive file (first N bytes) for DICOM metadata parsing.
+ * Falls back to full download if range requests aren't supported.
+ */
+export const downloadDriveFilePartial = async (fileId: string, accessToken: string, maxBytes: number = 512 * 1024): Promise<ArrayBuffer> => {
+  const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Range': `bytes=0-${maxBytes - 1}`,
+    }
+  });
+  if (!response.ok && response.status !== 206) throw new Error('Failed to download file');
+  return response.arrayBuffer();
+};
+
 export const getFileDownloadUrl = async (fileId: string, accessToken: string): Promise<string> => {
   if (accessToken === 'mock-access-token') return "data:application/pdf;base64,JVBERi0xLjcKCjEgMCBvYmogICUgZW50cnkgcG9pbnQKPDwKICAvVHlwZSAvQ2F0YWxvZwogIC9QYWdlcyAyIDAgUgo+PgplbmRvYmoKCjIgMCBvYmoKPDwKICAvVHlwZSAvUGFnZXMKICAvQ291bnQgMQogIC9LaWRzIFszIDAgUl0KPj4KZW5kb2JqCgozIDAgvYmoKPDwKICAvVHlwZSAvUGFnZQogIC9QYXJlbnQgMiAwIFIKICAvUmVzb3VyY2VzIDw8CiAgICAvRm9udCA8PAogICAgICAvRjEgNCAwIFIKICAgID4+CiAgPj4KICAvTWVkaWFCb3ggWzAgMCA1OTUuMjggODQxLjg5XQogIC9Db250ZW50cyA1IDAgUgo+PgplbmRvYmoKCjQgMCBvYmoKPDwKICAvVHlwZSAvRm9udAogIC9TdWJ0eXBlIC9UeXBlMQogIC9CYXNlRm9udCAvSGVsdmV0aWNhCj4+CmVuZG9iagoKNSAwIG9iago8PAogIC9MZW5ndGggNDQKPj4Kc3RyZWFtCkJUCi9GMSAyNCBUZgoxMCA3NTAgVGQKKE1vY2sgRXZpZGVuY2UpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDE1IDAwMDAwIG4gCjAwMDAwMDAwNjggMDAwMDAgbiAKMDAwMDAwMDEyMiAwMDAwMCBuIAowMDAwMDAwMjgxIDAwMDAwIG4gCjAwMDAwMDAzNTAgMDAwMDAgbiAKdHJhaWxlcgo8PAogIC9TaXplIDYKICAvUm9vdCAxIDAgUgo+PgpzdGFydHhyZWYKNDQ1CiUlRU9G";
   const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {

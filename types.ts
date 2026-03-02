@@ -79,6 +79,10 @@ export interface DicomStudyRecord {
   imageCount: number;
   uploadDate: string;
   documentIds: string[];
+  studyInstanceUid?: string;
+  seriesCount?: number;
+  seriesDescriptions?: string[];
+  institutionName?: string;
 }
 
 export interface Case {

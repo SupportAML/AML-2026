@@ -13,6 +13,7 @@ import {
   WindowLevel as DwvWindowLevel,
   ScrollWheel
 } from 'dwv';
+import { parseDicomFile } from '../services/dicomParserService';
 
 // ============================================================
 // DICOM file filtering
@@ -78,7 +79,7 @@ interface DicomStudy {
   id: string; folderPath: string; displayName: string; series: DicomSeries[]; totalFiles: number; isExpanded: boolean;
 }
 
-function parseFilesToStudies(files: File[]): DicomStudy[] {
+async function parseFilesToStudies(files: File[]): Promise<DicomStudy[]> {
   if (files.length === 0) return [];
   const folderMap = new Map<string, File[]>();
   for (const file of files) {
@@ -88,32 +89,71 @@ function parseFilesToStudies(files: File[]): DicomStudy[] {
     if (!folderMap.has(folderPath)) folderMap.set(folderPath, []);
     folderMap.get(folderPath)!.push(file);
   }
+
+  // Parse DICOM metadata from first file of each folder for meaningful names
+  const folderMeta = new Map<string, { studyDesc?: string; seriesDesc?: string; modality?: string; studyUid?: string }>();
+  for (const [fp, ff] of folderMap) {
+    try {
+      const meta = await parseDicomFile(ff[0]);
+      if (meta) {
+        folderMeta.set(fp, {
+          studyDesc: meta.studyDescription,
+          seriesDesc: meta.seriesDescription,
+          modality: meta.modality,
+          studyUid: meta.studyInstanceUid,
+        });
+      }
+    } catch { /* ignore parse failures */ }
+  }
+
   const studyMap = new Map<string, Map<string, File[]>>();
   for (const [fp, ff] of folderMap) {
     const parts = fp.split('/');
-    const studyKey = parts.length >= 2 ? parts.slice(0, 2).join('/') : parts[0];
+    // Group by Study Instance UID if available, else by folder structure
+    const meta = folderMeta.get(fp);
+    const studyKey = meta?.studyUid || (parts.length >= 2 ? parts.slice(0, 2).join('/') : parts[0]);
     if (!studyMap.has(studyKey)) studyMap.set(studyKey, new Map());
     const sm = studyMap.get(studyKey)!;
     const ex = sm.get(fp);
     if (ex) ex.push(...ff); else sm.set(fp, ff);
   }
+
   const studies: DicomStudy[] = [];
   let idx = 0;
   for (const [sp, sm] of studyMap) {
     const seriesList: DicomSeries[] = [];
     let total = 0; let si = 0;
+    // Collect metadata for study-level name
+    let studyDisplayName: string | undefined;
     for (const [serPath, serFiles] of sm) {
       serFiles.sort((a, b) => {
         const ap = (a as any).webkitRelativePath || a.name;
         const bp = (b as any).webkitRelativePath || b.name;
         return ap.localeCompare(bp, undefined, { numeric: true });
       });
+      const meta = folderMeta.get(serPath);
       const pp = serPath.split('/');
-      seriesList.push({ id: `s${idx}-${si}`, folderPath: serPath, displayName: pp[pp.length - 1], files: serFiles, fileCount: serFiles.length });
+      const folderName = pp[pp.length - 1];
+      // Derive series display name from metadata
+      let seriesName = folderName;
+      if (meta?.seriesDesc) {
+        seriesName = meta.seriesDesc;
+      } else if (meta?.modality && /^\d+$/.test(folderName)) {
+        seriesName = `${meta.modality} Series ${si + 1}`;
+      }
+      // Use first folder's study description for the study-level name
+      if (!studyDisplayName && meta?.studyDesc) {
+        studyDisplayName = meta.studyDesc;
+      } else if (!studyDisplayName && meta?.modality) {
+        studyDisplayName = `${meta.modality} Study`;
+      }
+      seriesList.push({ id: `s${idx}-${si}`, folderPath: serPath, displayName: seriesName, files: serFiles, fileCount: serFiles.length });
       total += serFiles.length; si++;
     }
     const pp = sp.split('/');
-    studies.push({ id: `st${idx}`, folderPath: sp, displayName: pp[pp.length - 1] || pp[0], series: seriesList, totalFiles: total, isExpanded: idx === 0 });
+    const fallbackName = pp[pp.length - 1] || pp[0];
+    const displayName = studyDisplayName || (/^\d+$/.test(fallbackName) ? `Study ${idx + 1}` : fallbackName);
+    studies.push({ id: `st${idx}`, folderPath: sp, displayName, series: seriesList, totalFiles: total, isExpanded: idx === 0 });
     idx++;
   }
   return studies;
@@ -362,7 +402,7 @@ const DicomViewer: React.FC<DicomViewerProps> = ({ fileUrl, fileName }) => {
         alert(`No DICOM files found among ${all.length} scanned files.`);
         setIsFiltering(false); return;
       }
-      const parsed = parseFilesToStudies(dicom);
+      const parsed = await parseFilesToStudies(dicom);
       setStudies(parsed);
       setActiveSeries(null);
       setIsReady(false);
