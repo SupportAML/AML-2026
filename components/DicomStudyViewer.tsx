@@ -117,28 +117,26 @@ interface StudyMetadata {
 }
 
 // ============================================================
-// Singleton init
+// Singleton init — shared with Cornerstone3DViewer via window flag
 // ============================================================
-let csInitDone = false;
-let csInitPromise: Promise<void> | null = null;
+const _win = window as any;
 
 function ensureInit(): Promise<void> {
-  if (csInitDone) return Promise.resolve();
-  if (!csInitPromise) {
-    csInitPromise = (async () => {
-      await csInit();
-      await csDicomInit({ maxWebWorkers: navigator.hardwareConcurrency || 1 });
-      await csToolsInit();
-      // Wrap in try-catch to avoid errors if tools are already registered
-      // (e.g. if Cornerstone3DViewer module also registers them)
-      try { addTool(StackScrollTool); } catch {}
-      try { addTool(WindowLevelTool); } catch {}
-      try { addTool(ZoomTool); } catch {}
-      try { addTool(PanTool); } catch {}
-      csInitDone = true;
-    })();
-  }
-  return csInitPromise;
+  if (_win.__cs3d_init_done__) return Promise.resolve();
+  if (_win.__cs3d_init_promise__) return _win.__cs3d_init_promise__;
+
+  _win.__cs3d_init_promise__ = (async () => {
+    await csInit();
+    await csDicomInit({ maxWebWorkers: navigator.hardwareConcurrency || 1 });
+    await csToolsInit();
+    try { addTool(StackScrollTool); } catch {}
+    try { addTool(WindowLevelTool); } catch {}
+    try { addTool(ZoomTool); } catch {}
+    try { addTool(PanTool); } catch {}
+    _win.__cs3d_init_done__ = true;
+  })();
+
+  return _win.__cs3d_init_promise__;
 }
 
 // ============================================================
@@ -362,6 +360,21 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
         e.preventDefault();
         captureScreenshot();
       }
+      // Arrow key navigation through slices
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (!engineRef.current) return;
+        try {
+          const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
+          if (!vp) return;
+          const imgIds = vp.getImageIds();
+          if (!imgIds || imgIds.length <= 1) return;
+          const direction = e.key === 'ArrowDown' ? 1 : -1;
+          const currentIdx = vp.getCurrentImageIdIndex();
+          const newIdx = Math.max(0, Math.min(imgIds.length - 1, currentIdx + direction));
+          if (newIdx !== currentIdx) vp.setImageIdIndex(newIdx);
+          e.preventDefault();
+        } catch {}
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -373,6 +386,102 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     document.addEventListener('fullscreenchange', handler);
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
+
+  // ===== Extract comprehensive DICOM metadata =====
+  const extractMetadata = useCallback((imageId?: string) => {
+    if (!imageId) return;
+    try {
+      const patient = metaData.get('patientModule', imageId) || {};
+      const study = metaData.get('generalStudyModule', imageId) || {};
+      const series = metaData.get('generalSeriesModule', imageId) || {};
+      const img = metaData.get('generalImageModule', imageId) || {};
+      const plane = metaData.get('imagePlaneModule', imageId) || {};
+
+      const meta: StudyMetadata = {
+        patientName: patient.patientName?.Alphabetic || patient.patientName || undefined,
+        patientId: patient.patientId || undefined,
+        patientBirthDate: patient.patientBirthDate || undefined,
+        patientSex: patient.patientSex || undefined,
+        studyDescription: study.studyDescription || undefined,
+        studyDate: study.studyDate || undefined,
+        studyTime: study.studyTime || undefined,
+        accessionNumber: study.accessionNumber || undefined,
+        referringPhysician: study.referringPhysicianName?.Alphabetic || study.referringPhysicianName || undefined,
+        studyInstanceUID: study.studyInstanceUID || undefined,
+        seriesDescription: series.seriesDescription || undefined,
+        seriesNumber: series.seriesNumber?.toString() || undefined,
+        modality: series.modality || undefined,
+        seriesInstanceUID: series.seriesInstanceUID || undefined,
+        instanceNumber: img.instanceNumber || undefined,
+        rows: plane.rows || img.rows || undefined,
+        columns: plane.columns || img.columns || undefined,
+        pixelSpacing: plane.pixelSpacing ? `${plane.pixelSpacing[0]?.toFixed(2)} × ${plane.pixelSpacing[1]?.toFixed(2)} mm` : undefined,
+        sliceThickness: plane.sliceThickness ? `${plane.sliceThickness.toFixed(2)} mm` : undefined,
+      };
+
+      // Get W/L from viewport
+      if (engineRef.current) {
+        try {
+          const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
+          if (vp) {
+            const props = vp.getProperties();
+            if (props.voiRange) {
+              const ww = props.voiRange.upper - props.voiRange.lower;
+              const wc = (props.voiRange.upper + props.voiRange.lower) / 2;
+              meta.windowWidth = Math.round(ww).toString();
+              meta.windowCenter = Math.round(wc).toString();
+              setWlDisplay({ w: Math.round(ww), l: Math.round(wc) });
+            }
+          }
+        } catch {}
+      }
+
+      setStudyMeta(meta);
+    } catch {}
+  }, []);
+
+  // ===== Load a series into viewport =====
+  const loadSeries = useCallback(async (series: ViewerSeries) => {
+    if (!engineRef.current || series.imageIds.length === 0) return;
+
+    setIsLoading(true);
+    setActiveSeries(series);
+
+    try {
+      // Ensure viewport is properly sized before loading
+      try { engineRef.current.resize(); } catch {}
+
+      const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
+      if (!vp) {
+        console.error('[DicomStudyViewer] Viewport not found');
+        setIsLoading(false);
+        return;
+      }
+
+      await vp.setStack(series.imageIds, 0);
+
+      // Resize again after stack is set then render
+      try { engineRef.current.resize(); } catch {}
+      vp.render();
+
+      setTotalSlices(series.imageIds.length);
+      setCurrentSlice(1);
+
+      // Extract metadata after image loads
+      setTimeout(() => {
+        extractMetadata(series.imageIds[0]);
+        // One more render pass to ensure image is displayed
+        try {
+          vp.render();
+          engineRef.current?.resize();
+        } catch {}
+      }, 300);
+    } catch (err: any) {
+      console.error('[DicomStudyViewer] Load error:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [extractMetadata]);
 
   // ===== Process and validate DICOM files =====
   const processFiles = useCallback(async (fileList: File[]) => {
@@ -464,102 +573,6 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       setTimeout(() => loadSeries(best), 150);
     }
   }, [viewportReady, loadSeries]);
-
-  // ===== Load a series into viewport =====
-  const loadSeries = useCallback(async (series: ViewerSeries) => {
-    if (!engineRef.current || series.imageIds.length === 0) return;
-
-    setIsLoading(true);
-    setActiveSeries(series);
-
-    try {
-      // Ensure viewport is properly sized before loading
-      try { engineRef.current.resize(); } catch {}
-
-      const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
-      if (!vp) {
-        console.error('[DicomStudyViewer] Viewport not found');
-        setIsLoading(false);
-        return;
-      }
-
-      await vp.setStack(series.imageIds, 0);
-
-      // Resize again after stack is set then render
-      try { engineRef.current.resize(); } catch {}
-      vp.render();
-
-      setTotalSlices(series.imageIds.length);
-      setCurrentSlice(1);
-
-      // Extract metadata after image loads
-      setTimeout(() => {
-        extractMetadata(series.imageIds[0]);
-        // One more render pass to ensure image is displayed
-        try {
-          vp.render();
-          engineRef.current?.resize();
-        } catch {}
-      }, 300);
-    } catch (err: any) {
-      console.error('[DicomStudyViewer] Load error:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  // ===== Extract comprehensive DICOM metadata =====
-  const extractMetadata = useCallback((imageId?: string) => {
-    if (!imageId) return;
-    try {
-      const patient = metaData.get('patientModule', imageId) || {};
-      const study = metaData.get('generalStudyModule', imageId) || {};
-      const series = metaData.get('generalSeriesModule', imageId) || {};
-      const img = metaData.get('generalImageModule', imageId) || {};
-      const plane = metaData.get('imagePlaneModule', imageId) || {};
-
-      const meta: StudyMetadata = {
-        patientName: patient.patientName?.Alphabetic || patient.patientName || undefined,
-        patientId: patient.patientId || undefined,
-        patientBirthDate: patient.patientBirthDate || undefined,
-        patientSex: patient.patientSex || undefined,
-        studyDescription: study.studyDescription || undefined,
-        studyDate: study.studyDate || undefined,
-        studyTime: study.studyTime || undefined,
-        accessionNumber: study.accessionNumber || undefined,
-        referringPhysician: study.referringPhysicianName?.Alphabetic || study.referringPhysicianName || undefined,
-        studyInstanceUID: study.studyInstanceUID || undefined,
-        seriesDescription: series.seriesDescription || undefined,
-        seriesNumber: series.seriesNumber?.toString() || undefined,
-        modality: series.modality || undefined,
-        seriesInstanceUID: series.seriesInstanceUID || undefined,
-        instanceNumber: img.instanceNumber || undefined,
-        rows: plane.rows || img.rows || undefined,
-        columns: plane.columns || img.columns || undefined,
-        pixelSpacing: plane.pixelSpacing ? `${plane.pixelSpacing[0]?.toFixed(2)} × ${plane.pixelSpacing[1]?.toFixed(2)} mm` : undefined,
-        sliceThickness: plane.sliceThickness ? `${plane.sliceThickness.toFixed(2)} mm` : undefined,
-      };
-
-      // Get W/L from viewport
-      if (engineRef.current) {
-        try {
-          const vp = engineRef.current.getViewport(ids.viewportId) as Types.IStackViewport;
-          if (vp) {
-            const props = vp.getProperties();
-            if (props.voiRange) {
-              const ww = props.voiRange.upper - props.voiRange.lower;
-              const wc = (props.voiRange.upper + props.voiRange.lower) / 2;
-              meta.windowWidth = Math.round(ww).toString();
-              meta.windowCenter = Math.round(wc).toString();
-              setWlDisplay({ w: Math.round(ww), l: Math.round(wc) });
-            }
-          }
-        } catch {}
-      }
-
-      setStudyMeta(meta);
-    } catch {}
-  }, []);
 
   // ===== Reset view =====
   const handleResetView = useCallback(() => {
@@ -915,7 +928,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
                 <div><strong className="text-slate-400">Left Drag</strong> — Window/Level</div>
                 <div><strong className="text-slate-400">Right Drag</strong> — Zoom</div>
                 <div><strong className="text-slate-400">Shift+Drag</strong> — Pan</div>
-                <div><strong className="text-slate-400">Scroll Wheel</strong> — Change Slice</div>
+                <div><strong className="text-slate-400">Scroll / Arrows</strong> — Change Slice</div>
                 <div><strong className="text-slate-400">F</strong> — Fullscreen</div>
                 <div><strong className="text-slate-400">Ctrl+S</strong> — Screenshot</div>
                 <div><strong className="text-slate-400">Esc</strong> — Close</div>
@@ -932,7 +945,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
           <span>|</span>
           <span className="flex items-center gap-1"><MoveIcon className="w-3 h-3" /> Right Drag: Zoom · Shift+Drag: Pan</span>
           <span>|</span>
-          <span className="flex items-center gap-1"><LayersIcon className="w-3 h-3" /> Scroll: Change Slice</span>
+          <span className="flex items-center gap-1"><LayersIcon className="w-3 h-3" /> Scroll / Arrow Keys: Change Slice</span>
         </div>
         <span className="text-[10px] text-cyan-600 font-medium">DICOM Study Viewer</span>
       </div>

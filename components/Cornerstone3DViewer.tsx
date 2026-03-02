@@ -138,31 +138,31 @@ async function isDicomFile(file: File): Promise<boolean> {
 }
 
 // ============================================================
-// Singleton init — ensures Cornerstone3D libraries init exactly once
+// Singleton init — shared with DicomStudyViewer via window flag
 // ============================================================
-let csInitDone = false;
-let csInitPromise: Promise<void> | null = null;
+const _win = window as any;
 
 function ensureInit(): Promise<void> {
-  if (csInitDone) return Promise.resolve();
-  if (!csInitPromise) {
-    csInitPromise = (async () => {
-      console.log('[CS3D] Initializing...');
-      await csInit();
-      await csDicomInit({ maxWebWorkers: navigator.hardwareConcurrency || 1 });
-      await csToolsInit();
+  if (_win.__cs3d_init_done__) return Promise.resolve();
+  if (_win.__cs3d_init_promise__) return _win.__cs3d_init_promise__;
 
-      // Register tools globally once
-      addTool(StackScrollTool);
-      addTool(WindowLevelTool);
-      addTool(ZoomTool);
-      addTool(PanTool);
+  _win.__cs3d_init_promise__ = (async () => {
+    console.log('[CS3D] Initializing...');
+    await csInit();
+    await csDicomInit({ maxWebWorkers: navigator.hardwareConcurrency || 1 });
+    await csToolsInit();
 
-      csInitDone = true;
-      console.log('[CS3D] Init complete');
-    })();
-  }
-  return csInitPromise;
+    // Register tools globally once
+    try { addTool(StackScrollTool); } catch {}
+    try { addTool(WindowLevelTool); } catch {}
+    try { addTool(ZoomTool); } catch {}
+    try { addTool(PanTool); } catch {}
+
+    _win.__cs3d_init_done__ = true;
+    console.log('[CS3D] Init complete');
+  })();
+
+  return _win.__cs3d_init_promise__;
 }
 
 // ============================================================
@@ -197,10 +197,20 @@ const Cornerstone3DViewer: React.FC = () => {
   const [fileMeta, setFileMeta] = useState<Record<string, FileDicomMeta>>({});
   const [expandedStudies, setExpandedStudies] = useState<Set<string>>(new Set());
   const [activeSeriesUID, setActiveSeriesUID] = useState<string | null>(null);
-  const [discs, setDiscs] = useState<DicomDisc[]>([]);
+  const [discs, setDiscs] = useState<DicomDisc[]>(() => {
+    try {
+      const saved = localStorage.getItem('cs3d-discs');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [activeDiscId, setActiveDiscId] = useState<string | null>(null);
   const [editingDiscId, setEditingDiscId] = useState<string | null>(null);
   const [editDiscName, setEditDiscName] = useState('');
+
+  // Persist disc metadata to localStorage whenever it changes
+  useEffect(() => {
+    try { localStorage.setItem('cs3d-discs', JSON.stringify(discs)); } catch {}
+  }, [discs]);
 
   const viewportDivRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
@@ -1159,6 +1169,7 @@ const Cornerstone3DViewer: React.FC = () => {
           {discs.map((disc, idx) => {
             const isActive = activeDiscId === disc.id;
             const isEditing = editingDiscId === disc.id;
+            const hasFiles = files.some(f => f.discId === disc.id);
             return (
               <div
                 key={disc.id}
@@ -1206,6 +1217,7 @@ const Cornerstone3DViewer: React.FC = () => {
                         {disc.dicomFiles > 0 ? `${disc.dicomFiles} DICOM` : `${disc.totalFiles} files`}
                         {disc.dicomFiles > 0 && disc.totalFiles > disc.dicomFiles && ` of ${disc.totalFiles} total`}
                         {' '}&middot; Added {new Date(disc.uploadDate).toLocaleDateString()}
+                        {!hasFiles && <span className="ml-1 text-amber-500">&middot; needs reload</span>}
                       </p>
                     </>
                   )}
@@ -1255,16 +1267,22 @@ const Cornerstone3DViewer: React.FC = () => {
                     </button>
 
                     {/* Load / Activate */}
-                    <button
-                      onClick={() => handleLoadDisc(disc.id)}
-                      className={`ml-2 px-3 py-1 text-[11px] font-bold rounded-lg transition-all ${
-                        isActive
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-slate-100 text-slate-600 hover:bg-indigo-100 hover:text-indigo-700'
-                      }`}
-                    >
-                      {isActive ? 'Active' : 'Load'}
-                    </button>
+                    {hasFiles ? (
+                      <button
+                        onClick={() => handleLoadDisc(disc.id)}
+                        className={`ml-2 px-3 py-1 text-[11px] font-bold rounded-lg transition-all ${
+                          isActive
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-indigo-100 hover:text-indigo-700'
+                        }`}
+                      >
+                        {isActive ? 'Active' : 'Load'}
+                      </button>
+                    ) : (
+                      <span className="ml-2 px-3 py-1 text-[10px] text-amber-600 bg-amber-50 rounded-lg border border-amber-200">
+                        Re-upload folder
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
