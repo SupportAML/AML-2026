@@ -21,6 +21,7 @@ import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
 import { uploadFileToDrive, createDriveFolder, getFileDownloadUrl } from './services/googleDriveService';
+import { groupFilesByDicomStudy } from './services/dicomParserService';
 import {
   subscribeToCases,
   subscribeToAnnotations,
@@ -591,36 +592,21 @@ const App: React.FC = () => {
         await upsertCase({ ...caseItem, driveFolderId: folderId, driveFolderUrl: folder.url });
       }
 
-      // Group files by subfolder to create separate study records
-      // e.g. "PatientFolder/CT_Head/001.dcm" → study "CT_Head"
-      // e.g. "FolderName/001.dcm" → study "FolderName"
-      const studyMap = new Map<string, File[]>();
-      for (const file of files) {
-        const relPath = ((file as any).webkitRelativePath || file.name).replace(/\\/g, '/');
-        const parts = relPath.split('/').filter(Boolean);
-        let studyName: string;
-        if (parts.length >= 3) {
-          // e.g. "root/CT_Head/series/file.dcm" → use second-level folder
-          studyName = parts[1];
-        } else if (parts.length >= 2) {
-          // e.g. "FolderName/file.dcm" → use top-level folder
-          studyName = parts[0];
-        } else {
-          studyName = 'DICOM Study';
-        }
-        if (!studyMap.has(studyName)) studyMap.set(studyName, []);
-        studyMap.get(studyName)!.push(file);
-      }
+      // Parse DICOM metadata to group files by actual Study Instance UID
+      // instead of folder names (which are often just "1", "2", "3" on discs)
+      setUploadFileName('Parsing DICOM metadata...');
+      const dicomStudyGroups = await groupFilesByDicomStudy(files);
 
       let uploadedCount = 0;
       const newStudies: DicomStudyRecord[] = [];
 
-      for (const [studyName, studyFiles] of studyMap) {
+      for (const [studyKey, group] of dicomStudyGroups) {
         const studyId = `study-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
         const docIds: string[] = [];
+        const { metadata, displayName } = group;
 
-        for (const file of studyFiles) {
-          setUploadFileName(`${studyName}: ${file.name}`);
+        for (const file of group.files) {
+          setUploadFileName(`${displayName}: ${file.name}`);
           setUploadCurrentFileIndex(uploadedCount + 1);
           setUploadProgress(Math.round((uploadedCount / files.length) * 100));
 
@@ -638,7 +624,7 @@ const App: React.FC = () => {
             uploadDate: new Date().toISOString(),
             size: (file.size / (1024 * 1024)).toFixed(2) + " MB",
             reviewStatus: 'pending',
-            path: `DICOM/${studyName}`
+            path: `DICOM/${displayName}`
           };
           await upsertDocument(newDoc);
           docIds.push(docId);
@@ -647,10 +633,19 @@ const App: React.FC = () => {
 
         newStudies.push({
           id: studyId,
-          name: studyName,
-          imageCount: studyFiles.length,
+          name: displayName,
+          patientName: metadata.patientName,
+          patientDob: metadata.patientDob,
+          studyDate: metadata.studyDate,
+          modality: metadata.modality,
+          description: metadata.studyDescription || metadata.seriesDescription,
+          imageCount: group.files.length,
           uploadDate: new Date().toISOString(),
           documentIds: docIds,
+          studyInstanceUid: metadata.studyInstanceUid,
+          seriesCount: group.seriesCount,
+          seriesDescriptions: group.seriesDescriptions,
+          institutionName: metadata.institutionName,
         });
       }
 

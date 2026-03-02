@@ -35,10 +35,13 @@ import {
   MaximizeIcon,
   LayersIcon,
   CheckSquareIcon,
-  SquareIcon
+  SquareIcon,
+  LinkIcon,
+  GlobeIcon
 } from 'lucide-react';
-import { Case, Document, DicomStudyRecord, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
-import { getFileDownloadUrl } from '../services/googleDriveService';
+import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
+import { getFileDownloadUrl, getRecursiveDicomFiles, downloadDriveFilePartial, DriveDicomFile } from '../services/googleDriveService';
+import { parseDicomFile, groupFilesByDicomStudy, extractDriveFolderIdFromUrl, type DicomMeta } from '../services/dicomParserService';
 
 const DicomStudyViewerComponent = lazy(() => import('./DicomStudyViewer'));
 
@@ -392,6 +395,10 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [isDicomUploading, setIsDicomUploading] = useState(false);
   const [isDicomDriveLoading, setIsDicomDriveLoading] = useState(false);
   const [dicomDriveLoadProgress, setDicomDriveLoadProgress] = useState('');
+  const [showDriveImportModal, setShowDriveImportModal] = useState(false);
+  const [driveImportUrl, setDriveImportUrl] = useState('');
+  const [driveImportStatus, setDriveImportStatus] = useState('');
+  const [isDriveImporting, setIsDriveImporting] = useState(false);
 
   // Multi-select state for Case Files
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
@@ -833,6 +840,144 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
     } finally {
       setIsDicomDriveLoading(false);
       setDicomDriveLoadProgress('');
+    }
+  };
+
+  // Import DICOM studies from a Google Drive shared folder URL
+  const handleDriveImport = async () => {
+    const folderId = extractDriveFolderIdFromUrl(driveImportUrl);
+    if (!folderId) {
+      alert('Invalid Google Drive folder URL. Please paste a URL like:\nhttps://drive.google.com/drive/folders/...');
+      return;
+    }
+
+    let token = googleAccessToken;
+    if (!token && onRequestDriveAuth) {
+      token = await onRequestDriveAuth();
+    }
+    if (!token) {
+      alert('Please link your Google account first.');
+      return;
+    }
+
+    setIsDriveImporting(true);
+    setDriveImportStatus('Scanning Drive folder structure...');
+
+    try {
+      // 1. List all files recursively
+      const driveFiles = await getRecursiveDicomFiles(token, folderId);
+      if (driveFiles.length === 0) {
+        alert('No files found in the Drive folder. Make sure the folder is shared and contains DICOM files.');
+        setIsDriveImporting(false);
+        setDriveImportStatus('');
+        return;
+      }
+
+      setDriveImportStatus(`Found ${driveFiles.length} files. Parsing DICOM metadata...`);
+
+      // 2. Group files by subfolder
+      const subfolderGroups = new Map<string, DriveDicomFile[]>();
+      for (const f of driveFiles) {
+        const key = f.relativePath;
+        if (!subfolderGroups.has(key)) subfolderGroups.set(key, []);
+        subfolderGroups.get(key)!.push(f);
+      }
+
+      // 3. Parse first file of each subfolder for metadata
+      const folderMeta = new Map<string, DicomMeta>();
+      let parsedCount = 0;
+      for (const [folderPath, files] of subfolderGroups) {
+        parsedCount++;
+        setDriveImportStatus(`Parsing metadata (${parsedCount}/${subfolderGroups.size}): ${files[0].subfolderName}`);
+        try {
+          const buf = await downloadDriveFilePartial(files[0].id, token!, 512 * 1024);
+          const tempFile = new File([buf], files[0].name, { type: 'application/dicom' });
+          const meta = await parseDicomFile(tempFile);
+          if (meta) folderMeta.set(folderPath, meta);
+        } catch (e) {
+          console.warn('[Drive Import] Failed to parse metadata for', folderPath, e);
+        }
+      }
+
+      // 4. Group by Study Instance UID
+      const studyGroups = new Map<string, { metadata: DicomMeta; files: DriveDicomFile[]; displayName: string }>();
+      for (const [folderPath, files] of subfolderGroups) {
+        const meta = folderMeta.get(folderPath);
+        const studyKey = meta?.studyInstanceUid || `folder:${files[0].subfolderName}`;
+        if (!studyGroups.has(studyKey)) {
+          let displayName = 'DICOM Study';
+          if (meta?.studyDescription) displayName = meta.studyDescription;
+          else if (meta?.seriesDescription) displayName = meta.modality ? `${meta.modality} — ${meta.seriesDescription}` : meta.seriesDescription;
+          else if (meta?.modality) displayName = /^\d+$/.test(files[0].subfolderName) ? `${meta.modality} Study` : `${meta.modality} — ${files[0].subfolderName}`;
+          else if (!/^\d+$/.test(files[0].subfolderName)) displayName = files[0].subfolderName;
+
+          studyGroups.set(studyKey, { metadata: meta || {}, files: [], displayName });
+        }
+        studyGroups.get(studyKey)!.files.push(...files);
+      }
+
+      setDriveImportStatus(`Creating ${studyGroups.size} study records...`);
+
+      // 5. Create Document records and DicomStudyRecords
+      const newStudies: DicomStudyRecord[] = [];
+      for (const [_studyKey, group] of studyGroups) {
+        const studyId = `study-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        const docIds: string[] = [];
+
+        for (const driveFile of group.files) {
+          const docId = Math.random().toString(36).substr(2, 9);
+          const newDoc: Document = {
+            id: docId,
+            caseId: caseItem.id,
+            name: driveFile.name,
+            type: 'dicom' as DocumentFileType,
+            mimeType: 'application/dicom',
+            url: '',
+            driveFileId: driveFile.id,
+            storageLocation: 'drive',
+            uploadDate: new Date().toISOString(),
+            size: driveFile.size ? `${(parseInt(driveFile.size) / (1024 * 1024)).toFixed(2)} MB` : '—',
+            reviewStatus: 'pending',
+            path: `DICOM/${group.displayName}`
+          };
+          // We batch these - upsertDocument called for each
+          await onUpdateDoc(newDoc);
+          docIds.push(docId);
+        }
+
+        newStudies.push({
+          id: studyId,
+          name: group.displayName,
+          patientName: group.metadata.patientName,
+          patientDob: group.metadata.patientDob,
+          studyDate: group.metadata.studyDate,
+          modality: group.metadata.modality,
+          description: group.metadata.studyDescription || group.metadata.seriesDescription,
+          imageCount: group.files.length,
+          uploadDate: new Date().toISOString(),
+          documentIds: docIds,
+          studyInstanceUid: group.metadata.studyInstanceUid,
+          institutionName: group.metadata.institutionName,
+        });
+      }
+
+      // 6. Update case with new studies
+      const updatedStudies = [...(caseItem.dicomStudies || []), ...newStudies];
+      await onUpdateCase({ ...caseItem, dicomStudies: updatedStudies });
+
+      setShowDriveImportModal(false);
+      setDriveImportUrl('');
+      setDriveImportStatus('');
+    } catch (e: any) {
+      console.error('[Drive Import] Failed:', e);
+      if (e?.message?.includes('401') || e?.message?.includes('403')) {
+        alert('Google Drive access denied. Make sure the folder is shared with you and try again.');
+      } else {
+        alert('Import failed: ' + (e?.message || 'Unknown error'));
+      }
+    } finally {
+      setIsDriveImporting(false);
+      setDriveImportStatus('');
     }
   };
 
@@ -1660,13 +1805,20 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
               Upload DICOM study folders to Google Drive — each subfolder is treated as a separate study
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => dicomFolderInputRef.current?.click()}
               className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-200 transition-all border border-slate-200"
             >
               <FolderOpenIcon className="w-3.5 h-3.5" />
               View Local
+            </button>
+            <button
+              onClick={() => setShowDriveImportModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl font-bold text-xs hover:bg-indigo-100 transition-all border border-indigo-200"
+            >
+              <LinkIcon className="w-3.5 h-3.5" />
+              Import from Drive
             </button>
             <button
               onClick={() => dicomDriveFolderInputRef.current?.click()}
@@ -1744,6 +1896,21 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 <tbody>
                   {studies.map((study, idx) => {
                     const studyDocs = docs.filter(d => study.documentIds.includes(d.id));
+                    // Modality color map
+                    const modalityColors: Record<string, string> = {
+                      CT: 'bg-blue-50 text-blue-700 border-blue-200',
+                      MR: 'bg-purple-50 text-purple-700 border-purple-200',
+                      MRI: 'bg-purple-50 text-purple-700 border-purple-200',
+                      CR: 'bg-amber-50 text-amber-700 border-amber-200',
+                      DX: 'bg-amber-50 text-amber-700 border-amber-200',
+                      XA: 'bg-amber-50 text-amber-700 border-amber-200',
+                      US: 'bg-green-50 text-green-700 border-green-200',
+                      PT: 'bg-red-50 text-red-700 border-red-200',
+                      NM: 'bg-orange-50 text-orange-700 border-orange-200',
+                      MG: 'bg-pink-50 text-pink-700 border-pink-200',
+                      RF: 'bg-teal-50 text-teal-700 border-teal-200',
+                    };
+                    const modalityColor = study.modality ? (modalityColors[study.modality.toUpperCase()] || 'bg-cyan-50 text-cyan-700 border-cyan-100') : '';
                     return (
                       <tr
                         key={study.id}
@@ -1752,7 +1919,12 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <ScanIcon className="w-4 h-4 text-cyan-500 shrink-0" />
-                            <span className="text-sm font-bold text-slate-700">{study.name}</span>
+                            <div>
+                              <span className="text-sm font-bold text-slate-700 block">{study.name}</span>
+                              {study.seriesCount && study.seriesCount > 1 && (
+                                <span className="text-[10px] text-slate-400">{study.seriesCount} series</span>
+                              )}
+                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-500">{study.patientName || '—'}</td>
@@ -1761,14 +1933,19 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                         </td>
                         <td className="px-4 py-3">
                           {study.modality ? (
-                            <span className="px-2 py-0.5 bg-cyan-50 text-cyan-700 text-[10px] font-bold rounded-md border border-cyan-100">
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md border ${modalityColor}`}>
                               {study.modality}
                             </span>
                           ) : (
                             <span className="text-xs text-slate-300">—</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-xs text-slate-500 max-w-[200px] truncate">{study.description || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-slate-500 max-w-[200px] truncate" title={study.description || ''}>
+                          {study.description || '—'}
+                          {study.institutionName && (
+                            <span className="block text-[10px] text-slate-400 truncate">{study.institutionName}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-right">
                           <span className="text-xs font-mono text-slate-600">{study.imageCount}</span>
                         </td>
@@ -1784,11 +1961,9 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                             <button
                               onClick={() => {
                                 if (confirm(`Delete study "${study.name}" and its ${study.imageCount} images?`)) {
-                                  // Delete all associated documents
                                   for (const docId of study.documentIds) {
                                     onDeleteDoc(docId);
                                   }
-                                  // Remove study record from case
                                   const updatedStudies = (caseItem.dicomStudies || []).filter(s => s.id !== study.id);
                                   onUpdateCase({ ...caseItem, dicomStudies: updatedStudies });
                                 }
@@ -1912,6 +2087,70 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 className="px-4 py-2 text-sm font-bold text-white bg-red-600 rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-100"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drive Import Modal */}
+      {showDriveImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => { if (!isDriveImporting) { setShowDriveImportModal(false); setDriveImportUrl(''); setDriveImportStatus(''); } }}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-lg w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
+                <GlobeIcon className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <h4 className="text-lg font-bold text-slate-800">Import from Google Drive</h4>
+                <p className="text-xs text-slate-400">Paste a shared Google Drive folder URL containing DICOM files</p>
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <input
+                type="url"
+                value={driveImportUrl}
+                onChange={(e) => setDriveImportUrl(e.target.value)}
+                placeholder="https://drive.google.com/drive/folders/..."
+                className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                disabled={isDriveImporting}
+                onKeyDown={(e) => { if (e.key === 'Enter' && driveImportUrl.trim()) handleDriveImport(); }}
+              />
+            </div>
+
+            {driveImportStatus && (
+              <div className="mb-4 p-3 bg-indigo-50 border border-indigo-200 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Loader2Icon className="w-4 h-4 text-indigo-500 animate-spin shrink-0" />
+                  <span className="text-xs text-indigo-700 font-medium">{driveImportStatus}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-slate-50 rounded-xl p-3 mb-4">
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                The system will scan the folder structure, parse DICOM headers to extract study names,
+                modality, patient info, and dates, then organize them into studies automatically.
+                Files stay in their current Drive location — no re-upload needed.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => { setShowDriveImportModal(false); setDriveImportUrl(''); setDriveImportStatus(''); }}
+                disabled={isDriveImporting}
+                className="px-4 py-2 text-sm font-bold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDriveImport}
+                disabled={isDriveImporting || !driveImportUrl.trim()}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50"
+              >
+                {isDriveImporting ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
+                {isDriveImporting ? 'Importing...' : 'Import Studies'}
               </button>
             </div>
           </div>
