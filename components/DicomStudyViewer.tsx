@@ -313,6 +313,24 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   }, [viewportReady]);
 
   // ===== Extract comprehensive DICOM metadata =====
+
+  // Cornerstone metaData can return objects instead of strings for some fields
+  // e.g. dates → {year, month, day}, names → {Alphabetic: "..."}
+  // This helper coerces any value to a string safe for React rendering.
+  const toStr = (val: any): string | undefined => {
+    if (val == null) return undefined;
+    if (typeof val === 'string') return val || undefined;
+    if (typeof val === 'number') return val.toString();
+    // DICOM date object {year, month, day}
+    if (val.year != null) {
+      return `${val.year}${String(val.month ?? 1).padStart(2, '0')}${String(val.day ?? 1).padStart(2, '0')}`;
+    }
+    // DICOM PersonName object {Alphabetic: "..."}
+    if (val.Alphabetic) return String(val.Alphabetic);
+    // Fallback
+    return String(val);
+  };
+
   const extractMetadata = useCallback((imageId?: string) => {
     if (!imageId) return;
     try {
@@ -323,21 +341,21 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       const plane = metaData.get('imagePlaneModule', imageId) || {};
 
       const meta: StudyMetadata = {
-        patientName: patient.patientName?.Alphabetic || patient.patientName || undefined,
-        patientId: patient.patientId || undefined,
-        patientBirthDate: patient.patientBirthDate || undefined,
-        patientSex: patient.patientSex || undefined,
-        studyDescription: study.studyDescription || undefined,
-        studyDate: study.studyDate || undefined,
-        studyTime: study.studyTime || undefined,
-        accessionNumber: study.accessionNumber || undefined,
-        referringPhysician: study.referringPhysicianName?.Alphabetic || study.referringPhysicianName || undefined,
-        studyInstanceUID: study.studyInstanceUID || undefined,
-        seriesDescription: series.seriesDescription || undefined,
-        seriesNumber: series.seriesNumber?.toString() || undefined,
-        modality: series.modality || undefined,
-        seriesInstanceUID: series.seriesInstanceUID || undefined,
-        instanceNumber: img.instanceNumber || undefined,
+        patientName: toStr(patient.patientName?.Alphabetic) || toStr(patient.patientName),
+        patientId: toStr(patient.patientId),
+        patientBirthDate: toStr(patient.patientBirthDate),
+        patientSex: toStr(patient.patientSex),
+        studyDescription: toStr(study.studyDescription),
+        studyDate: toStr(study.studyDate),
+        studyTime: toStr(study.studyTime),
+        accessionNumber: toStr(study.accessionNumber),
+        referringPhysician: toStr(study.referringPhysicianName?.Alphabetic) || toStr(study.referringPhysicianName),
+        studyInstanceUID: toStr(study.studyInstanceUID),
+        seriesDescription: toStr(series.seriesDescription),
+        seriesNumber: series.seriesNumber != null ? String(series.seriesNumber) : undefined,
+        modality: toStr(series.modality),
+        seriesInstanceUID: toStr(series.seriesInstanceUID),
+        instanceNumber: toStr(img.instanceNumber),
         rows: plane.rows || img.rows || undefined,
         columns: plane.columns || img.columns || undefined,
         pixelSpacing: plane.pixelSpacing ? `${plane.pixelSpacing[0]?.toFixed(2)} × ${plane.pixelSpacing[1]?.toFixed(2)} mm` : undefined,
@@ -634,19 +652,25 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     setStudies(prev => prev.map(s => s.id === id ? { ...s, isExpanded: !s.isExpanded } : s));
   };
 
-  // ===== Format DICOM date =====
-  function formatDicomDate(d?: string): string {
+  // ===== Format DICOM date (defensive — handles string or object) =====
+  function formatDicomDate(d?: any): string {
     if (!d) return '';
+    // Handle Cornerstone date object {year, month, day}
+    if (typeof d === 'object' && d.year != null) {
+      return `${d.year}-${String(d.month ?? 1).padStart(2, '0')}-${String(d.day ?? 1).padStart(2, '0')}`;
+    }
+    const s = String(d);
     // DICOM dates are YYYYMMDD
-    if (d.length === 8) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
-    return d;
+    if (s.length === 8 && /^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+    return s;
   }
 
-  function formatDicomTime(t?: string): string {
+  function formatDicomTime(t?: any): string {
     if (!t) return '';
+    const s = String(t);
     // DICOM times are HHMMSS.ffffff
-    if (t.length >= 6) return `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
-    return t;
+    if (s.length >= 6) return `${s.slice(0, 2)}:${s.slice(2, 4)}:${s.slice(4, 6)}`;
+    return s;
   }
 
   // ============================================================
