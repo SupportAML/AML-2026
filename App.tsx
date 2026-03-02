@@ -477,6 +477,23 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDisconnectGoogleDrive = () => {
+    const token = googleAccessToken;
+    if (token) {
+      try {
+        const w = window as any;
+        if (w.google?.accounts?.oauth2?.revoke) {
+          w.google.accounts.oauth2.revoke(token, () => {
+            console.log('[Google Drive] Token revoked');
+          });
+        }
+      } catch (e) {
+        console.warn('[Google Drive] Revocation failed (non-critical):', e);
+      }
+    }
+    setGoogleAccessToken(null);
+  };
+
   // Save DICOM screenshot annotation
   const handleSaveDicomAnnotation = (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
     if (!activeCase) return;
@@ -1003,6 +1020,7 @@ const App: React.FC = () => {
                   onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
+                  onDisconnectGoogleDrive={handleDisconnectGoogleDrive}
                 />
               )}
               {viewMode === ViewMode.DOC_VIEWER && activeDoc && (

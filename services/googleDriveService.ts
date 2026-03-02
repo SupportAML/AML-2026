@@ -143,11 +143,20 @@ export const createDriveFolder = async (folderName: string, accessToken: string,
 export const listDriveFiles = async (accessToken: string, folderId: string = 'root') => {
   if (accessToken === 'mock-access-token') return [];
   const query = `'${folderId}' in parents and (mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/pdf') and trashed = false`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, mimeType, size)&orderBy=folder,name&pageSize=1000`;
-  const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
-  if (!response.ok) throw new Error('Failed to list files');
-  const data = await response.json();
-  return data.files || [];
+  let allFiles: { id: string; name: string; mimeType: string; size?: string }[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const tokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,size)&orderBy=folder,name&pageSize=1000${tokenParam}`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+    if (!response.ok) throw new Error('Failed to list files');
+    const data = await response.json();
+    allFiles = [...allFiles, ...(data.files || [])];
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return allFiles;
 };
 
 export const getRecursiveFiles = async (accessToken: string, folderId: string, currentPath: string = '/'): Promise<DriveImportCandidate[]> => {
@@ -172,11 +181,20 @@ export const getRecursiveFiles = async (accessToken: string, folderId: string, c
 export const listDriveAllFiles = async (accessToken: string, folderId: string): Promise<{ id: string; name: string; mimeType: string; size?: string }[]> => {
   if (accessToken === 'mock-access-token') return [];
   const query = `'${folderId}' in parents and trashed = false`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,size)&orderBy=folder,name&pageSize=1000`;
-  const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
-  if (!response.ok) throw new Error('Failed to list files');
-  const data = await response.json();
-  return data.files || [];
+  let allFiles: { id: string; name: string; mimeType: string; size?: string }[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const tokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,size)&orderBy=folder,name&pageSize=1000${tokenParam}`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+    if (!response.ok) throw new Error('Failed to list files');
+    const data = await response.json();
+    allFiles = [...allFiles, ...(data.files || [])];
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return allFiles;
 };
 
 export interface DriveDicomFile {
