@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut, signInAnonymously, updateProfile } from "firebase/auth";
-import { auth } from './firebase';
+import { auth, storage } from './firebase';
 import { Case, Document, DocumentFileType, DicomStudyRecord, Annotation, ViewMode, UserProfile, AuthorizedUser, ReviewStatus, UserRole } from './types';
 import Sidebar from './components/Sidebar';
 const CaseList = React.lazy(() => import('./components/CaseList'));
@@ -17,9 +17,11 @@ const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup'
 const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
+const DicomViewerPage = React.lazy(() => import('./components/DicomViewerPage'));
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { createDriveFolder, getFileDownloadUrl } from './services/googleDriveService';
 import {
   subscribeToCases,
@@ -478,60 +480,89 @@ const App: React.FC = () => {
   };
 
   // Save DICOM screenshot annotation
-  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
-    if (!activeCase) return;
-
-    // Convert base64 data URL to a File for upload to Firebase Storage
-    const res = await fetch(data.imageUrl);
-    const blob = await res.blob();
-    const fileName = `DICOM_Screenshot_${data.studyName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`;
-    const file = new File([blob], fileName, { type: 'image/png' });
-
-    // Upload to Firebase Storage (fall back to data URL if upload fails)
-    let fileUrl = data.imageUrl;
-    let storagePath: string | undefined;
-    try {
-      const result = await uploadFile(activeCase.id, file);
-      fileUrl = result.url;
-      storagePath = result.storagePath;
-    } catch (e) {
-      console.warn('[DICOM Screenshot] Storage upload failed, using data URL:', e);
+  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string; caseId?: string; modality?: string; sliceInfo?: string }) => {
+    // Determine target case — from annotation data (standalone viewer) or activeCase (legacy)
+    const targetCaseId = data.caseId || activeCase?.id;
+    if (!targetCaseId) {
+      console.warn('[DICOM Annotation] No case ID — cannot save.');
+      return;
     }
 
-    // Create Document record so the screenshot appears in Case Files
+    // Convert base64 data URL to a JPEG blob for upload to Firebase Storage
+    const res = await fetch(data.imageUrl);
+    const blob = await res.blob();
+    const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `DICOM_Annotation_${safeName}_${Date.now()}.jpg`;
+
+    // Convert to JPEG
+    let jpegBlob: Blob = blob;
+    try {
+      const img = await createImageBitmap(blob);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
+        jpegBlob = await new Promise<Blob>((resolve) => {
+          canvas.toBlob((b) => resolve(b || blob), 'image/jpeg', 0.92);
+        });
+      }
+    } catch {
+      // Fall back to original blob if JPEG conversion fails
+    }
+
+    // Upload to Firebase Storage under cases/{caseId}/dicom-annotations/
+    let fileUrl = data.imageUrl;
+    let storagePath = `cases/${targetCaseId}/dicom-annotations/${Date.now()}_${safeName}.jpg`;
+    try {
+      const storageRef = ref(storage, storagePath);
+      const uploadTask = uploadBytesResumable(storageRef, jpegBlob, {
+        contentType: 'image/jpeg',
+        customMetadata: { uploadedAt: new Date().toISOString() }
+      });
+      await new Promise<void>((resolve, reject) => {
+        uploadTask.on('state_changed', null, reject, () => resolve());
+      });
+      fileUrl = await getDownloadURL(storageRef);
+    } catch (e) {
+      console.warn('[DICOM Annotation] Storage upload failed, using data URL:', e);
+      storagePath = '';
+    }
+
+    // Build display name: DICOM – [Study Type] – [Date]
+    const displayName = `DICOM – ${data.studyName} – ${data.studyDate}`;
+
+    // Write Firestore document to cases/{caseId}/files
     const docId = Math.random().toString(36).substr(2, 9);
     const newDoc: Document = {
       id: docId,
-      caseId: activeCase.id,
-      name: fileName,
-      type: 'image',
-      mimeType: 'image/png',
+      caseId: targetCaseId,
+      name: displayName,
+      type: 'dicom-annotation',
+      mimeType: 'image/jpeg',
       url: fileUrl,
-      storagePath,
+      storagePath: storagePath || undefined,
       uploadDate: new Date().toISOString(),
-      size: (blob.size / 1024).toFixed(1) + ' KB',
+      size: (jpegBlob.size / 1024).toFixed(1) + ' KB',
       reviewStatus: 'pending',
-      path: 'DICOM Screenshots',
+      path: 'DICOM Annotations',
     };
-    await upsertDocument(newDoc);
 
-    // Create Annotation record linked to the Document
-    const annotation: Annotation = {
-      id: Math.random().toString(36).substr(2, 9),
-      documentId: docId,
-      caseId: activeCase.id,
-      page: 0,
-      text: `[DICOM Key Image] ${data.text}\nStudy: ${data.studyName}\nDate: ${data.studyDate}\nPatient: ${data.patientInfo}`,
-      author: currentUser?.name || 'Unknown',
-      timestamp: new Date().toISOString(),
-      eventDate: data.studyDate,
-      category: 'Medical',
-      x: 0,
-      y: 0,
-      type: 'area',
+    // Extend with DICOM-specific metadata (stored as part of the document)
+    const extendedDoc = {
+      ...newDoc,
       imageUrl: fileUrl,
+      patient: data.patientInfo,
+      study: data.studyName,
+      date: data.studyDate,
+      modality: data.modality || '',
+      slice: data.sliceInfo || '',
+      annotationNote: data.text,
+      uploadedBy: currentUser?.id || '',
+      uploadedAt: new Date().toISOString(),
     };
-    upsertAnnotation(annotation);
+    await upsertDocument(extendedDoc as Document);
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
@@ -989,6 +1020,7 @@ const App: React.FC = () => {
                 {viewMode === ViewMode.TEAM_ADMIN && "Firm Administration"}
                 {viewMode === ViewMode.ADMIN_INSIGHTS && "Admin Intelligence"}
                 {viewMode === ViewMode.SETTINGS && "Platform Settings"}
+                {viewMode === ViewMode.DICOM_VIEWER && "DICOM Viewer"}
               </h1>
               <div className={`flex items-center gap-2 px-2.5 py-1 rounded font-black text-[9px] uppercase tracking-widest ${isDemoUser ? 'bg-emerald-100 text-emerald-700' : 'bg-emerald-50 text-emerald-600'}`}>
                 {isDemoUser ? "SANDBOX" : "Firebase Realtime"}
@@ -1036,7 +1068,6 @@ const App: React.FC = () => {
                   }}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-                  onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
                 />
@@ -1193,6 +1224,13 @@ const App: React.FC = () => {
               )}
               {viewMode === ViewMode.SETTINGS && (
                 <Settings currentUser={currentUser} />
+              )}
+              {viewMode === ViewMode.DICOM_VIEWER && currentUser && (
+                <DicomViewerPage
+                  cases={cases}
+                  currentUser={currentUser}
+                  onSaveAnnotation={handleSaveDicomAnnotation}
+                />
               )}
             </React.Suspense>
           </div>

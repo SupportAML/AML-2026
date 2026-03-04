@@ -255,7 +255,7 @@ export interface InvitationToken {
 
 export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';
 
-export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'other';
+export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'dicom-annotation' | 'other';
 
 export interface Document {
   id: string;
@@ -320,6 +320,7 @@ export enum ViewMode {
   PROFILE = 'PROFILE',
   TEAM_ADMIN = 'TEAM_ADMIN',
   ADMIN_INSIGHTS = 'ADMIN_INSIGHTS',
-  SETTINGS = 'SETTINGS'
+  SETTINGS = 'SETTINGS',
+  DICOM_VIEWER = 'DICOM_VIEWER'
 }
 
