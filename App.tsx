@@ -17,6 +17,7 @@ const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup'
 const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
+const ReviewMode = React.lazy(() => import('./components/ReviewMode'));
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
@@ -983,6 +984,7 @@ const App: React.FC = () => {
                 {viewMode === ViewMode.CASE_VIEW && activeCase?.title}
                 {viewMode === ViewMode.DOC_VIEWER && activeDoc?.name}
                 {viewMode === ViewMode.ANNOTATION_ROLLUP && `Clinical Workspace${activeCase?.title ? ` — ${activeCase.title}` : ''}`}
+                {viewMode === ViewMode.REVIEW_MODE && `Review Mode${activeCase?.title ? ` — ${activeCase.title}` : ''}`}
                 {viewMode === ViewMode.CLIENTS && "Client Directory"}
                 {viewMode === ViewMode.ORIENTATION && "Orientation"}
                 {viewMode === ViewMode.PROFILE && "My Profile"}
@@ -1024,6 +1026,7 @@ const App: React.FC = () => {
               {viewMode === ViewMode.CASE_VIEW && activeCase && (
                 <CaseDetails
                   currentUser={currentUser} caseItem={activeCase} docs={activeDocuments} allUsers={authorizedUsers}
+                  annotations={activeAnnotations}
                   onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
                   onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
                   onUpload={handleFileUpload}
@@ -1036,6 +1039,7 @@ const App: React.FC = () => {
                   }}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
+                  onEnterReviewMode={() => setViewMode(ViewMode.REVIEW_MODE)}
                   onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
@@ -1077,6 +1081,20 @@ const App: React.FC = () => {
                   }}
                   onNavigateToAnnotation={handleNavigateToAnnotation}
                   currentUser={currentUser}
+                />
+              )}
+              {viewMode === ViewMode.REVIEW_MODE && activeCase && (
+                <ReviewMode
+                  caseItem={activeCase}
+                  docs={activeDocuments}
+                  annotations={activeAnnotations}
+                  currentUser={currentUser}
+                  googleAccessToken={googleAccessToken}
+                  onAddAnnotation={handleAddAnnotation}
+                  onUpdateAnnotation={upsertAnnotation}
+                  onDeleteAnnotation={deleteAnnotationFromStore}
+                  onUpdateDoc={upsertDocument}
+                  onExit={() => setViewMode(ViewMode.CASE_VIEW)}
                 />
               )}
               {viewMode === ViewMode.CLIENTS && (

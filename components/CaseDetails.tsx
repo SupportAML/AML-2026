@@ -37,9 +37,10 @@ import {
   CheckSquareIcon,
   SquareIcon,
   LinkIcon,
-  GlobeIcon
+  GlobeIcon,
+  PlayCircleIcon
 } from 'lucide-react';
-import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
+import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry, DocumentPriority, PRIORITY_CONFIG, Annotation } from '../types';
 // Google Drive viewer support kept for viewing previously-imported Drive studies
 import { parseDicomFile, groupFilesByDicomStudy, isDicomCandidate, type DicomMeta } from '../services/dicomParserService';
 
@@ -102,6 +103,7 @@ interface CaseDetailsProps {
   docs: Document[];
   currentUser: UserProfile;
   allUsers: AuthorizedUser[];
+  annotations?: Annotation[];
   onAssignUser: (caseId: string, userId: string) => void;
   onRemoveUser: (caseId: string, userId: string) => void;
   onOpenDoc: (doc: Document) => void;
@@ -112,6 +114,7 @@ interface CaseDetailsProps {
   onUpdateDocStatus: (docId: string, status: ReviewStatus) => void;
   onUpdateDoc: (doc: Document) => void;
   onOpenAnalysis: () => void;
+  onEnterReviewMode?: () => void;
   onSaveDicomAnnotation?: (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => void;
   googleAccessToken?: string | null;
   onRequestDriveAuth?: () => Promise<string | null>;
@@ -125,6 +128,71 @@ interface TreeNode {
   children: Record<string, TreeNode>;
   isOpen?: boolean;
 }
+
+// Helper: collect all documents from a tree node (recursively)
+const collectDocsFromNode = (node: TreeNode): Document[] => {
+  const docs: Document[] = [];
+  if (node.type === 'file' && node.doc) docs.push(node.doc);
+  for (const child of Object.values(node.children)) {
+    docs.push(...collectDocsFromNode(child));
+  }
+  return docs;
+};
+
+// Helper: compute folder priority border segments
+const getFolderPriorityColors = (node: TreeNode): string[] => {
+  const docs = collectDocsFromNode(node);
+  if (docs.length === 0) return [PRIORITY_CONFIG.unreviewed.color];
+  const priorities = docs.map(d => d.priority || 'unreviewed');
+  const unique = [...new Set(priorities)];
+  return unique.map(p => PRIORITY_CONFIG[p].color);
+};
+
+// Context menu for priority assignment
+const PriorityContextMenu: React.FC<{
+  x: number;
+  y: number;
+  currentPriority: DocumentPriority;
+  onSelect: (p: DocumentPriority) => void;
+  onClose: () => void;
+}> = ({ x, y, currentPriority, onSelect, onClose }) => {
+  const priorities: DocumentPriority[] = ['critical', 'notable', 'supplemental', 'unreviewed'];
+
+  useEffect(() => {
+    const handler = () => onClose();
+    document.addEventListener('click', handler);
+    document.addEventListener('contextmenu', handler);
+    return () => {
+      document.removeEventListener('click', handler);
+      document.removeEventListener('contextmenu', handler);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed z-[100] bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 min-w-[180px] animate-in fade-in zoom-in-95 duration-150"
+      style={{ left: x, top: y }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Set Priority</div>
+      {priorities.map(p => {
+        const cfg = PRIORITY_CONFIG[p];
+        const isActive = p === currentPriority;
+        return (
+          <button
+            key={p}
+            onClick={(e) => { e.stopPropagation(); onSelect(p); }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50 transition-colors ${isActive ? 'bg-slate-50 font-bold' : ''}`}
+          >
+            <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: cfg.color }} />
+            <span className="text-slate-700">{cfg.emoji} {cfg.label}</span>
+            {isActive && <CheckIcon className="w-3.5 h-3.5 text-indigo-600 ml-auto" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 const FileTreeItem: React.FC<{
   node: TreeNode;
@@ -142,11 +210,14 @@ const FileTreeItem: React.FC<{
   onToggleDocSelect?: (docId: string) => void;
   onToggleFolderSelect?: (path: string) => void;
   onConfirmDelete?: (type: 'file' | 'folder', id?: string, path?: string, name?: string) => void;
-}> = ({ node, level, onOpenDoc, onDeleteDoc, onUpdateStatus, onRenameFile, onRenameFolder, onDeleteFolder, onDragStartDoc, onDropOnFolder, isDocSelected, isFolderSelected, onToggleDocSelect, onToggleFolderSelect, onConfirmDelete }) => {
+  onUpdatePriority?: (docId: string, priority: DocumentPriority) => void;
+  annotationCounts?: Record<string, number>;
+}> = ({ node, level, onOpenDoc, onDeleteDoc, onUpdateStatus, onRenameFile, onRenameFolder, onDeleteFolder, onDragStartDoc, onDropOnFolder, isDocSelected, isFolderSelected, onToggleDocSelect, onToggleFolderSelect, onConfirmDelete, onUpdatePriority, annotationCounts }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(node.name);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const renameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -178,14 +249,23 @@ const FileTreeItem: React.FC<{
       'reviewed': 'text-green-500'
     };
 
+    const docPriority = node.doc.priority || 'unreviewed';
+    const priorityColor = PRIORITY_CONFIG[docPriority].color;
+
     const docSelected = isDocSelected?.(node.doc.id) ?? false;
     return (
+      <>
       <div
         draggable
         onDragStart={(e) => onDragStartDoc?.(e, node.doc!.id)}
         className={`flex items-center gap-3 py-2 px-3 rounded-lg cursor-pointer transition-colors group ${docSelected ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}
-        style={{ paddingLeft: `${level * 20}px` }}
+        style={{ paddingLeft: `${level * 20}px`, borderLeft: `3px solid ${priorityColor}` }}
         onClick={() => !isRenaming && onOpenDoc(node.doc!)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (onUpdatePriority) setContextMenu({ x: e.clientX, y: e.clientY });
+        }}
       >
         {onToggleDocSelect && (
           <button
@@ -269,17 +349,39 @@ const FileTreeItem: React.FC<{
           <Trash2Icon className="w-4 h-4" />
         </button>
       </div>
+      {contextMenu && onUpdatePriority && (
+        <PriorityContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          currentPriority={docPriority}
+          onSelect={(p) => { onUpdatePriority(node.doc!.id, p); setContextMenu(null); }}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+      </>
     );
   }
 
   const hasChildren = Object.keys(node.children).length > 0;
   const folderSelected = isFolderSelected?.(node.path) ?? false;
 
+  // Compute folder priority border
+  const folderPriorityColors = getFolderPriorityColors(node);
+  const folderBorderStyle: React.CSSProperties = folderPriorityColors.length === 1
+    ? { borderLeft: `3px solid ${folderPriorityColors[0]}` }
+    : { borderLeft: '3px solid transparent', borderImage: `linear-gradient(to bottom, ${folderPriorityColors.join(', ')}) 1` };
+
+  // Compute folder annotation count
+  const folderDocs = collectDocsFromNode(node);
+  const folderAnnotationCount = annotationCounts
+    ? folderDocs.reduce((sum, d) => sum + (annotationCounts[d.id] || 0), 0)
+    : 0;
+
   return (
     <div className="group/folder">
       <div
         className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors select-none ${isDragOver ? 'bg-indigo-50 ring-2 ring-indigo-300' : folderSelected ? 'bg-indigo-50' : 'hover:bg-slate-50 text-slate-600'}`}
-        style={{ paddingLeft: `${level * 20}px` }}
+        style={{ paddingLeft: `${level * 20}px`, ...folderBorderStyle }}
         onClick={() => !isRenaming && setIsOpen(!isOpen)}
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setIsDragOver(true); }}
         onDragLeave={() => setIsDragOver(false)}
@@ -304,6 +406,11 @@ const FileTreeItem: React.FC<{
           />
         ) : (
           <span className="text-sm font-bold truncate flex-1">{node.name}</span>
+        )}
+        {folderAnnotationCount > 0 && (
+          <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full shrink-0">
+            {folderAnnotationCount} annotation{folderAnnotationCount !== 1 ? 's' : ''}
+          </span>
         )}
         <div className="flex items-center gap-1 opacity-0 group-hover/folder:opacity-100 transition-all" onClick={(e) => e.stopPropagation()}>
           <button
@@ -359,6 +466,8 @@ const FileTreeItem: React.FC<{
                 onToggleDocSelect={onToggleDocSelect}
                 onToggleFolderSelect={onToggleFolderSelect}
                 onConfirmDelete={onConfirmDelete}
+                onUpdatePriority={onUpdatePriority}
+                annotationCounts={annotationCounts}
               />
             ))}
         </div>
@@ -369,8 +478,8 @@ const FileTreeItem: React.FC<{
 
 const CaseDetails: React.FC<CaseDetailsProps> = ({
   caseItem, docs, onOpenDoc, onUpload, onUploadFolder, onUpdateCase, onDeleteDoc,
-  currentUser, allUsers, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis,
-  onSaveDicomAnnotation, googleAccessToken, onRequestDriveAuth
+  currentUser, allUsers, annotations, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis,
+  onEnterReviewMode, onSaveDicomAnnotation, googleAccessToken, onRequestDriveAuth
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -443,6 +552,24 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [draggedDocId, setDraggedDocId] = useState<string | null>(null);
 
   const canManageTeam = currentUser.role === 'ADMIN' || currentUser.id === caseItem.ownerId;
+
+  // Compute annotation counts per document
+  const annotationCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (annotations) {
+      for (const ann of annotations) {
+        counts[ann.documentId] = (counts[ann.documentId] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [annotations]);
+
+  // Priority update handler
+  const handleUpdatePriority = (docId: string, priority: DocumentPriority) => {
+    const doc = docs.find(d => d.id === docId);
+    if (doc) onUpdateDoc({ ...doc, priority });
+  };
+
   const fileSectionRef = useRef<HTMLDivElement>(null);
   const [isExternalDragOver, setIsExternalDragOver] = useState(false);
   const externalDragCounter = useRef(0);
@@ -1485,6 +1612,15 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
       <div ref={fileSectionRef} className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <h3 className="text-xl font-serif font-black text-slate-800">Case Files</h3>
+          {onEnterReviewMode && docs.filter(d => d.type !== 'dicom').length > 0 && (
+            <button
+              onClick={onEnterReviewMode}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-all border border-indigo-200"
+            >
+              <PlayCircleIcon className="w-3.5 h-3.5" />
+              Review
+            </button>
+          )}
           {totalSelected > 0 && (
             <div className="flex items-center gap-2 ml-2">
               <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">{totalSelected} selected</span>
@@ -1632,6 +1768,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 onToggleDocSelect={toggleDocSelection}
                 onToggleFolderSelect={toggleFolderSelection}
                 onConfirmDelete={(type, id, path, name) => setDeleteConfirm({ type, id, path, name })}
+                onUpdatePriority={handleUpdatePriority}
+                annotationCounts={annotationCounts}
               />
             ))
           )}

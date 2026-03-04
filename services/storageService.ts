@@ -12,7 +12,7 @@ import {
   getDoc
 } from "firebase/firestore";
 import { db, auth } from "../firebase";
-import { Case, Annotation, Document, AuthorizedUser, UserRole } from "../types";
+import { Case, Annotation, Document, AuthorizedUser, UserRole, ReviewSession } from "../types";
 import { deleteFile } from "./fileService";
 
 const COLL_CASES = "cases";
@@ -584,4 +584,23 @@ export const deleteUserCases = async (userId: string) => {
   }
 };
 
+// --- Review Session Persistence ---
+const COLL_REVIEW_SESSIONS = "reviewSessions";
+
+export const getReviewSession = async (caseId: string, userId: string): Promise<ReviewSession | null> => {
+  if (isDemoMode) return null;
+  try {
+    const docId = `${caseId}_${userId}`;
+    const snap = await getDoc(doc(db, COLL_REVIEW_SESSIONS, docId));
+    return snap.exists() ? (snap.data() as ReviewSession) : null;
+  } catch {
+    return null;
+  }
+};
+
+export const upsertReviewSession = async (caseId: string, userId: string, session: ReviewSession): Promise<void> => {
+  if (isDemoMode) return;
+  const docId = `${caseId}_${userId}`;
+  await setDoc(doc(db, COLL_REVIEW_SESSIONS, docId), cleanData({ ...session, updatedAt: new Date().toISOString() }), { merge: true });
+};
 
