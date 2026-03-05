@@ -231,3 +231,92 @@ export const suggestEdit = async (
 
   return response.json();
 };
+
+// ============================================================================
+// SEARCH MEDICAL RESEARCH (PubMed Central — server-side)
+// ============================================================================
+
+export interface ResearchArticleResult {
+  title: string;
+  source: string;
+  summary: string;
+  url: string;
+  citation: string;
+  pdfUrl: string;
+  pmcId: string;
+  pmid?: string;
+  authors?: string;
+  year?: string;
+}
+
+/**
+ * Search PubMed Central for verified open-access articles with full PDFs.
+ * Calls the /api/search-research serverless endpoint (no AI needed — uses NCBI E-utilities).
+ */
+export const searchMedicalResearch = async (
+  query: string
+): Promise<ResearchArticleResult[]> => {
+  const response = await fetch('/api/search-research', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, maxResults: 6 }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || `API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.articles || [];
+};
+
+// ============================================================================
+// SMART CITATION INSERTION (Claude — server-side)
+// ============================================================================
+
+/**
+ * Insert a citation into a report using Claude via /api/smart-cite.
+ */
+export const insertSmartCitation = async (
+  content: string,
+  article: Record<string, unknown>
+): Promise<{ newContent: string; explanation: string }> => {
+  const response = await fetch('/api/smart-cite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, article }),
+  });
+
+  if (!response.ok) {
+    console.error('smart-cite API error:', response.status);
+    return { newContent: content, explanation: 'Citation insertion failed.' };
+  }
+
+  return response.json();
+};
+
+// ============================================================================
+// RESEARCH GAP ANALYSIS (Claude — server-side)
+// ============================================================================
+
+/**
+ * Analyze a report for research gaps using Claude via /api/research-gaps.
+ */
+export const analyzeReportForResearchGaps = async (
+  content: string
+): Promise<Array<{ topic: string; reason: string }>> => {
+  const response = await fetch('/api/research-gaps', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+
+  if (!response.ok) {
+    console.error('research-gaps API error:', response.status);
+    return [];
+  }
+
+  const data = await response.json();
+  return data.gaps || [];
+};

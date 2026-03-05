@@ -142,9 +142,6 @@ import {
    runFullCaseStrategy,
    chatWithDepositionCoach,
    cleanupChronology,
-   searchMedicalResearch,
-   analyzeReportForResearchGaps,
-   insertSmartCitation,
    extractFactsFromNotes,
    rewordClinicalNotes,
    extractHandwrittenNotesFromImage
@@ -154,6 +151,9 @@ import {
    generateReport,
    suggestEdit,
    buildCaseContext,
+   searchMedicalResearch,
+   insertSmartCitation,
+   analyzeReportForResearchGaps,
    LegalChatMessage,
    SuggestionItem
 } from '../services/claudeService';
@@ -1521,7 +1521,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       }
 
       setIsGenerating(true);
-      const results = await searchMedicalResearch(topic, reportContent);
+      const results = await searchMedicalResearch(topic);
       setResearchResults(results);
       setIsGenerating(false);
    };
@@ -1578,7 +1578,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       e.preventDefault();
       if (!researchQuery.trim()) return;
       setIsGenerating(true);
-      const results = await searchMedicalResearch(researchQuery, reportContent);
+      const results = await searchMedicalResearch(researchQuery);
       setResearchResults(results);
       setIsGenerating(false);
    };
