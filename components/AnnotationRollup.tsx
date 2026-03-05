@@ -114,7 +114,11 @@ import {
    TableIcon,
    GitMergeIcon,
    ImageIcon,
-   DownloadIcon
+   DownloadIcon,
+   RotateCcwIcon,
+   PaperclipIcon,
+   XCircleIcon,
+   ChevronUpIcon
 } from 'lucide-react';
 import { Case, Document, Annotation, UserProfile, ChatMessage, ReportComment, Suggestion, StrategyAnalysis, StructuredChronology, DepoFeedback, ChronologyEvent, ResearchArticle, ResearchGap } from '../types';
 import { DepositionSimulation } from './DepositionSimulation';
@@ -230,7 +234,13 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
 
    // Writer State
-   const [writerSidebarMode, setWriterSidebarMode] = useState<'COMMENTS' | 'AI'>('COMMENTS');
+   const [writerSidebarMode, setWriterSidebarMode] = useState<'COMMENTS' | 'AI'>(
+      caseItem.reportContent ? 'COMMENTS' : 'AI'
+   );
+   const [sidebarWidth, setSidebarWidth] = useState(384);
+   const isResizingSidebarRef = useRef(false);
+   const sidebarResizeStartXRef = useRef(0);
+   const sidebarResizeStartWidthRef = useRef(384);
    const [selectedTextForComment, setSelectedTextForComment] = useState('');
    const [commentInput, setCommentInput] = useState('');
    const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -243,6 +253,10 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [sidebarSuggestions, setSidebarSuggestions] = useState<(SuggestionItem & { id: string; diff: Diff.Change[] })[]>([]);
    const [selectedEditorText, setSelectedEditorText] = useState('');
    const [sidebarPdfContext, setSidebarPdfContext] = useState('');
+   const [sidebarAttachments, setSidebarAttachments] = useState<{ name: string; type: 'image' | 'pdf'; base64: string; mimeType: string; size: number }[]>([]);
+   const [selectedScreenshots, setSelectedScreenshots] = useState<Set<string>>(new Set());
+   const [screenshotPanelOpen, setScreenshotPanelOpen] = useState(false);
+   const attachmentInputRef = useRef<HTMLInputElement>(null);
    const sidebarScrollRef = useRef<HTMLDivElement>(null);
 
    // Preview Panel State
@@ -274,6 +288,23 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
       window.addEventListener('beforeunload', handleBeforeUnload);
       return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+   }, []);
+
+   // Sidebar resize mouse handlers
+   useEffect(() => {
+      const handleMouseMove = (e: MouseEvent) => {
+         if (!isResizingSidebarRef.current) return;
+         const delta = sidebarResizeStartXRef.current - e.clientX;
+         const newWidth = Math.min(700, Math.max(320, sidebarResizeStartWidthRef.current + delta));
+         setSidebarWidth(newWidth);
+      };
+      const handleMouseUp = () => { isResizingSidebarRef.current = false; };
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+         window.removeEventListener('mousemove', handleMouseMove);
+         window.removeEventListener('mouseup', handleMouseUp);
+      };
    }, []);
 
    // Keyboard shortcut: Ctrl+Shift+E to open export modal
@@ -435,9 +466,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    // Merge events state
    const [mergeMode, setMergeMode] = useState(false);
    const [mergeSelectedIds, setMergeSelectedIds] = useState<Set<string>>(new Set());
-   // Report Builder state
-   const [showTemplateSelector, setShowTemplateSelector] = useState(false);
-   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
+   // Report Builder state (template selection now handled in AI sidebar chat)
    // Force re-render trigger
    const [renderKey, setRenderKey] = useState(0);
 
@@ -1492,7 +1521,51 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const handleSidebarSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
       const userText = sidebarInput.trim();
-      if (!userText || sidebarStreaming) return;
+      if ((!userText && sidebarAttachments.length === 0 && selectedScreenshots.size === 0) || sidebarStreaming) return;
+
+      // Collect image attachments (user-attached images + selected annotation screenshots)
+      const imageAttachments: { base64: string; mimeType: string; label?: string }[] = [];
+      for (const att of sidebarAttachments) {
+         if (att.type === 'image') imageAttachments.push({ base64: att.base64, mimeType: att.mimeType });
+      }
+      // PDF attachments: prepend as text context
+      const pdfContextParts: string[] = [];
+      for (const att of sidebarAttachments) {
+         if (att.type === 'pdf') {
+            pdfContextParts.push(`[Attached PDF: ${att.name}]\n(PDF content — user attached for additional context)`);
+         }
+      }
+      // Add selected annotation screenshots
+      for (const annId of selectedScreenshots) {
+         const ann = annotations.find(a => a.id === annId);
+         if (!ann?.imageUrl) continue;
+         // imageUrl may be a data URL or a remote URL; extract base64 if data URL
+         let base64 = '';
+         let mimeType = 'image/png';
+         if (ann.imageUrl.startsWith('data:')) {
+            const match = ann.imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) { mimeType = match[1]; base64 = match[2]; }
+         } else {
+            // Remote URL — skip vision block, reference in text instead
+            pdfContextParts.push(`[Annotation screenshot from ${docs.find(d => d.id === ann.documentId)?.name || 'document'}, p.${ann.page}: ${ann.category} — ${ann.text}]`);
+            continue;
+         }
+         if (base64) {
+            const docName = docs.find(d => d.id === ann.documentId)?.name || 'Document';
+            imageAttachments.push({ base64, mimeType, label: `${ann.category} — ${docName} p.${ann.page}` });
+         }
+      }
+      // Limit images to 5 total for token budget
+      const trimmedImages = imageAttachments.slice(0, 5);
+
+      // Clear attachments + screenshot selection after capture
+      setSidebarAttachments([]);
+      setSelectedScreenshots(new Set());
+
+      const effectiveText = [
+         pdfContextParts.length > 0 ? pdfContextParts.join('\n\n') + '\n\n' : '',
+         userText,
+      ].join('').trim() || '(See attached images)';
 
       // If text is selected in editor, route to structured suggestions
       if (selectedEditorText) {
@@ -1501,7 +1574,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          const userMsg: LegalChatMessage = {
             id: Date.now().toString(),
             role: 'user',
-            content: `[Selection: "${selectedEditorText.slice(0, 80)}${selectedEditorText.length > 80 ? '...' : ''}"]\n${userText}`,
+            content: `[Selection: "${selectedEditorText.slice(0, 80)}${selectedEditorText.length > 80 ? '...' : ''}"]\n${effectiveText}`,
             timestamp: Date.now(),
          };
          setSidebarMessages(prev => [...prev, userMsg]);
@@ -1542,21 +1615,21 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       }
 
       // No selection — route to full-document suggestions if it looks like an edit instruction
-      const isEditRequest = /\b(make|rewrite|rephrase|improve|fix|change|revise|edit|authoritative|concise|critique|summarize|shorten|expand)\b/i.test(userText);
+      const isEditRequest = /\b(make|rewrite|rephrase|improve|fix|change|revise|edit|authoritative|concise|critique|summarize|shorten|expand)\b/i.test(effectiveText);
 
-      if (isEditRequest && reportContent.trim()) {
+      if (isEditRequest && reportContent.trim() && trimmedImages.length === 0) {
          setSidebarInput('');
          setSidebarStreaming(true);
          const userMsg: LegalChatMessage = {
             id: Date.now().toString(),
             role: 'user',
-            content: userText,
+            content: effectiveText,
             timestamp: Date.now(),
          };
          setSidebarMessages(prev => [...prev, userMsg]);
 
          try {
-            const result = await suggestEdit(reportContent, userText, false);
+            const result = await suggestEdit(reportContent, effectiveText, false);
             const suggestions = (result.suggestions || [])
                .filter(s => s.original && s.suggested)
                .slice(0, 8)
@@ -1597,26 +1670,30 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       const userMsg: LegalChatMessage = {
          id: Date.now().toString(),
          role: 'user',
-         content: userText,
+         content: effectiveText,
          timestamp: Date.now(),
       };
       const updatedMessages = [...sidebarMessages, userMsg];
       setSidebarMessages(updatedMessages);
 
       try {
+         const screenshotCount = annotations.filter(a => a.imageUrl).length;
          const caseContext = buildCaseContext(
             caseItem,
             docs,
             annotations,
             sidebarPdfContext,
             currentUser,
-            reportContentRef.current
+            reportContentRef.current,
+            undefined,
+            screenshotCount
          );
 
          const fullResponse = await chatWithClaude(
             updatedMessages,
             caseContext,
-            (accumulated) => setSidebarStreamText(accumulated)
+            (accumulated) => setSidebarStreamText(accumulated),
+            trimmedImages
          );
 
          const assistantMsg: LegalChatMessage = {
@@ -1693,6 +1770,18 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       lastContentRef.current = updatedHtml;
       setWriterContentKey(prev => prev + 1);
       onUpdateCase({ ...caseItemRef.current, reportContent: updatedHtml });
+   };
+
+   const handleReplaceFromChat = (markdownContent: string) => {
+      const html = parse(markdownContent) as string;
+      const currentContent = reportContentRef.current || reportContent;
+      if (currentContent) setUndoStack(prev => [...prev, currentContent].slice(-50));
+      setRedoStack([]);
+      setReportContent(html);
+      lastContentRef.current = html;
+      setWriterContentKey(prev => prev + 1);
+      setSidebarSuggestions([]);
+      onUpdateCase({ ...caseItemRef.current, reportContent: html });
    };
 
    const handleClearSidebar = () => {
@@ -3691,17 +3780,21 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               )}
                            </div>
 
-                           <button
-                              onClick={() => {
-                                 if (reportContent && !confirm('Regenerating will overwrite the current draft. Continue?')) return;
-                                 setShowTemplateSelector(true);
-                              }}
-                              disabled={isGenerating}
-                              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50"
-                           >
-                              <SparklesIcon className="w-4 h-4" />
-                              {reportContent ? 'Regenerate Draft' : 'Generate Draft'}
-                           </button>
+                           {reportContent && (
+                              <button
+                                 onClick={() => {
+                                    if (!confirm('Reset draft and start over in the AI chat?')) return;
+                                    setReportContent('');
+                                    onUpdateCase({ ...caseItem, reportContent: '' });
+                                    setWriterSidebarMode('AI');
+                                 }}
+                                 disabled={isGenerating}
+                                 title="Reset draft — start over in AI chat"
+                                 className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                              >
+                                 <RotateCcwIcon className="w-4 h-4" />
+                              </button>
+                           )}
 
 
                            {/* Save Version Button - Explicitly saves current version to history */}
@@ -3827,6 +3920,20 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     }
                                  }}
                               />
+                              {/* Empty draft placeholder */}
+                              {!reportContent && !isGenerating && (
+                                 <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none">
+                                    <SparklesIcon className="w-10 h-10 text-slate-200 mb-3" />
+                                    <p className="text-slate-300 text-sm font-semibold font-serif">Start in the AI sidebar</p>
+                                    <p className="text-slate-300 text-xs mt-1 text-center max-w-xs">Pick a template and describe your case to generate your first draft</p>
+                                    <div className="mt-3 flex items-center gap-1.5 text-slate-300 text-xs">
+                                       <span>Use the</span>
+                                       <span className="inline-flex items-center gap-1 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-300"><BrainCircuitIcon className="w-3 h-3" /> AI Assistant</span>
+                                       <span>tab</span>
+                                       <ArrowRightIcon className="w-3 h-3" />
+                                    </div>
+                                 </div>
+                              )}
                               {isGenerating && (
                                  <div className="absolute inset-0 bg-white/80 flex flex-col items-center justify-center z-10">
                                     <div className="w-12 h-12 border-4 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
@@ -3868,8 +3975,20 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                      </div>
                   </div>
 
-                  {/* Right: Docs-Style Sidebar (Fixed Width) */}
-                  <div className="w-96 flex flex-col bg-white border-l border-slate-200">
+                  {/* Drag Handle for sidebar resize */}
+                  <div
+                     className="w-1.5 cursor-col-resize bg-slate-200 hover:bg-violet-400 transition-colors shrink-0 active:bg-violet-500"
+                     onMouseDown={(e) => {
+                        e.preventDefault();
+                        isResizingSidebarRef.current = true;
+                        sidebarResizeStartXRef.current = e.clientX;
+                        sidebarResizeStartWidthRef.current = sidebarWidth;
+                     }}
+                     title="Drag to resize AI sidebar"
+                  />
+
+                  {/* Right: Docs-Style Sidebar (Resizable) */}
+                  <div className="flex flex-col bg-white border-l border-slate-200 shrink-0" style={{ width: sidebarWidth }}>
                      {/* Sidebar Header / Toggle */}
                      <div className="flex border-b border-slate-200 bg-white">
                         <button
@@ -3936,13 +4055,106 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
                               {/* Scrollable Messages + Suggestions */}
                               <div ref={sidebarScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ scrollBehavior: 'smooth' }}>
-                                 {/* Empty state */}
+                                 {/* Empty state — onboarding or ready prompt */}
                                  {sidebarMessages.length === 0 && sidebarSuggestions.length === 0 && !sidebarStreaming && (
-                                    <div className="text-center py-6">
-                                       <SparklesIcon className="w-8 h-8 text-violet-300 mx-auto mb-2" />
-                                       <p className="text-xs text-slate-500 font-medium mb-1">Ask Claude anything about your case</p>
-                                       <p className="text-[10px] text-slate-400">Select text in the editor for focused rewriting</p>
-                                    </div>
+                                    !reportContent ? (
+                                       <div className="space-y-4 py-2">
+                                          {/* Hero onboarding card */}
+                                          <div className="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-xl p-4 border border-violet-100">
+                                             <div className="flex items-center gap-2 mb-2">
+                                                <SparklesIcon className="w-4 h-4 text-violet-500" />
+                                                <span className="text-xs font-extrabold text-violet-800 uppercase tracking-widest">Start Your First Draft</span>
+                                             </div>
+                                             <p className="text-xs text-slate-600 leading-relaxed">
+                                                Pick a report template below, then describe the essence of your case in the chat. Claude will generate a full, structured draft using your case evidence.
+                                             </p>
+                                          </div>
+
+                                          {/* Template picker cards */}
+                                          <div>
+                                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Choose a Template</p>
+                                             <div className="grid grid-cols-2 gap-2">
+                                                {[
+                                                   { id: 'ime', label: 'IME Report', icon: '🏥', desc: 'Independent Medical Examination' },
+                                                   { id: 'causation', label: 'Causation', icon: '🔬', desc: 'Medical causation analysis' },
+                                                   { id: 'rebuttal', label: 'Rebuttal', icon: '⚖️', desc: 'Counter opposing expert opinions' },
+                                                   { id: 'chronology', label: 'Chronology', icon: '📅', desc: 'Sequential clinical timeline' },
+                                                   { id: 'deposition', label: 'Depo Prep', icon: '📝', desc: 'Deposition preparation memo' },
+                                                ].map(tpl => (
+                                                   <button
+                                                      key={tpl.id}
+                                                      onClick={() => {
+                                                         setSidebarInput(`Generate a ${tpl.label} for this case.\n\nKey facts and arguments to emphasize: `);
+                                                         setWriterSidebarMode('AI');
+                                                         // Focus the input
+                                                         setTimeout(() => {
+                                                            const el = document.querySelector<HTMLTextAreaElement>('[data-sidebar-input]');
+                                                            if (el) { el.focus(); el.selectionStart = el.value.length; el.selectionEnd = el.value.length; }
+                                                         }, 50);
+                                                      }}
+                                                      className="text-left p-2.5 rounded-lg border border-slate-200 hover:border-violet-400 hover:bg-violet-50/50 transition-all group bg-white"
+                                                   >
+                                                      <div className="text-lg mb-1">{tpl.icon}</div>
+                                                      <div className="text-[10px] font-extrabold text-slate-700 group-hover:text-violet-700 leading-tight">{tpl.label}</div>
+                                                      <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">{tpl.desc}</div>
+                                                   </button>
+                                                ))}
+                                             </div>
+                                          </div>
+
+                                          {/* Screenshot selector panel */}
+                                          {annotations.some(a => a.imageUrl) && (
+                                             <div>
+                                                <button
+                                                   onClick={() => setScreenshotPanelOpen(v => !v)}
+                                                   className="flex items-center justify-between w-full text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 hover:text-violet-600 transition-colors"
+                                                >
+                                                   <span>Include Screenshots ({annotations.filter(a => a.imageUrl).length} available)</span>
+                                                   {screenshotPanelOpen ? <ChevronUpIcon className="w-3 h-3" /> : <ChevronRightIcon className="w-3 h-3" />}
+                                                </button>
+                                                {screenshotPanelOpen && (
+                                                   <div className="space-y-1.5">
+                                                      <p className="text-[9px] text-slate-400 leading-relaxed">Select screenshots to send to Claude as visual exhibits. Claude will reference them in the report.</p>
+                                                      <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+                                                         {annotations.filter(a => a.imageUrl).slice(0, 20).map(ann => {
+                                                            const docName = docs.find(d => d.id === ann.documentId)?.name || 'Document';
+                                                            const isSelected = selectedScreenshots.has(ann.id);
+                                                            return (
+                                                               <button
+                                                                  key={ann.id}
+                                                                  onClick={() => setSelectedScreenshots(prev => {
+                                                                     const next = new Set(prev);
+                                                                     if (next.has(ann.id)) next.delete(ann.id); else if (next.size < 5) next.add(ann.id);
+                                                                     return next;
+                                                                  })}
+                                                                  title={`${ann.category} — ${docName} p.${ann.page}`}
+                                                                  className={`relative rounded overflow-hidden border-2 transition-all ${isSelected ? 'border-violet-500 shadow-md' : 'border-slate-200 hover:border-violet-300'}`}
+                                                               >
+                                                                  <img src={ann.imageUrl} alt={ann.category} className="w-14 h-10 object-cover" />
+                                                                  {isSelected && (
+                                                                     <div className="absolute inset-0 bg-violet-500/20 flex items-center justify-center">
+                                                                        <CheckIcon className="w-4 h-4 text-violet-700" />
+                                                                     </div>
+                                                                  )}
+                                                               </button>
+                                                            );
+                                                         })}
+                                                      </div>
+                                                      {selectedScreenshots.size > 0 && (
+                                                         <p className="text-[9px] text-violet-600 font-bold">{selectedScreenshots.size}/5 selected — will be sent with your next message</p>
+                                                      )}
+                                                   </div>
+                                                )}
+                                             </div>
+                                          )}
+                                       </div>
+                                    ) : (
+                                       <div className="text-center py-6">
+                                          <SparklesIcon className="w-8 h-8 text-violet-300 mx-auto mb-2" />
+                                          <p className="text-xs text-slate-500 font-medium mb-1">Your draft is ready</p>
+                                          <p className="text-[10px] text-slate-400">Ask Claude to refine sections, expand arguments, or add citations. Select text to edit a specific passage.</p>
+                                       </div>
+                                    )
                                  )}
 
                                  {/* Chat messages */}
@@ -3970,6 +4182,15 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                                       className="text-[9px] font-bold text-emerald-500 hover:text-emerald-700 px-1.5 py-0.5 rounded hover:bg-emerald-50 transition-colors"
                                                    >
                                                       Insert
+                                                   </button>
+                                                   <button
+                                                      onClick={() => {
+                                                         if (reportContent && !confirm('Replace the entire draft with this response?')) return;
+                                                         handleReplaceFromChat(msg.content);
+                                                      }}
+                                                      className="text-[9px] font-bold text-violet-500 hover:text-violet-700 px-1.5 py-0.5 rounded hover:bg-violet-50 transition-colors"
+                                                   >
+                                                      Use as Draft
                                                    </button>
                                                 </div>
                                              )}
@@ -4076,22 +4297,98 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     ))}
                                  </div>
 
+                                 {/* Attachment chips */}
+                                 {sidebarAttachments.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                       {sidebarAttachments.map((att, idx) => (
+                                          <div key={idx} className="flex items-center gap-1 bg-violet-50 border border-violet-200 rounded-lg px-2 py-1 text-[10px]">
+                                             {att.type === 'image'
+                                                ? <ImageIcon className="w-3 h-3 text-violet-500 shrink-0" />
+                                                : <FileTextIcon className="w-3 h-3 text-violet-500 shrink-0" />
+                                             }
+                                             <span className="text-violet-700 font-medium truncate max-w-[90px]">{att.name}</span>
+                                             <span className="text-violet-400">({(att.size / 1024).toFixed(0)}KB)</span>
+                                             <button onClick={() => setSidebarAttachments(prev => prev.filter((_, i) => i !== idx))} className="ml-0.5 text-violet-400 hover:text-red-500">
+                                                <XCircleIcon className="w-3 h-3" />
+                                             </button>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 )}
+
                                  {/* Input */}
+                                 <input
+                                    ref={attachmentInputRef}
+                                    type="file"
+                                    accept=".pdf,image/*"
+                                    multiple
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                       const files = Array.from(e.target.files || []);
+                                       e.target.value = '';
+                                       const errors: string[] = [];
+                                       const newAttachments: typeof sidebarAttachments = [];
+                                       const existing = sidebarAttachments;
+                                       const existingPdfs = existing.filter(a => a.type === 'pdf').length;
+                                       const existingImages = existing.filter(a => a.type === 'image').length;
+                                       let addedPdfs = 0, addedImages = 0;
+                                       for (const file of files) {
+                                          const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
+                                          const isImage = file.type.startsWith('image/');
+                                          if (!isPdf && !isImage) { errors.push(`${file.name}: unsupported type`); continue; }
+                                          if (isPdf) {
+                                             if (existingPdfs + addedPdfs >= 2) { errors.push(`Max 2 PDFs per message`); continue; }
+                                             if (file.size > 5 * 1024 * 1024) { errors.push(`${file.name}: PDF must be under 5 MB`); continue; }
+                                          }
+                                          if (isImage) {
+                                             if (existingImages + addedImages >= 3) { errors.push(`Max 3 images per message`); continue; }
+                                             if (file.size > 2 * 1024 * 1024) { errors.push(`${file.name}: image must be under 2 MB`); continue; }
+                                          }
+                                          if (existing.length + newAttachments.length >= 5) { errors.push(`Max 5 attachments total`); break; }
+                                          const base64: string = await new Promise((resolve, reject) => {
+                                             const reader = new FileReader();
+                                             reader.onload = () => resolve((reader.result as string).split(',')[1] || '');
+                                             reader.onerror = reject;
+                                             reader.readAsDataURL(file);
+                                          });
+                                          newAttachments.push({ name: file.name, type: isPdf ? 'pdf' : 'image', base64, mimeType: file.type, size: file.size });
+                                          if (isPdf) addedPdfs++; else addedImages++;
+                                       }
+                                       if (errors.length) alert(errors.join('\n'));
+                                       if (newAttachments.length) setSidebarAttachments(prev => [...prev, ...newAttachments]);
+                                    }}
+                                 />
                                  <form onSubmit={handleSidebarSubmit} className="relative">
-                                    <input
-                                       className="w-full pl-3 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all shadow-sm"
+                                    <textarea
+                                       data-sidebar-input
+                                       rows={3}
+                                       className="w-full pl-3 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all shadow-sm resize-none"
                                        placeholder={selectedEditorText ? "Describe how to rewrite the selection..." : "Ask Claude or describe an edit..."}
                                        value={sidebarInput}
                                        onChange={(e) => setSidebarInput(e.target.value)}
                                        disabled={sidebarStreaming}
+                                       onKeyDown={(e) => {
+                                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSidebarSubmit(e as any); }
+                                       }}
                                     />
-                                    <button
-                                       type="submit"
-                                       disabled={!sidebarInput.trim() || sidebarStreaming}
-                                       className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 shadow-sm"
-                                    >
-                                       <ArrowRightIcon className="w-3.5 h-3.5" />
-                                    </button>
+                                    <div className="absolute right-1.5 bottom-1.5 flex items-center gap-1">
+                                       <button
+                                          type="button"
+                                          onClick={() => attachmentInputRef.current?.click()}
+                                          disabled={sidebarStreaming}
+                                          title="Attach PDF or image"
+                                          className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40"
+                                       >
+                                          <PaperclipIcon className="w-3.5 h-3.5" />
+                                       </button>
+                                       <button
+                                          type="submit"
+                                          disabled={(!sidebarInput.trim() && sidebarAttachments.length === 0) || sidebarStreaming}
+                                          className="p-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 shadow-sm"
+                                       >
+                                          <ArrowRightIcon className="w-3.5 h-3.5" />
+                                       </button>
+                                    </div>
                                  </form>
                               </div>
                            </div>
@@ -4099,110 +4396,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                      </div>
                   </div>
 
-                  {/* Template Selector Modal */}
-                  {showTemplateSelector && (
-                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                           {/* Header */}
-                           <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-5 text-white">
-                              <h3 className="text-xl font-bold mb-1">Select Report Template</h3>
-                              <p className="text-sm text-indigo-100">Choose a template to generate your medical-legal report</p>
-                           </div>
-
-                           {/* Template Grid */}
-                           <div className="p-6 grid grid-cols-2 gap-4 max-h-[500px] overflow-y-auto">
-                              {[
-                                 { id: 'ime', title: 'IME Report', desc: 'Independent Medical Examination report with comprehensive clinical assessment', icon: '🏥' },
-                                 { id: 'causation', title: 'Causation Analysis', desc: 'Detailed analysis of medical causation and expert opinion', icon: '🔬' },
-                                 { id: 'rebuttal', title: 'Rebuttal Report', desc: 'Response to opposing expert opinions with counter-arguments', icon: '⚖️' },
-                                 { id: 'chronology', title: 'Chronology Summary', desc: 'Timeline-focused report with sequential clinical events', icon: '📅' },
-                                 { id: 'deposition', title: 'Deposition Prep Memo', desc: 'Strategic memo for deposition with key questions and exhibits', icon: '📝' },
-
-                              ].map(tpl => (
-                                 <button
-                                    key={tpl.id}
-                                    onClick={() => {
-                                       setSelectedTemplate(tpl.id);
-                                       setShowTemplateSelector(false);
-                                       // Trigger generation via Anthropic
-                                          setTimeout(async () => {
-                                            setIsGenerating(true);
-                                            try {
-                                               if (reportContent.trim()) {
-                                                  setUndoStack(prev => [...prev, reportContent].slice(-50));
-                                                  setRedoStack([]);
-                                               }
-                                               let pdfTextContext = '';
-                                               try {
-                                                  pdfTextContext = await extractPdfTextForAnnotations(docs, annotations, {
-                                                     perPageCharLimit: 1500,
-                                                     totalCharLimit: 12000
-                                                  });
-                                               } catch (err) {
-                                                  console.warn('PDF text extraction failed:', err);
-                                               }
-                                               const commentsText = (caseItem.reportComments || [])
-                                                  .map(c => `- ${c.author}: ${c.text}${c.context ? ` (Context: ${c.context})` : ''}`)
-                                                  .join('\n');
-
-                                               const caseContext = buildCaseContext(
-                                                  caseItem,
-                                                  docs,
-                                                  annotations,
-                                                  pdfTextContext,
-                                                  currentUser,
-                                                  '',
-                                                  commentsText
-                                               );
-
-                                               const generatedReport = await generateReport(
-                                                  caseContext,
-                                                  tpl.id,
-                                                  (chunk) => {
-                                                   const html = parse(chunk) as string;
-                                                   setReportContent(html);
-                                                   lastContentRef.current = html;
-                                                }
-                                             );
-                                             const html = parse(generatedReport) as string;
-
-                                             // CRITICAL: Save immediately to prevent data loss if user switches tabs
-                                             await onUpdateCase({ ...caseItemRef.current, reportContent: html });
-
-                                             setReportContent(html);
-                                             lastContentRef.current = html;
-                                             setWriterContentKey(prev => prev + 1);
-                                             // Clear stale suggestions — they reference pre-regeneration content
-                                             setSidebarSuggestions([]);
-                                          } catch (error) {
-                                             console.error("Failed to generate report:", error);
-                                             alert("Failed to generate report. Please try again.");
-                                          } finally {
-                                             setIsGenerating(false);
-                                          }
-                                       }, 100);
-                                    }}
-                                    className="text-left p-5 rounded-xl border-2 border-slate-200 hover:border-indigo-400 hover:shadow-lg transition-all group bg-white hover:bg-indigo-50/30"
-                                 >
-                                    <div className="text-3xl mb-3">{tpl.icon}</div>
-                                    <h4 className="font-bold text-slate-900 mb-1.5 group-hover:text-indigo-700 transition-colors">{tpl.title}</h4>
-                                    <p className="text-xs text-slate-500 leading-relaxed">{tpl.desc}</p>
-                                 </button>
-                              ))}
-                           </div>
-
-                           {/* Footer */}
-                           <div className="px-6 py-4 border-t border-slate-100 flex justify-end">
-                              <button
-                                 onClick={() => setShowTemplateSelector(false)}
-                                 className="px-5 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
-                              >
-                                 Cancel
-                              </button>
-                           </div>
-                        </div>
-                     </div>
-                  )}
                </div>
             )}
 

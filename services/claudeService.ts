@@ -18,6 +18,7 @@ export interface CaseContext {
   clinicalNotes: string;
   currentDraft: string;
   writerComments?: string;
+  annotationScreenshotCount?: number;
 }
 
 export interface SuggestionItem {
@@ -87,7 +88,8 @@ export const buildCaseContext = (
   pdfTextContext: string,
   currentUser: UserProfile,
   currentDraft: string,
-  writerComments?: string
+  writerComments?: string,
+  annotationScreenshotCount?: number
 ): CaseContext => {
   const docNameById = new Map(docs.map(d => [d.id, d.name]));
 
@@ -130,6 +132,7 @@ export const buildCaseContext = (
     clinicalNotes: caseData.additionalContext || '',
     currentDraft: currentDraft || '',
     writerComments: writerComments || '',
+    annotationScreenshotCount: annotationScreenshotCount,
   };
 };
 
@@ -144,12 +147,22 @@ export const buildCaseContext = (
 export const chatWithClaude = async (
   messages: LegalChatMessage[],
   caseContext: CaseContext,
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
+  imageAttachments?: { base64: string; mimeType: string; label?: string }[]
 ): Promise<string> => {
-  const apiMessages = messages.map(m => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Build messages array — attach images to the last user message if provided
+  const apiMessages = messages.map((m, idx) => {
+    const isLast = idx === messages.length - 1;
+    if (isLast && m.role === 'user' && imageAttachments && imageAttachments.length > 0) {
+      const content: any[] = imageAttachments.map(img => ({
+        type: 'image',
+        source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+      }));
+      content.push({ type: 'text', text: m.content });
+      return { role: m.role, content };
+    }
+    return { role: m.role, content: m.content };
+  });
 
   const response = await fetch('/api/legal-chat', {
     method: 'POST',

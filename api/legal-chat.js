@@ -23,14 +23,17 @@ export default async function handler(req, res) {
   res.setHeader('Connection', 'keep-alive');
 
   try {
+    // Messages may include vision content blocks (images) — pass through as-is
+    const formattedMessages = messages.map(m => ({
+      role: m.role,
+      content: m.content, // string or content block array
+    }));
+
     const stream = anthropic.messages.stream({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 12000,
       system: systemPrompt,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: m.content,
-      })),
+      messages: formattedMessages,
     });
 
     for await (const event of stream) {
@@ -108,6 +111,18 @@ function buildSystemPrompt(ctx) {
   if (ctx.currentDraft) {
     parts.push('', '--- CURRENT REPORT DRAFT (for reference/editing) ---');
     parts.push(ctx.currentDraft);
+  }
+
+  if (ctx.annotationScreenshotCount && ctx.annotationScreenshotCount > 0) {
+    parts.push('', '--- VISUAL EXHIBITS ---');
+    parts.push(
+      `This case has ${ctx.annotationScreenshotCount} annotated screenshot capture(s) from the source documents.`,
+      'When generating or refining a report:',
+      '- Actively suggest where visual exhibits should be embedded (e.g., "Exhibit A — MRI dated [date]").',
+      '- When the user provides images in this conversation, analyze them carefully and reference them specifically.',
+      '- Note which screenshots best support each clinical argument and recommend their inclusion.',
+      '- Label them sequentially as Exhibit A, B, C... and note the source document and page.'
+    );
   }
 
   return parts.join('\n');
