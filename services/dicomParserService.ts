@@ -33,6 +33,38 @@ export function isDicomCandidate(file: File): boolean {
   return true;
 }
 
+/** Check DICOM magic bytes ("DICM" at offset 128) */
+export async function hasDicomMagic(file: File): Promise<boolean> {
+  try {
+    const buf = await file.slice(0, 132).arrayBuffer();
+    const b = new Uint8Array(buf);
+    return b.length >= 132 && b[128] === 0x44 && b[129] === 0x49 && b[130] === 0x43 && b[131] === 0x4D;
+  } catch { return false; }
+}
+
+/** Full DICOM validation: extension check + magic bytes */
+export async function isDicomFile(file: File): Promise<boolean> {
+  if (!isDicomCandidate(file)) return false;
+  return hasDicomMagic(file);
+}
+
+/**
+ * Filter a list of files to only those that are valid DICOM images.
+ * Uses extension pre-filtering, then validates magic bytes in batches.
+ */
+export async function filterDicomFiles(files: File[]): Promise<File[]> {
+  const candidates = files.filter(isDicomCandidate);
+  if (candidates.length === 0) return [];
+  const validated: File[] = [];
+  const BATCH = 50;
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    const batch = candidates.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map(f => hasDicomMagic(f)));
+    batch.forEach((f, idx) => { if (results[idx]) validated.push(f); });
+  }
+  return validated;
+}
+
 export interface DicomMeta {
   patientName?: string;
   patientId?: string;

@@ -13,61 +13,7 @@ import {
   WindowLevel as DwvWindowLevel,
   ScrollWheel
 } from 'dwv';
-import { parseDicomFile } from '../services/dicomParserService';
-
-// ============================================================
-// DICOM file filtering
-// ============================================================
-const NON_DICOM_EXT = new Set([
-  'inf', 'ini', 'txt', 'exe', 'dll', 'sys', 'bat', 'cmd', 'com', 'msi',
-  'config', 'cfg', 'conf', 'reg', 'manifest', 'pdb', 'plist',
-  'html', 'htm', 'css', 'js', 'json', 'xml', 'log', 'yaml', 'yml', 'csv',
-  'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'svg', 'ico', 'webp',
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'odt',
-  'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'cab',
-  'mp3', 'mp4', 'avi', 'mov', 'wmv', 'wav', 'flac', 'mkv', 'webm',
-  'db', 'sqlite', 'mdb', 'lnk', 'url', 'desktop', 'iso',
-  'ds_store', 'thumbs', 'tmp', 'bak', 'old', 'swp',
-]);
-
-function isDicomFileByName(file: File): boolean {
-  const name = file.name;
-  if (name.startsWith('.') || name === 'Thumbs.db' || name === 'desktop.ini') return false;
-  if (name.toUpperCase() === 'DICOMDIR') return false;
-  if (file.size < 200) return false;
-  const parts = name.split('.');
-  if (parts.length > 1) {
-    for (let i = 1; i < parts.length; i++) {
-      if (NON_DICOM_EXT.has(parts[i].toLowerCase())) return false;
-    }
-    const lastExt = parts[parts.length - 1].toLowerCase();
-    if (lastExt === 'dcm' || lastExt === 'dicom' || lastExt === 'dic') return true;
-  }
-  return true;
-}
-
-async function hasDicomMagic(file: File): Promise<boolean> {
-  try {
-    const buf = await file.slice(0, 132).arrayBuffer();
-    const b = new Uint8Array(buf);
-    return b.length >= 132 && b[128] === 0x44 && b[129] === 0x49 && b[130] === 0x43 && b[131] === 0x4D;
-  } catch { return false; }
-}
-
-async function filterDicomFiles(files: File[]): Promise<File[]> {
-  const candidates = files.filter(isDicomFileByName);
-  if (candidates.length === 0) return [];
-  const sampleSize = Math.min(5, candidates.length);
-  let magicCount = 0;
-  for (let i = 0; i < sampleSize; i++) {
-    if (await hasDicomMagic(candidates[i])) magicCount++;
-  }
-  if (magicCount >= sampleSize * 0.5) {
-    const results = await Promise.all(candidates.map(async f => ({ f, ok: await hasDicomMagic(f) })));
-    return results.filter(r => r.ok).map(r => r.f);
-  }
-  return candidates;
-}
+import { parseDicomFile, filterDicomFiles } from '../services/dicomParserService';
 
 // ============================================================
 // Folder parsing
