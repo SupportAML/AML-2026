@@ -33,7 +33,8 @@ import {
   CheckSquareIcon,
   SquareIcon,
   LinkIcon,
-  GlobeIcon
+  GlobeIcon,
+  DownloadIcon
 } from 'lucide-react';
 import { Case, Document, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
 
@@ -180,6 +181,32 @@ const FileTreeItem: React.FC<{
         </div>
 
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              const url = node.doc!.url;
+              if (!url) return;
+              try {
+                const resp = await fetch(url);
+                const blob = await resp.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = node.doc!.name || 'download';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(blobUrl);
+              } catch {
+                // Fallback: open in new tab
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }
+            }}
+            className="p-1 text-slate-300 hover:text-cyan-500 hover:bg-cyan-50 rounded opacity-0 group-hover:opacity-100 transition-all"
+            title="Download"
+          >
+            <DownloadIcon className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={() => { setRenameValue(node.name); setIsRenaming(true); }}
             className="p-1 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded opacity-0 group-hover:opacity-100 transition-all"
