@@ -281,6 +281,45 @@ function deriveDisplayName(meta: DicomMeta | undefined, folderKey: string): stri
   return folderName;
 }
 
+/**
+ * Lightweight extraction of Instance Number (and optional Image Position Patient Z)
+ * from a single DICOM file. Reads only enough of the header for sorting purposes.
+ */
+export async function parseInstanceNumber(file: File): Promise<{ instanceNumber: number | null; imagePositionZ: number | null }> {
+  try {
+    const readSize = Math.min(file.size, 64 * 1024); // 64KB is enough for metadata tags
+    const buffer = await file.slice(0, readSize).arrayBuffer();
+    const byteArray = new Uint8Array(buffer);
+    const dataSet = dicomParser.parseDicom(byteArray, { untilTag: 'x00210000' }); // stop well before pixel data
+
+    let instanceNumber: number | null = null;
+    let imagePositionZ: number | null = null;
+
+    try {
+      const val = dataSet.string('x00200013'); // Instance Number
+      if (val) {
+        const n = parseInt(val.trim(), 10);
+        if (!isNaN(n)) instanceNumber = n;
+      }
+    } catch {}
+
+    try {
+      const val = dataSet.string('x00200032'); // Image Position (Patient)
+      if (val) {
+        const parts = val.split('\\');
+        if (parts.length >= 3) {
+          const z = parseFloat(parts[2]);
+          if (!isNaN(z)) imagePositionZ = z;
+        }
+      }
+    } catch {}
+
+    return { instanceNumber, imagePositionZ };
+  } catch {
+    return { instanceNumber: null, imagePositionZ: null };
+  }
+}
+
 /** Extract Google Drive folder ID from a shared URL */
 export function extractDriveFolderIdFromUrl(url: string): string | null {
   // Handles:

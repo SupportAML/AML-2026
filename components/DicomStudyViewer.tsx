@@ -31,7 +31,7 @@ import {
   wadouri,
 } from '@cornerstonejs/dicom-image-loader';
 
-import { parseDicomFile, isDicomCandidate, type DicomMeta } from '../services/dicomParserService';
+import { parseDicomFile, parseInstanceNumber, isDicomCandidate, type DicomMeta } from '../services/dicomParserService';
 
 // ============================================================
 // Study/Series types
@@ -413,7 +413,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     const BATCH = 50;
 
     // Step 1: Register valid DICOM files with Cornerstone and parse their metadata
-    type FileEntry = { file: File; imageId: string; meta: DicomMeta | null };
+    type FileEntry = { file: File; imageId: string; meta: DicomMeta | null; instanceNumber: number | null };
     const validFiles: FileEntry[] = [];
 
     for (let i = 0; i < arr.length; i += BATCH) {
@@ -422,7 +422,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
         if (!isDicomCandidate(batch[j])) continue;
         try {
           const imageId = wadouri.fileManager.add(batch[j]);
-          validFiles.push({ file: batch[j], imageId, meta: null });
+          validFiles.push({ file: batch[j], imageId, meta: null, instanceNumber: null });
         } catch {
           // File couldn't be registered — skip silently
         }
@@ -499,7 +499,23 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       let si = 0;
 
       for (const [seriesKey, entries] of seriesMap) {
+        // Parse instance numbers for each file in this series (in batches for performance)
+        const SORT_BATCH = 50;
+        for (let bi = 0; bi < entries.length; bi += SORT_BATCH) {
+          const batch = entries.slice(bi, bi + SORT_BATCH);
+          const results = await Promise.all(batch.map(e => parseInstanceNumber(e.file)));
+          for (let bj = 0; bj < batch.length; bj++) {
+            batch[bj].instanceNumber = results[bj].instanceNumber;
+          }
+        }
+
+        // Sort by instance number (ascending), falling back to file path
         entries.sort((a, b) => {
+          if (a.instanceNumber != null && b.instanceNumber != null) {
+            return a.instanceNumber - b.instanceNumber;
+          }
+          if (a.instanceNumber != null) return -1;
+          if (b.instanceNumber != null) return 1;
           const ap = (a.file as any).webkitRelativePath || a.file.name;
           const bp = (b.file as any).webkitRelativePath || b.file.name;
           return ap.localeCompare(bp, undefined, { numeric: true });
@@ -719,6 +735,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       ].filter(Boolean).join(' | ') || 'Unknown Patient',
       caseId: selectedCaseId || caseId,
       modality: studyMeta?.modality || undefined,
+      seriesDescription: studyMeta?.seriesDescription || activeSeries?.seriesDescription || activeSeries?.displayName || undefined,
       sliceInfo: totalSlices > 1 ? `${currentSlice} of ${totalSlices}` : undefined,
     });
     if (selectedCaseId) localStorage.setItem('dicom-last-case-id', selectedCaseId);
