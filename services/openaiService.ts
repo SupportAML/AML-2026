@@ -1082,82 +1082,41 @@ RULES:
 /**
  * Search medical research using AI to generate realistic, relevant research articles.
  */
-export const searchMedicalResearch = async (query: string, context: string) => {
+export const searchMedicalResearch = async (query: string, _context: string) => {
     try {
-        console.log('🔍 Searching medical literature for:', query);
+        console.log('🔍 Searching PubMed Central for:', query);
 
-        const systemPrompt = `You are a medical research librarian with access to comprehensive medical databases (PubMed, MEDLINE, Cochrane Library, medical journals).
-Your task is to generate 4-6 REALISTIC research articles, clinical guidelines, or peer-reviewed studies that would be found when searching medical literature.
-
-CRITICAL REQUIREMENTS:
-- Use REAL journal names (e.g., NEJM, JAMA, Lancet, BMJ, Annals of Surgery, etc.)
-- Create realistic titles that match medical literature style
-- Generate plausible citations with proper format
-- Include years between 2019-2024 for recency
-- Summaries should be clinical and evidence-based
-- URLs should follow pattern: https://pubmed.ncbi.nlm.nih.gov/[8-digit-number]
-
-Return ONLY a JSON array of articles. Each article must have: title, source, summary, url, citation.`;
-
-        const userPrompt = `Search Query: "${query}"
-
-Case Context (for relevance): ${context ? context.substring(0, 1000) : 'Medical-legal case review'}
-
-Search Type Detection:
-- If query contains a DOI pattern (e.g., "10.1001/jama.2023.12345"), return that specific article
-- If query mentions a journal name (e.g., "NEJM", "Lancet"), prioritize articles from that journal
-- If query is a medical condition/topic, return relevant clinical studies
-- If query is a keyword, search across all medical literature
-
-Generate 4-6 highly relevant research articles that would help support medical-legal arguments. Focus on:
-- Clinical standards of care
-- Treatment guidelines
-- Evidence-based protocols
-- Causation studies
-- Expert consensus statements
-
-Return JSON array format:
-[
-  {
-    "title": "Realistic medical study title",
-    "source": "Real Journal Name",
-    "summary": "Brief clinical summary of findings and relevance",
-    "url": "https://pubmed.ncbi.nlm.nih.gov/12345678",
-    "citation": "Author et al. Journal. Year; Vol(Issue):Pages"
-  }
-]`;
-
-        const cacheKey = aiCache.getCacheKey('research', query, { ctx: context?.slice(0, 100) });
-        const cached = aiCache.get<Array<{ title: string; source: string; summary: string; url: string; citation: string }>>(cacheKey);
+        // Check cache first
+        const cacheKey = aiCache.getCacheKey('research', query, {});
+        const cached = aiCache.get<Array<{ title: string; source: string; summary: string; url: string; citation: string; pdfUrl?: string; pmcId?: string }>>(cacheKey);
         if (cached) return cached;
 
-        const result = await callOpenAIJSON<Array<{
-            title: string;
-            source: string;
-            summary: string;
-            url: string;
-            citation: string;
-        }>>(systemPrompt, userPrompt, {
-            model: getModelForTask('critical'),
-            maxTokens: 8192,
-            temperature: 0.7,
-            timeoutMs: LONG_REQUEST_TIMEOUT_MS
-        });
+        // Use the real PubMed/PMC API — returns only articles with verified PDFs
+        const { searchPubMedWithPDFs } = await import('./pubmedService');
+        const articles = await searchPubMedWithPDFs(query, 6);
 
-        console.log(`✅ Found ${result.length} research articles`);
-        if (result.length) aiCache.set(cacheKey, result);
-        return result;
+        if (articles.length === 0) {
+            console.log('⚠️ No open-access articles found for query');
+            return [];
+        }
+
+        // Map to the expected shape (superset of ResearchArticle)
+        const results = articles.map(a => ({
+            title: a.title,
+            source: a.source,
+            summary: a.summary,
+            url: a.url,
+            citation: a.citation,
+            pdfUrl: a.pdfUrl,
+            pmcId: a.pmcId,
+        }));
+
+        console.log(`✅ Found ${results.length} verified articles with PDFs`);
+        if (results.length) aiCache.set(cacheKey, results);
+        return results;
     } catch (error) {
         console.error('searchMedicalResearch error:', error);
-        return [
-            {
-                title: "Medical Standards and Clinical Practice Guidelines",
-                source: "Journal of Medical Practice",
-                summary: "Comprehensive review of clinical standards relevant to medical-legal cases. Search temporarily unavailable - please try again.",
-                url: "https://pubmed.ncbi.nlm.nih.gov/00000000",
-                citation: "Medical Standards Review. 2024; 1:1-10"
-            }
-        ];
+        return [];
     }
 };
 

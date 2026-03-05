@@ -474,8 +474,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [researchResults, setResearchResults] = useState<ResearchArticle[]>(caseItem.researchResults || []);
    const [researchGaps, setResearchGaps] = useState<{ topic: string; reason: string }[]>(caseItem.researchGaps || []);
    const [activeCitationProposal, setActiveCitationProposal] = useState<{ id: string; original: string; proposed: string; explanation: string; diff: Diff.Change[] } | null>(null);
-
-
+   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+   const [pdfPreviewTitle, setPdfPreviewTitle] = useState<string>('');
 
    // Manual Source Link State
    const [linkingEventId, setLinkingEventId] = useState<string | null>(null);
@@ -3725,24 +3725,71 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            </div>
                         </div>
 
+                        {/* PDF Preview Modal */}
+                        {pdfPreviewUrl && (
+                           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+                              <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl h-[85vh] flex flex-col animate-in zoom-in-95">
+                                 <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-emerald-50/50">
+                                    <div className="flex-1 min-w-0">
+                                       <h3 className="font-serif font-black text-slate-800 text-lg truncate">{pdfPreviewTitle}</h3>
+                                       <p className="text-xs text-emerald-600 font-medium">Full-text PDF from PubMed Central</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 ml-4">
+                                       <button onClick={() => window.open(pdfPreviewUrl, '_blank')} className="px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-100 rounded-lg hover:bg-emerald-200 flex items-center gap-1.5">
+                                          <ExternalLinkIcon className="w-3 h-3" /> Open in New Tab
+                                       </button>
+                                       <button onClick={() => { setPdfPreviewUrl(null); setPdfPreviewTitle(''); }} className="text-slate-400 hover:text-slate-600">
+                                          <XIcon className="w-5 h-5" />
+                                       </button>
+                                    </div>
+                                 </div>
+                                 <div className="flex-1 overflow-hidden bg-slate-100">
+                                    <iframe
+                                       src={pdfPreviewUrl}
+                                       className="w-full h-full border-0"
+                                       title={`PDF Preview: ${pdfPreviewTitle}`}
+                                    />
+                                 </div>
+                              </div>
+                           </div>
+                        )}
+
                         {/* Results List */}
                         <div className="space-y-6">
                            {researchResults.map((article, i) => (
                               <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                                  <div className="flex justify-between items-start mb-2">
                                     <div className="flex-1">
-                                       <h3 className="text-lg font-bold text-slate-800 text-emerald-800 hover:underline cursor-pointer" onClick={() => window.open(article.url, '_blank')}>
+                                       <div className="flex items-center gap-2 mb-1">
+                                          {article.pdfUrl && (
+                                             <span className="text-[10px] font-black uppercase tracking-widest bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">PDF Available</span>
+                                          )}
+                                          {article.pmcId && (
+                                             <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{article.pmcId}</span>
+                                          )}
+                                       </div>
+                                       <h3 className="text-lg font-bold text-emerald-800 hover:underline cursor-pointer" onClick={() => window.open(article.url, '_blank')}>
                                           {article.title} <ExternalLinkIcon className="w-3 h-3 inline ml-1 text-slate-400" />
                                        </h3>
                                        <span className="text-xs font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded uppercase tracking-wider mt-1 inline-block">{article.source}</span>
                                     </div>
-                                    <button
-                                       onClick={() => handleSmartCite(article)}
-                                       disabled={isGenerating}
-                                       className="ml-4 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 flex items-center gap-2 whitespace-nowrap"
-                                    >
-                                       <PenToolIcon className="w-4 h-4" /> Smart Cite
-                                    </button>
+                                    <div className="flex flex-col gap-2 ml-4">
+                                       {article.pdfUrl && (
+                                          <button
+                                             onClick={() => { setPdfPreviewUrl(article.pdfUrl!); setPdfPreviewTitle(article.title); }}
+                                             className="px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-bold hover:bg-emerald-100 flex items-center gap-2 whitespace-nowrap"
+                                          >
+                                             <EyeIcon className="w-4 h-4" /> View PDF
+                                          </button>
+                                       )}
+                                       <button
+                                          onClick={() => handleSmartCite(article)}
+                                          disabled={isGenerating}
+                                          className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 flex items-center gap-2 whitespace-nowrap"
+                                       >
+                                          <PenToolIcon className="w-4 h-4" /> Smart Cite
+                                       </button>
+                                    </div>
                                  </div>
                                  <p className="text-sm text-slate-600 leading-relaxed mb-4">{article.summary}</p>
                                  <div className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
@@ -3761,7 +3808,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            {researchResults.length === 0 && !isGenerating && !researchGaps.length && (
                               <div className="text-center py-20 opacity-50">
                                  <BookOpenIcon className="w-12 h-12 mx-auto mb-2 text-slate-400" />
-                                 <p className="text-slate-500">Search for medical literature to support your case.</p>
+                                 <p className="text-slate-500">Search PubMed Central for verified, open-access articles with full PDFs.</p>
                               </div>
                            )}
                         </div>
