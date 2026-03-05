@@ -3853,12 +3853,13 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        </div>
                                     )}
                                     {pdfPreviewError && (
-                                       <div className="flex flex-col items-center justify-center gap-3 py-20">
+                                       <div className="flex flex-col items-center justify-center gap-3 py-20 max-w-md text-center">
                                           <AlertCircleIcon className="w-8 h-8 text-red-400" />
                                           <p className="text-sm font-bold text-red-600">Could not load PDF preview</p>
                                           <p className="text-xs text-slate-500">{pdfPreviewError}</p>
+                                          <p className="text-xs text-slate-400">Some PMC articles only provide HTML full text. You can view the article directly on PubMed Central.</p>
                                           <button onClick={() => window.open(pdfPreviewUrl, '_blank')} className="mt-2 px-4 py-2 text-xs font-bold text-emerald-700 bg-emerald-100 rounded-lg hover:bg-emerald-200">
-                                             Open PDF Directly
+                                             Open on PubMed Central
                                           </button>
                                        </div>
                                     )}

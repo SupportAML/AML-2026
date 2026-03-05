@@ -92,7 +92,7 @@ async function getPMCSummaries(pmcIds) {
     const pageStr = pages ? `:${pages}` : '';
     const citation = `${authors}. ${journal}. ${year}; ${volIssue}${pageStr}`.replace(/\s+/g, ' ').trim();
 
-    const pdfUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/pdf/`;
+    const pdfUrl = buildPdfUrl(pmcId, doc);
     const url = pmid
       ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}`
       : `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/`;
@@ -164,7 +164,7 @@ async function fallbackPubMedSearch(query, maxResults) {
     const pageStr = pages ? `:${pages}` : '';
     const citation = `${authors}. ${journal}. ${year}; ${volIssue}${pageStr}`.replace(/\s+/g, ' ').trim();
 
-    const pdfUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/pdf/`;
+    const pdfUrl = buildPdfUrl(pmcId, doc);
     const url = `https://pubmed.ncbi.nlm.nih.gov/${pmid}`;
 
     articles.push({
@@ -185,6 +185,23 @@ async function fallbackPubMedSearch(query, maxResults) {
 }
 
 // --- Helpers ---
+
+/**
+ * Build the best PDF URL for a PMC article.
+ * The generic /pdf/ endpoint sometimes returns an HTML landing page, so we
+ * attempt to construct a direct URL using the article's record name (which
+ * corresponds to the main PDF filename on PMC servers).
+ */
+function buildPdfUrl(pmcId, doc) {
+  // Many PMC records expose a "recordname" or article filename we can use
+  // to build a direct link: /pmc/articles/PMC.../pdf/{recordname}.pdf
+  const recordName = doc?.recordname || doc?.uid || '';
+  if (recordName) {
+    return `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/pdf/${recordName}.pdf`;
+  }
+  // Fallback to the generic /pdf/ endpoint — the proxy will handle HTML responses
+  return `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/pdf/`;
+}
 
 function formatAuthors(authors) {
   if (!authors || authors.length === 0) return 'Unknown';
