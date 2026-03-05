@@ -479,9 +479,9 @@ const App: React.FC = () => {
     }
   };
 
-  // Save DICOM screenshot annotation
+  // Save DICOM screenshot annotation as a PDF with embedded image + metadata,
+  // then create an initial annotation so it flows into the fact matrix & legal writer.
   const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string; caseId?: string; modality?: string; sliceInfo?: string }) => {
-    // Determine target case — from annotation data (standalone viewer) or activeCase (legacy)
     const targetCaseId = data.caseId || activeCase?.id;
     if (!targetCaseId) {
       alert('No case selected — please select a case before saving.');
@@ -489,40 +489,62 @@ const App: React.FC = () => {
     }
 
     try {
-      // Convert base64 data URL to blob (avoid fetch() which fails on data URLs in Safari)
-      const dataUrlParts = data.imageUrl.split(',');
-      const dataUrlMime = dataUrlParts[0].match(/:(.*?);/)?.[1] || 'image/png';
-      const bstr = atob(dataUrlParts[1]);
-      const u8arr = new Uint8Array(bstr.length);
-      for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-      const blob = new Blob([u8arr], { type: dataUrlMime });
+      const { default: jsPDF } = await import('jspdf');
       const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
+      const displayName = `DICOM \u2013 ${data.studyName} \u2013 ${data.studyDate}`;
 
-      // Convert to JPEG
-      let jpegBlob: Blob = blob;
+      // --- Build PDF with screenshot + metadata header ---
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 36; // 0.5 inch
+
+      // Header bar
+      pdf.setFillColor(15, 23, 42); // slate-900
+      pdf.rect(0, 0, pageW, 54, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(displayName, margin, 22);
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      const metaParts: string[] = [];
+      if (data.patientInfo) metaParts.push(`Patient: ${data.patientInfo}`);
+      if (data.modality) metaParts.push(`Modality: ${data.modality}`);
+      if (data.sliceInfo) metaParts.push(`Slice: ${data.sliceInfo}`);
+      metaParts.push(`Date: ${data.studyDate}`);
+      pdf.text(metaParts.join('  |  '), margin, 42);
+
+      // Embed the JPEG screenshot
+      const imgY = 66;
+      const maxImgW = pageW - margin * 2;
+      const maxImgH = pageH - imgY - margin - 50; // leave room for annotation text
       try {
-        const img = await createImageBitmap(blob);
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0);
-          jpegBlob = await new Promise<Blob>((resolve) => {
-            canvas.toBlob((b) => resolve(b || blob), 'image/jpeg', 0.92);
-          });
-        }
+        pdf.addImage(data.imageUrl, 'JPEG', margin, imgY, maxImgW, maxImgH, undefined, 'FAST');
       } catch {
-        // Fall back to original blob if JPEG conversion fails
+        // If addImage fails (e.g. data URL format issue), try as PNG
+        pdf.addImage(data.imageUrl, 'PNG', margin, imgY, maxImgW, maxImgH, undefined, 'FAST');
       }
 
-      // Upload to Firebase Storage under cases/{caseId}/dicom-annotations/
-      let fileUrl = data.imageUrl;
-      let storagePath = `cases/${targetCaseId}/dicom-annotations/${Date.now()}_${safeName}.jpg`;
+      // Annotation note at the bottom
+      if (data.text) {
+        const noteY = pageH - margin - 14;
+        pdf.setTextColor(100, 116, 139); // slate-500
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'italic');
+        pdf.text(`Note: ${data.text}`, margin, noteY, { maxWidth: maxImgW });
+      }
+
+      // Generate PDF blob
+      const pdfBlob = pdf.output('blob');
+
+      // --- Upload PDF to Firebase Storage ---
+      let fileUrl = '';
+      let storagePath = `cases/${targetCaseId}/dicom-annotations/${Date.now()}_${safeName}.pdf`;
       try {
         const storageRef = ref(storage, storagePath);
-        const uploadTask = uploadBytesResumable(storageRef, jpegBlob, {
-          contentType: 'image/jpeg',
+        const uploadTask = uploadBytesResumable(storageRef, pdfBlob, {
+          contentType: 'application/pdf',
           customMetadata: { uploadedAt: new Date().toISOString() }
         });
         await new Promise<void>((resolve, reject) => {
@@ -530,47 +552,52 @@ const App: React.FC = () => {
         });
         fileUrl = await getDownloadURL(storageRef);
       } catch (e) {
-        console.warn('[DICOM Annotation] Storage upload failed, using data URL:', e);
+        console.warn('[DICOM Annotation] PDF upload failed:', e);
         storagePath = '';
+        // Fallback: create object URL (won't persist across sessions)
+        fileUrl = URL.createObjectURL(pdfBlob);
       }
 
-      // Build display name: DICOM – [Study Type] – [Date]
-      const displayName = `DICOM \u2013 ${data.studyName} \u2013 ${data.studyDate}`;
-
-      // Write Firestore document to the documents collection
+      // --- Save as a PDF document in Case Files ---
       const docId = Math.random().toString(36).substr(2, 9);
       const newDoc: Document = {
         id: docId,
         caseId: targetCaseId,
         name: displayName,
-        type: 'dicom-annotation',
-        mimeType: 'image/jpeg',
+        type: 'pdf' as DocumentFileType,
+        mimeType: 'application/pdf',
         url: fileUrl,
         storagePath: storagePath || undefined,
         uploadDate: new Date().toISOString(),
-        size: (jpegBlob.size / 1024).toFixed(1) + ' KB',
+        size: (pdfBlob.size / 1024).toFixed(1) + ' KB',
         reviewStatus: 'pending',
         path: 'DICOM Annotations',
       };
+      await upsertDocument(newDoc);
 
-      // Extend with DICOM-specific metadata (stored as part of the document)
-      const extendedDoc = {
-        ...newDoc,
-        imageUrl: fileUrl,
-        patient: data.patientInfo,
-        study: data.studyName,
-        date: data.studyDate,
-        modality: data.modality || '',
-        slice: data.sliceInfo || '',
-        annotationNote: data.text,
-        uploadedBy: currentUser?.id || '',
-        uploadedAt: new Date().toISOString(),
+      // --- Create an initial annotation on the PDF (page 1) ---
+      // This links the DICOM finding into the fact matrix & legal writer.
+      const annId = Math.random().toString(36).substr(2, 9);
+      const category = data.modality?.toUpperCase().includes('PATH') ? 'Legal' : 'Medical';
+      const annText = data.text || `Key Image: ${data.studyName}`;
+      const newAnnotation: Annotation = {
+        id: annId,
+        documentId: docId,
+        caseId: targetCaseId,
+        page: 1,
+        text: annText,
+        author: currentUser?.name || 'Expert User',
+        category,
+        x: 0.5,
+        y: 0.5,
+        timestamp: new Date().toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+        type: 'point',
+        eventDate: data.studyDate || undefined,
       };
-      await upsertDocument(extendedDoc as Document);
+      await upsertAnnotation(newAnnotation);
 
-      // Find the case title for the success message
       const targetCase = cases.find(c => c.id === targetCaseId);
-      alert(`Annotation saved to "${targetCase?.title || 'case'}".`);
+      alert(`DICOM annotation saved as PDF to "${targetCase?.title || 'case'}". It will appear in the Fact Matrix.`);
     } catch (e: any) {
       console.error('[DICOM Annotation] Save failed:', e);
       alert('Failed to save annotation: ' + (e?.message || String(e)));
