@@ -110,5 +110,11 @@ function buildSystemPrompt(ctx) {
     parts.push(ctx.currentDraft);
   }
 
+  if (ctx.cvContent) {
+    parts.push('', '--- EXPERT CV / CURRICULUM VITAE ---');
+    parts.push('Use the following CV to reference relevant qualifications, training, publications, and experience when establishing expert credentials:');
+    parts.push(ctx.cvContent);
+  }
+
   return parts.join('\n');
 }

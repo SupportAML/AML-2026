@@ -7,6 +7,17 @@ import { parse } from 'marked';
 // Normalize whitespace for fuzzy text matching (handles HTML whitespace drift)
 const normalizeWs = (s: string) => s.replace(/\s+/g, ' ').trim();
 
+// Convert number to Roman numeral
+const toRoman = (num: number): string => {
+   const vals = [1000,900,500,400,100,90,50,40,10,9,5,4,1];
+   const syms = ['M','CM','D','CD','C','XC','L','XL','X','IX','V','IV','I'];
+   let result = '';
+   for (let i = 0; i < vals.length; i++) {
+      while (num >= vals[i]) { result += syms[i]; num -= vals[i]; }
+   }
+   return result;
+};
+
 // Find and replace original text in content, with fallback to whitespace-normalized matching
 function findAndReplace(content: string, original: string, replacement: string): string | null {
    // 1. Exact match (fast path)
@@ -114,7 +125,11 @@ import {
    TableIcon,
    GitMergeIcon,
    ImageIcon,
-   DownloadIcon
+   DownloadIcon,
+   PaperclipIcon,
+   PlusIcon,
+   GripVerticalIcon,
+   TypeIcon
 } from 'lucide-react';
 import { Case, Document, Annotation, UserProfile, ChatMessage, ReportComment, Suggestion, StrategyAnalysis, StructuredChronology, DepoFeedback, ChronologyEvent, ResearchArticle, ResearchGap } from '../types';
 import { DepositionSimulation } from './DepositionSimulation';
@@ -142,7 +157,84 @@ import {
    LegalChatMessage,
    SuggestionItem
 } from '../services/claudeService';
-import { extractPdfTextForAnnotations } from '../services/pdfTextService';
+import { extractPdfTextForAnnotations, extractPdfTextFromUrl } from '../services/pdfTextService';
+
+// Template definitions for the sidebar workflow
+const SIDEBAR_TEMPLATES = [
+   {
+      id: 'ime',
+      title: 'IME Report',
+      desc: 'Independent Medical Examination',
+      icon: 'clipboard-list',
+      sections: [
+         'HEADER', 'QUESTION PRESENTED / SCOPE', 'DOCUMENTS REVIEWED',
+         'HISTORY & RECORDS REVIEW', 'EXAMINATION SUMMARY (IF PROVIDED)',
+         'DIAGNOSTIC STUDIES', 'ANALYSIS', 'OPINIONS',
+         'EXPERT DISCLOSURES (IF PROVIDED)', 'LIMITATIONS', 'CERTIFICATION'
+      ]
+   },
+   {
+      id: 'causation',
+      title: 'Causation Analysis',
+      desc: 'Medical causation & expert opinion',
+      icon: 'search',
+      sections: [
+         'HEADER', 'QUESTION PRESENTED', 'DOCUMENTS REVIEWED',
+         'MEDICAL HISTORY & TIMELINE', 'MEDICAL ANALYSIS',
+         'CAUSATION OPINION(S)', 'ALTERNATIVE CAUSES',
+         'EXPERT DISCLOSURES (IF PROVIDED)', 'LIMITATIONS', 'CERTIFICATION'
+      ]
+   },
+   {
+      id: 'rebuttal',
+      title: 'Rebuttal Report',
+      desc: 'Counter opposing expert opinions',
+      icon: 'shield',
+      sections: [
+         'HEADER', 'SUMMARY OF OPPOSING OPINIONS', 'DOCUMENTS REVIEWED',
+         'REBUTTAL ANALYSIS', 'SUPPORTING FACTS/DATA',
+         'CONCLUSIONS / OPINIONS', 'EXPERT DISCLOSURES (IF PROVIDED)',
+         'LIMITATIONS', 'CERTIFICATION'
+      ]
+   },
+   {
+      id: 'chronology',
+      title: 'Chronology Summary',
+      desc: 'Timeline-focused clinical events',
+      icon: 'calendar',
+      sections: [
+         'HEADER', 'DOCUMENTS REVIEWED', 'CLINICAL TIMELINE',
+         'KEY CLINICAL FINDINGS', 'ANALYTICAL NOTES',
+         'LIMITATIONS', 'CERTIFICATION'
+      ]
+   },
+   {
+      id: 'deposition',
+      title: 'Deposition Prep Memo',
+      desc: 'Strategic memo with key questions',
+      icon: 'file-text',
+      sections: [
+         'HEADER', 'PURPOSE & SCOPE', 'KEY FACTS',
+         'KEY MEDICAL ISSUES', 'LIKELY LINES OF QUESTIONING',
+         'EXHIBIT LIST', 'RISK AREAS / WEAKNESSES',
+         'LIMITATIONS', 'CERTIFICATION'
+      ]
+   }
+];
+
+interface TemplateSection {
+   id: string;
+   name: string;
+   enabled: boolean;
+}
+
+interface SidebarAttachment {
+   file: File;
+   name: string;
+   type: string;
+   preview?: string;
+   extractedText?: string;
+}
 
 interface AnnotationRollupProps {
    caseItem: Case;
@@ -230,7 +322,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
 
    // Writer State
-   const [writerSidebarMode, setWriterSidebarMode] = useState<'COMMENTS' | 'AI'>('COMMENTS');
+   const [writerSidebarMode, setWriterSidebarMode] = useState<'COMMENTS' | 'AI'>(!reportContent ? 'AI' : 'COMMENTS');
    const [selectedTextForComment, setSelectedTextForComment] = useState('');
    const [commentInput, setCommentInput] = useState('');
    const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -244,6 +336,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [selectedEditorText, setSelectedEditorText] = useState('');
    const [sidebarPdfContext, setSidebarPdfContext] = useState('');
    const sidebarScrollRef = useRef<HTMLDivElement>(null);
+
+   // Sidebar template workflow state
+   const [sidebarTemplateStep, setSidebarTemplateStep] = useState<'select' | 'customize' | 'chat'>(!reportContent ? 'select' : 'chat');
+   const [sidebarSelectedTemplate, setSidebarSelectedTemplate] = useState<string | null>(null);
+   const [sidebarTemplateSections, setSidebarTemplateSections] = useState<TemplateSection[]>([]);
+   const [sidebarCaseDescription, setSidebarCaseDescription] = useState('');
+   const [sidebarAttachments, setSidebarAttachments] = useState<SidebarAttachment[]>([]);
+   const sidebarFileInputRef = useRef<HTMLInputElement>(null);
 
    // Preview Panel State
    const [previewSource, setPreviewSource] = useState<{ documentId: string, page: number, annotationId?: string } | null>(null);
@@ -1604,11 +1704,23 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       setSidebarMessages(updatedMessages);
 
       try {
+         // Include attachment context in PDF text
+         let enrichedPdfContext = sidebarPdfContext;
+         if (sidebarAttachments.length > 0) {
+            const attachmentTexts = sidebarAttachments
+               .filter(a => a.extractedText)
+               .map(a => `[Attached: ${a.name}]\n${a.extractedText}`)
+               .join('\n\n');
+            if (attachmentTexts) {
+               enrichedPdfContext = (enrichedPdfContext ? enrichedPdfContext + '\n\n' : '') + attachmentTexts;
+            }
+         }
+
          const caseContext = buildCaseContext(
             caseItem,
             docs,
             annotations,
-            sidebarPdfContext,
+            enrichedPdfContext,
             currentUser,
             reportContentRef.current
          );
@@ -1942,27 +2054,33 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    <meta charset="UTF-8">
    <title>${caseItem.title} - Medical-Legal Report</title>
    <style>
-      /* Remove browser auto headers/footers - use @page margin:0 then body margin for content */
-      @page { 
+      @page {
          size: letter;
-         margin: 0;
+         margin: 1in 1in 1.2in 1in;
+         @bottom-right {
+            content: counter(page);
+            font-family: 'Times New Roman', serif;
+            font-size: 10pt;
+            color: #333;
+         }
       }
-      
+
       body {
          font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
          font-size: 12pt;
-         line-height: 2.0;  /* Double-spaced as per legal standards */
+         line-height: 2.0;
          color: #000;
-         margin: 1in;
+         margin: 0;
          padding: 0;
          background: white;
+         counter-reset: page;
       }
-      
+
       /* Heading styles - bold, minimal spacing */
-      h1, h2, h3, h4, h5, h6 { 
+      h1, h2, h3, h4, h5, h6 {
          font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
-         font-weight: bold; 
-         margin-top: 12pt; 
+         font-weight: bold;
+         margin-top: 12pt;
          margin-bottom: 6pt;
          page-break-after: avoid;
          line-height: 1.2;
@@ -1970,35 +2088,43 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       h1 { font-size: 14pt; text-align: center; }
       h2 { font-size: 13pt; }
       h3 { font-size: 12pt; }
-      
-      /* Paragraph styles - justified text, minimal spacing */
-      p { 
-         margin: 0; 
+
+      p {
+         margin: 0;
          text-align: justify;
          orphans: 3;
          widows: 3;
       }
-      
-      /* Preserve formatting for structured content */
-      pre { 
-         white-space: pre-wrap; 
+
+      pre {
+         white-space: pre-wrap;
          font-family: 'Times New Roman', 'Liberation Serif', Times, serif;
          font-size: 12pt;
          line-height: 2.0;
          margin: 0;
       }
-      
-      /* List spacing */
+
       ul, ol {
          margin: 6pt 0;
       }
-      
+
       li {
          margin: 3pt 0;
+      }
+
+      /* Fallback page number footer for browsers without @page @bottom-right */
+      .page-footer {
+         position: fixed;
+         bottom: 0.3in;
+         right: 0.5in;
+         font-family: 'Times New Roman', serif;
+         font-size: 10pt;
+         color: #333;
       }
    </style>
 </head>
 <body>
+   <div class="page-footer" id="pageFooter"></div>
    <pre>${reportContent}</pre>
    <script>
       window.onload = () => {
@@ -2022,7 +2148,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
          const fileName = `${caseItem.title.replace(/[^a-z0-9]/gi, '_')}_Report.doc`;
          trackExport('word', fileName);
 
-         // Create HTML content for Word
+         // Create HTML content for Word with page numbering
          const htmlContent = `
 <!DOCTYPE html>
 <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
@@ -2030,12 +2156,24 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    <meta charset="UTF-8">
    <title>${caseItem.title} - Medical-Legal Report</title>
    <!--[if gte mso 9]>
+   <xml>
+      <w:WordDocument>
+         <w:View>Print</w:View>
+         <w:Zoom>100</w:Zoom>
+         <w:DoNotOptimizeForBrowser/>
+      </w:WordDocument>
+   </xml>
    <style>
-   @page Section1 { mso-header-margin:0in; mso-footer-margin:0in; }
+   @page Section1 {
+      mso-header-margin:0in;
+      mso-footer-margin:.5in;
+      mso-page-numbers-position:bottom-right;
+   }
+   div.Section1 { page:Section1; }
    </style>
    <![endif]-->
    <style>
-      @page { margin: 0; }
+      @page { margin: 1in; }
       body {
          font-family: 'Times New Roman', Times, serif;
          font-size: 12pt;
@@ -2048,7 +2186,16 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    </style>
 </head>
 <body>
+<div class="Section1">
    <pre>${reportContent}</pre>
+   <!--[if gte mso 9]>
+   <div style="mso-element:footer" id="f1">
+      <p style="text-align:right;font-size:10pt;font-family:'Times New Roman',serif;">
+         <span style="mso-field-code:'PAGE'"></span>
+      </p>
+   </div>
+   <![endif]-->
+</div>
 </body>
 </html>`;
 
@@ -2592,26 +2739,32 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                   100% { transform: translateX(300%); }
                }
                
-               /* Print styles - no auto headers/footers */
+               /* Print styles with page numbering */
                @media print {
                   @page {
                      size: letter;
-                     margin: 0;
+                     margin: 1in 1in 1.2in 1in;
+                     @bottom-right {
+                        content: counter(page);
+                        font-family: 'Times New Roman', serif;
+                        font-size: 10pt;
+                        color: #333;
+                     }
                   }
-                  
+
                   body {
                      font-family: 'Times New Roman', 'Liberation Serif', 'Nimbus Roman', Times, serif;
                      font-size: 12pt;
                      line-height: 2;
                      color: #000;
-                     margin: 1in;
+                     margin: 0;
                   }
-                  
+
                   /* Hide UI elements */
                   .no-print, button, nav, aside {
                      display: none !important;
                   }
-                  
+
                   /* Ensure proper page breaks */
                   h1, h2, h3, h4, h5, h6 {
                      page-break-after: avoid;
@@ -2621,14 +2774,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                      margin-top: 12pt;
                      margin-bottom: 6pt;
                   }
-                  
+
                   p {
                      orphans: 3;
                      widows: 3;
                      margin: 0;
                      text-align: justify;
                   }
-                  
+
                   /* Remove shadows and borders for print */
                   * {
                      box-shadow: none !important;
@@ -3691,17 +3844,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                               )}
                            </div>
 
-                           <button
-                              onClick={() => {
-                                 if (reportContent && !confirm('Regenerating will overwrite the current draft. Continue?')) return;
-                                 setShowTemplateSelector(true);
-                              }}
-                              disabled={isGenerating}
-                              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50"
-                           >
-                              <SparklesIcon className="w-4 h-4" />
-                              {reportContent ? 'Regenerate Draft' : 'Generate Draft'}
-                           </button>
 
 
                            {/* Save Version Button - Explicitly saves current version to history */}
@@ -3759,6 +3901,62 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
                      {/* Google Docs-style Formatting Toolbar */}
                      <div className="flex items-center gap-0.5 px-4 py-1.5 bg-slate-50 border-b border-slate-200 shrink-0 flex-wrap">
+                        {/* Heading/paragraph style dropdown */}
+                        <select
+                           title="Text style"
+                           className="text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-600 hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-violet-400 cursor-pointer mr-1"
+                           defaultValue="p"
+                           onMouseDown={(e) => e.stopPropagation()}
+                           onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'p') {
+                                 document.execCommand('formatBlock', false, 'P');
+                              } else {
+                                 document.execCommand('formatBlock', false, val);
+                              }
+                              editableDivRef.current?.focus();
+                           }}
+                        >
+                           <option value="p">Normal Text</option>
+                           <option value="H1">Heading 1</option>
+                           <option value="H2">Heading 2</option>
+                           <option value="H3">Heading 3</option>
+                           <option value="H4">Heading 4</option>
+                        </select>
+
+                        {/* Font family selector */}
+                        <select
+                           title="Font"
+                           className="text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-600 hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-violet-400 cursor-pointer mr-1"
+                           defaultValue="Times New Roman"
+                           onMouseDown={(e) => e.stopPropagation()}
+                           onChange={(e) => { document.execCommand('fontName', false, e.target.value); editableDivRef.current?.focus(); }}
+                        >
+                           <option value="Times New Roman">Times New Roman</option>
+                           <option value="Arial">Arial</option>
+                           <option value="Helvetica">Helvetica</option>
+                           <option value="Georgia">Georgia</option>
+                           <option value="Courier New">Courier New</option>
+                        </select>
+
+                        {/* Font size selector */}
+                        <select
+                           title="Font size"
+                           className="text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-600 hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-violet-400 cursor-pointer mr-1 w-14"
+                           defaultValue="3"
+                           onMouseDown={(e) => e.stopPropagation()}
+                           onChange={(e) => { document.execCommand('fontSize', false, e.target.value); editableDivRef.current?.focus(); }}
+                        >
+                           <option value="1">8</option>
+                           <option value="2">10</option>
+                           <option value="3">12</option>
+                           <option value="4">14</option>
+                           <option value="5">18</option>
+                           <option value="6">24</option>
+                           <option value="7">36</option>
+                        </select>
+
+                        <div className="w-px h-5 bg-slate-300 mx-1.5" />
                         {[
                            { cmd: 'undo', icon: Undo2Icon, title: 'Undo (Ctrl+Z)' },
                            { cmd: 'redo', icon: Redo2Icon, title: 'Redo (Ctrl+Y)' },
@@ -3921,6 +4119,14 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     <span className="text-xs font-bold text-violet-800">Claude AI</span>
                                  </div>
                                  <div className="flex items-center gap-1">
+                                    {sidebarTemplateStep === 'chat' && (
+                                       <button
+                                          onClick={() => { setSidebarTemplateStep('select'); setSidebarSelectedTemplate(null); setSidebarTemplateSections([]); setSidebarCaseDescription(''); }}
+                                          className="text-[9px] font-bold text-violet-600 bg-violet-100 px-2 py-0.5 rounded-full hover:bg-violet-200 transition-colors"
+                                       >
+                                          New Report
+                                       </button>
+                                    )}
                                     {selectedEditorText && (
                                        <span className="text-[9px] font-bold text-violet-600 bg-violet-100 px-2 py-0.5 rounded-full">
                                           Selection active
@@ -3936,12 +4142,217 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
                               {/* Scrollable Messages + Suggestions */}
                               <div ref={sidebarScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3" style={{ scrollBehavior: 'smooth' }}>
-                                 {/* Empty state */}
+
+                                 {/* STEP 1: Template Selection */}
+                                 {sidebarTemplateStep === 'select' && (
+                                    <div className="space-y-3">
+                                       <div className="text-center pt-2 pb-3">
+                                          <FileTextIcon className="w-10 h-10 text-violet-400 mx-auto mb-2" />
+                                          <h3 className="text-sm font-extrabold text-slate-800 mb-1">Start Your Report</h3>
+                                          <p className="text-[10px] text-slate-500 leading-relaxed">Choose a template to begin, then customize the sections and describe your case.</p>
+                                       </div>
+                                       <div className="space-y-2">
+                                          {SIDEBAR_TEMPLATES.map(tpl => (
+                                             <button
+                                                key={tpl.id}
+                                                onClick={() => {
+                                                   setSidebarSelectedTemplate(tpl.id);
+                                                   setSidebarTemplateSections(
+                                                      tpl.sections.map((s, i) => ({ id: `sec-${i}`, name: s, enabled: true }))
+                                                   );
+                                                   setSidebarTemplateStep('customize');
+                                                }}
+                                                className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-violet-400 hover:bg-violet-50/40 transition-all group"
+                                             >
+                                                <div className="flex items-center gap-3">
+                                                   <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center shrink-0">
+                                                      <SparklesIcon className="w-4 h-4 text-violet-500" />
+                                                   </div>
+                                                   <div>
+                                                      <h4 className="text-xs font-bold text-slate-800 group-hover:text-violet-700">{tpl.title}</h4>
+                                                      <p className="text-[10px] text-slate-400">{tpl.desc}</p>
+                                                   </div>
+                                                </div>
+                                             </button>
+                                          ))}
+                                       </div>
+                                       <p className="text-[9px] text-slate-400 text-center pt-2">Or type a message below to chat with Claude directly.</p>
+                                    </div>
+                                 )}
+
+                                 {/* STEP 2: Customize Template Sections */}
+                                 {sidebarTemplateStep === 'customize' && (
+                                    <div className="space-y-3">
+                                       <div className="flex items-center justify-between">
+                                          <button
+                                             onClick={() => { setSidebarTemplateStep('select'); setSidebarSelectedTemplate(null); }}
+                                             className="text-[10px] text-violet-600 hover:text-violet-800 font-bold"
+                                          >
+                                             &larr; Back
+                                          </button>
+                                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                             {SIDEBAR_TEMPLATES.find(t => t.id === sidebarSelectedTemplate)?.title}
+                                          </span>
+                                       </div>
+
+                                       <p className="text-[10px] text-slate-500">Edit, reorder, or toggle sections for your report:</p>
+
+                                       <div className="space-y-1.5">
+                                          {sidebarTemplateSections.map((section, idx) => (
+                                             <div key={section.id} className="flex items-center gap-1.5 group">
+                                                <GripVerticalIcon className="w-3 h-3 text-slate-300 cursor-grab shrink-0" />
+                                                <button
+                                                   onClick={() => {
+                                                      setSidebarTemplateSections(prev =>
+                                                         prev.map(s => s.id === section.id ? { ...s, enabled: !s.enabled } : s)
+                                                      );
+                                                   }}
+                                                   className={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${section.enabled ? 'bg-violet-600 border-violet-600' : 'border-slate-300 bg-white'}`}
+                                                >
+                                                   {section.enabled && <CheckIcon className="w-2.5 h-2.5 text-white" />}
+                                                </button>
+                                                <input
+                                                   type="text"
+                                                   value={section.name}
+                                                   onChange={(e) => {
+                                                      setSidebarTemplateSections(prev =>
+                                                         prev.map(s => s.id === section.id ? { ...s, name: e.target.value } : s)
+                                                      );
+                                                   }}
+                                                   className={`flex-1 text-[11px] px-2 py-1 rounded border border-transparent hover:border-slate-200 focus:border-violet-400 focus:outline-none transition-colors ${!section.enabled ? 'text-slate-400 line-through' : 'text-slate-700'}`}
+                                                />
+                                                <button
+                                                   onClick={() => {
+                                                      setSidebarTemplateSections(prev => prev.filter(s => s.id !== section.id));
+                                                   }}
+                                                   className="p-0.5 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                                                >
+                                                   <XIcon className="w-3 h-3" />
+                                                </button>
+                                             </div>
+                                          ))}
+                                       </div>
+
+                                       <button
+                                          onClick={() => {
+                                             const newId = `sec-${Date.now()}`;
+                                             setSidebarTemplateSections(prev => [...prev, { id: newId, name: 'NEW SECTION', enabled: true }]);
+                                          }}
+                                          className="flex items-center gap-1.5 text-[10px] font-bold text-violet-600 hover:text-violet-800 pl-6"
+                                       >
+                                          <PlusIcon className="w-3 h-3" /> Add Section
+                                       </button>
+
+                                       <div className="pt-2 space-y-2">
+                                          <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Describe your case</label>
+                                          <textarea
+                                             value={sidebarCaseDescription}
+                                             onChange={(e) => setSidebarCaseDescription(e.target.value)}
+                                             placeholder="Briefly describe the essence of your case, key facts, and what you need this report to address..."
+                                             className="w-full text-xs p-2.5 rounded-xl border border-slate-200 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 resize-none bg-slate-50 transition-all"
+                                             rows={4}
+                                          />
+                                       </div>
+
+                                       <button
+                                          onClick={async () => {
+                                             setSidebarTemplateStep('chat');
+                                             setIsGenerating(true);
+                                             try {
+                                                if (reportContent.trim()) {
+                                                   setUndoStack(prev => [...prev, reportContent].slice(-50));
+                                                   setRedoStack([]);
+                                                }
+                                                let pdfTextContext = '';
+                                                try {
+                                                   pdfTextContext = await extractPdfTextForAnnotations(docs, annotations, {
+                                                      perPageCharLimit: 1500,
+                                                      totalCharLimit: 12000
+                                                   });
+                                                } catch (err) {
+                                                   console.warn('PDF text extraction failed:', err);
+                                                }
+                                                const commentsText = (caseItem.reportComments || [])
+                                                   .map(c => `- ${c.author}: ${c.text}${c.context ? ` (Context: ${c.context})` : ''}`)
+                                                   .join('\n');
+
+                                                // Extract CV text for expert qualifying paragraph
+                                                let cvContent = '';
+                                                if (currentUser.cvUrl) {
+                                                   try {
+                                                      cvContent = await extractPdfTextFromUrl(currentUser.cvUrl, 15000);
+                                                   } catch (err) {
+                                                      console.warn('CV extraction failed:', err);
+                                                   }
+                                                }
+
+                                                const caseContext = buildCaseContext(
+                                                   caseItem,
+                                                   docs,
+                                                   annotations,
+                                                   pdfTextContext,
+                                                   currentUser,
+                                                   '',
+                                                   commentsText,
+                                                   cvContent
+                                                );
+
+                                                // Build custom template from editable sections
+                                                const customTemplate = sidebarTemplateSections
+                                                   .filter(s => s.enabled)
+                                                   .map((s, i) => `${toRoman(i + 1)}. ${s.name}`)
+                                                   .join('\n');
+
+                                                // If user provided a case description, prepend it to the context
+                                                if (sidebarCaseDescription.trim()) {
+                                                   caseContext.caseDescription = (caseContext.caseDescription ? caseContext.caseDescription + '\n\n' : '') +
+                                                      'ADDITIONAL CASE CONTEXT FROM USER:\n' + sidebarCaseDescription.trim();
+                                                }
+
+                                                const generatedReport = await generateReport(
+                                                   caseContext,
+                                                   customTemplate,
+                                                   (chunk) => {
+                                                      const html = parse(chunk) as string;
+                                                      setReportContent(html);
+                                                      lastContentRef.current = html;
+                                                   }
+                                                );
+                                                const html = parse(generatedReport) as string;
+
+                                                await onUpdateCase({ ...caseItemRef.current, reportContent: html });
+                                                setReportContent(html);
+                                                lastContentRef.current = html;
+                                                setWriterContentKey(prev => prev + 1);
+                                                setSidebarSuggestions([]);
+                                             } catch (error) {
+                                                console.error("Failed to generate report:", error);
+                                                alert("Failed to generate report. Please try again.");
+                                             } finally {
+                                                setIsGenerating(false);
+                                             }
+                                          }}
+                                          disabled={isGenerating}
+                                          className="w-full py-2.5 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 shadow-lg shadow-violet-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                       >
+                                          {isGenerating ? (
+                                             <><Loader2Icon className="w-3.5 h-3.5 animate-spin" /> Generating...</>
+                                          ) : (
+                                             <><SparklesIcon className="w-3.5 h-3.5" /> Generate Report</>
+                                          )}
+                                       </button>
+                                    </div>
+                                 )}
+
+                                 {/* STEP 3: Chat mode (existing chat + messages) */}
+                                 {sidebarTemplateStep === 'chat' && (
+                                    <>
+                                 {/* Empty state for chat mode */}
                                  {sidebarMessages.length === 0 && sidebarSuggestions.length === 0 && !sidebarStreaming && (
                                     <div className="text-center py-6">
                                        <SparklesIcon className="w-8 h-8 text-violet-300 mx-auto mb-2" />
                                        <p className="text-xs text-slate-500 font-medium mb-1">Ask Claude anything about your case</p>
-                                       <p className="text-[10px] text-slate-400">Select text in the editor for focused rewriting</p>
+                                       <p className="text-[10px] text-slate-400">Select text in the editor for focused rewriting, or attach files for context.</p>
                                     </div>
                                  )}
 
@@ -4044,6 +4455,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        ))}
                                     </div>
                                  )}
+                                 </>
+                                 )}
                               </div>
 
                               {/* Input Area (pinned to bottom) */}
@@ -4076,10 +4489,73 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                     ))}
                                  </div>
 
+                                 {/* Attachment chips */}
+                                 {sidebarAttachments.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                       {sidebarAttachments.map((att, idx) => (
+                                          <div key={idx} className="flex items-center gap-1 px-2 py-1 bg-violet-50 border border-violet-200 rounded-lg text-[10px] text-violet-700 font-medium">
+                                             <PaperclipIcon className="w-3 h-3" />
+                                             <span className="truncate max-w-[120px]">{att.name}</span>
+                                             <button onClick={() => setSidebarAttachments(prev => prev.filter((_, i) => i !== idx))} className="text-violet-400 hover:text-red-500">
+                                                <XIcon className="w-3 h-3" />
+                                             </button>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 )}
+
                                  {/* Input */}
                                  <form onSubmit={handleSidebarSubmit} className="relative">
                                     <input
-                                       className="w-full pl-3 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all shadow-sm"
+                                       type="file"
+                                       ref={sidebarFileInputRef}
+                                       className="hidden"
+                                       accept=".pdf,.png,.jpg,.jpeg,.gif,.webp"
+                                       multiple
+                                       onChange={async (e) => {
+                                          const fileList = e.target.files;
+                                          if (!fileList) return;
+                                          for (let fi = 0; fi < fileList.length; fi++) {
+                                             const file = fileList[fi];
+                                             const attachment: SidebarAttachment = { file, name: file.name, type: file.type };
+                                             if (file.type === 'application/pdf') {
+                                                try {
+                                                   const arrayBuffer = await file.arrayBuffer();
+                                                   const pdfjsLib = await import('pdfjs-dist');
+                                                   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                                                   let text = '';
+                                                   for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+                                                      const page = await pdf.getPage(i);
+                                                      const content = await page.getTextContent();
+                                                      text += (content.items as any[]).map((item: any) => item.str).join(' ') + '\n';
+                                                      if (text.length > 12000) break;
+                                                   }
+                                                   attachment.extractedText = text.slice(0, 12000);
+                                                } catch (err) {
+                                                   console.warn('PDF text extraction failed for attachment:', err);
+                                                }
+                                             } else if (file.type.startsWith('image/')) {
+                                                const reader = new FileReader();
+                                                attachment.preview = await new Promise<string>((resolve) => {
+                                                   reader.onload = () => resolve(reader.result as string);
+                                                   reader.readAsDataURL(file);
+                                                });
+                                             }
+                                             setSidebarAttachments(prev => [...prev, attachment]);
+                                          }
+                                          e.target.value = '';
+                                       }}
+                                    />
+                                    <button
+                                       type="button"
+                                       onClick={() => sidebarFileInputRef.current?.click()}
+                                       className="absolute left-1.5 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-violet-600 transition-colors"
+                                       title="Attach file"
+                                    >
+                                       <PaperclipIcon className="w-3.5 h-3.5" />
+                                    </button>
+                                    <input
+                                       className="w-full pl-8 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all shadow-sm"
                                        placeholder={selectedEditorText ? "Describe how to rewrite the selection..." : "Ask Claude or describe an edit..."}
                                        value={sidebarInput}
                                        onChange={(e) => setSidebarInput(e.target.value)}
@@ -4099,110 +4575,6 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                      </div>
                   </div>
 
-                  {/* Template Selector Modal */}
-                  {showTemplateSelector && (
-                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                           {/* Header */}
-                           <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-5 text-white">
-                              <h3 className="text-xl font-bold mb-1">Select Report Template</h3>
-                              <p className="text-sm text-indigo-100">Choose a template to generate your medical-legal report</p>
-                           </div>
-
-                           {/* Template Grid */}
-                           <div className="p-6 grid grid-cols-2 gap-4 max-h-[500px] overflow-y-auto">
-                              {[
-                                 { id: 'ime', title: 'IME Report', desc: 'Independent Medical Examination report with comprehensive clinical assessment', icon: '🏥' },
-                                 { id: 'causation', title: 'Causation Analysis', desc: 'Detailed analysis of medical causation and expert opinion', icon: '🔬' },
-                                 { id: 'rebuttal', title: 'Rebuttal Report', desc: 'Response to opposing expert opinions with counter-arguments', icon: '⚖️' },
-                                 { id: 'chronology', title: 'Chronology Summary', desc: 'Timeline-focused report with sequential clinical events', icon: '📅' },
-                                 { id: 'deposition', title: 'Deposition Prep Memo', desc: 'Strategic memo for deposition with key questions and exhibits', icon: '📝' },
-
-                              ].map(tpl => (
-                                 <button
-                                    key={tpl.id}
-                                    onClick={() => {
-                                       setSelectedTemplate(tpl.id);
-                                       setShowTemplateSelector(false);
-                                       // Trigger generation via Anthropic
-                                          setTimeout(async () => {
-                                            setIsGenerating(true);
-                                            try {
-                                               if (reportContent.trim()) {
-                                                  setUndoStack(prev => [...prev, reportContent].slice(-50));
-                                                  setRedoStack([]);
-                                               }
-                                               let pdfTextContext = '';
-                                               try {
-                                                  pdfTextContext = await extractPdfTextForAnnotations(docs, annotations, {
-                                                     perPageCharLimit: 1500,
-                                                     totalCharLimit: 12000
-                                                  });
-                                               } catch (err) {
-                                                  console.warn('PDF text extraction failed:', err);
-                                               }
-                                               const commentsText = (caseItem.reportComments || [])
-                                                  .map(c => `- ${c.author}: ${c.text}${c.context ? ` (Context: ${c.context})` : ''}`)
-                                                  .join('\n');
-
-                                               const caseContext = buildCaseContext(
-                                                  caseItem,
-                                                  docs,
-                                                  annotations,
-                                                  pdfTextContext,
-                                                  currentUser,
-                                                  '',
-                                                  commentsText
-                                               );
-
-                                               const generatedReport = await generateReport(
-                                                  caseContext,
-                                                  tpl.id,
-                                                  (chunk) => {
-                                                   const html = parse(chunk) as string;
-                                                   setReportContent(html);
-                                                   lastContentRef.current = html;
-                                                }
-                                             );
-                                             const html = parse(generatedReport) as string;
-
-                                             // CRITICAL: Save immediately to prevent data loss if user switches tabs
-                                             await onUpdateCase({ ...caseItemRef.current, reportContent: html });
-
-                                             setReportContent(html);
-                                             lastContentRef.current = html;
-                                             setWriterContentKey(prev => prev + 1);
-                                             // Clear stale suggestions — they reference pre-regeneration content
-                                             setSidebarSuggestions([]);
-                                          } catch (error) {
-                                             console.error("Failed to generate report:", error);
-                                             alert("Failed to generate report. Please try again.");
-                                          } finally {
-                                             setIsGenerating(false);
-                                          }
-                                       }, 100);
-                                    }}
-                                    className="text-left p-5 rounded-xl border-2 border-slate-200 hover:border-indigo-400 hover:shadow-lg transition-all group bg-white hover:bg-indigo-50/30"
-                                 >
-                                    <div className="text-3xl mb-3">{tpl.icon}</div>
-                                    <h4 className="font-bold text-slate-900 mb-1.5 group-hover:text-indigo-700 transition-colors">{tpl.title}</h4>
-                                    <p className="text-xs text-slate-500 leading-relaxed">{tpl.desc}</p>
-                                 </button>
-                              ))}
-                           </div>
-
-                           {/* Footer */}
-                           <div className="px-6 py-4 border-t border-slate-100 flex justify-end">
-                              <button
-                                 onClick={() => setShowTemplateSelector(false)}
-                                 className="px-5 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
-                              >
-                                 Cancel
-                              </button>
-                           </div>
-                        </div>
-                     </div>
-                  )}
                </div>
             )}
 
@@ -4350,7 +4722,7 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                         <div className="text-center py-12">
                            <ClockIcon className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                            <p className="text-slate-500">No version history yet</p>
-                           <p className="text-xs text-slate-400 mt-1">Versions are created when you regenerate or finalize drafts</p>
+                           <p className="text-xs text-slate-400 mt-1">Versions are created when you generate or finalize drafts</p>
                         </div>
                      ) : (
                         <div className="space-y-3">
