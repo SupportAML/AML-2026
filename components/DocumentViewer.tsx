@@ -30,7 +30,10 @@ import {
   ScanIcon,
   ExternalLinkIcon,
   FolderTreeIcon,
-  PanelLeftIcon
+  PanelLeftIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  ChevronRightIcon as ChevronRightSmIcon
 } from 'lucide-react';
 import { Document as DocType, Annotation, DocumentPriority, PRIORITY_CONFIG, Case } from '../types';
 import { processAnnotationInput } from '../services/openaiService';
@@ -45,6 +48,123 @@ const ESTIMATED_PAGE_HEIGHT = 1100;
 const PAGE_GAP = 8;
 const VIRTUAL_WINDOW_SIZE = 5;
 const INITIAL_RENDER_COUNT = 3;
+
+// --- Review sidebar tree types & helpers ---
+interface SidebarTreeNode {
+  name: string;
+  type: 'folder' | 'file';
+  path: string;
+  doc?: DocType;
+  children: Record<string, SidebarTreeNode>;
+}
+
+const buildSidebarTree = (docs: DocType[], virtualFolders?: string[]): Record<string, SidebarTreeNode> => {
+  const root: Record<string, SidebarTreeNode> = {};
+  docs.filter(d => d.type !== 'dicom').forEach(doc => {
+    const cleanPath = (doc.path || '/').replace(/^\/+|\/+$/g, '');
+    const parts = cleanPath ? cleanPath.split('/') : [];
+    let currentLevel = root;
+    let currentPath = '';
+    parts.forEach(part => {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (!currentLevel[part]) {
+        currentLevel[part] = { name: part, type: 'folder', path: currentPath, children: {} };
+      }
+      currentLevel = currentLevel[part].children;
+    });
+    currentLevel[doc.id] = { name: doc.name, type: 'file', path: doc.path ? `${doc.path}/${doc.name}` : doc.name, doc, children: {} };
+  });
+  (virtualFolders || []).forEach(folderPath => {
+    const parts = folderPath.split('/');
+    let currentLevel = root;
+    let currentPath = '';
+    parts.forEach(part => {
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      if (!currentLevel[part]) {
+        currentLevel[part] = { name: part, type: 'folder', path: currentPath, children: {} };
+      }
+      currentLevel = currentLevel[part].children;
+    });
+  });
+  return root;
+};
+
+const collectTreeDocs = (node: SidebarTreeNode): DocType[] => {
+  const docs: DocType[] = [];
+  if (node.type === 'file' && node.doc) docs.push(node.doc);
+  for (const child of Object.values(node.children)) docs.push(...collectTreeDocs(child));
+  return docs;
+};
+
+const SidebarTreeItem: React.FC<{
+  node: SidebarTreeNode;
+  level: number;
+  activeDocId: string;
+  annotationCounts: Record<string, number>;
+  onSwitchDocument: (doc: DocType) => void;
+}> = ({ node, level, activeDocId, annotationCounts, onSwitchDocument }) => {
+  const [isOpen, setIsOpen] = useState(true);
+
+  if (node.type === 'file' && node.doc) {
+    const priority = node.doc.priority || 'unreviewed';
+    const isActive = node.doc.id === activeDocId;
+    const annCount = annotationCounts[node.doc.id] || 0;
+    return (
+      <button
+        onClick={() => onSwitchDocument(node.doc!)}
+        className={`w-full text-left flex items-center gap-1.5 py-1 px-1.5 rounded-md transition-colors text-[11px] ${isActive ? 'bg-indigo-600/20 text-indigo-300 font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-300'}`}
+        style={{ paddingLeft: `${level * 12 + 6}px`, borderLeft: `2px solid ${PRIORITY_CONFIG[priority].color}` }}
+      >
+        <FileTextIcon className="w-3 h-3 shrink-0" />
+        <span className="truncate flex-1">{node.doc.name}</span>
+        {annCount > 0 && (
+          <span className="text-[9px] text-slate-500 bg-slate-800 px-1 py-0.5 rounded-full shrink-0">{annCount}</span>
+        )}
+      </button>
+    );
+  }
+
+  const hasChildren = Object.keys(node.children).length > 0;
+  const folderDocs = collectTreeDocs(node);
+  const folderAnnCount = folderDocs.reduce((sum, d) => sum + (annotationCounts[d.id] || 0), 0);
+
+  return (
+    <div>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full text-left flex items-center gap-1.5 py-1 px-1.5 rounded-md text-[11px] text-slate-500 hover:text-slate-300 hover:bg-slate-800/50 transition-colors"
+        style={{ paddingLeft: `${level * 12 + 4}px` }}
+      >
+        <ChevronRightSmIcon className={`w-3 h-3 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+        {isOpen ? <FolderOpenIcon className="w-3 h-3 shrink-0 text-amber-500/70" /> : <FolderIcon className="w-3 h-3 shrink-0 text-amber-500/70" />}
+        <span className="truncate flex-1 font-medium">{node.name}</span>
+        {folderAnnCount > 0 && (
+          <span className="text-[9px] text-slate-600 shrink-0">{folderAnnCount}</span>
+        )}
+      </button>
+      {isOpen && hasChildren && (
+        <div>
+          {Object.keys(node.children)
+            .sort((a, b) => {
+              const na = node.children[a], nb = node.children[b];
+              if (na.type !== nb.type) return na.type === 'folder' ? -1 : 1;
+              return a.localeCompare(b);
+            })
+            .map(key => (
+              <SidebarTreeItem
+                key={node.children[key].path}
+                node={node.children[key]}
+                level={level + 1}
+                activeDocId={activeDocId}
+                annotationCounts={annotationCounts}
+                onSwitchDocument={onSwitchDocument}
+              />
+            ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 
 interface DocumentViewerProps {
@@ -1098,6 +1218,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const totalReviewable = reviewableDocs.length;
   const progressPct = totalReviewable > 0 ? Math.round((reviewedCount / totalReviewable) * 100) : 0;
 
+  const sidebarTree = React.useMemo(() => {
+    return buildSidebarTree(allDocuments, caseItem?.virtualFolders);
+  }, [allDocuments, caseItem?.virtualFolders]);
+
   const currentPriority: DocumentPriority = doc.priority || 'unreviewed';
   const priorities: DocumentPriority[] = ['critical', 'notable', 'supplemental', 'unreviewed'];
 
@@ -1118,27 +1242,24 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
             <p className="text-[10px] text-slate-600 mt-1">{reviewedCount} of {totalReviewable} reviewed</p>
           </div>
 
-          {/* File list */}
+          {/* File tree */}
           <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-            {reviewableDocs.map(d => {
-              const priority = d.priority || 'unreviewed';
-              const isActive = d.id === doc.id;
-              const annCount = reviewAnnotationCounts[d.id] || 0;
-              return (
-                <button
-                  key={d.id}
-                  onClick={() => onSwitchDocument?.(d)}
-                  className={`w-full text-left flex items-center gap-2 py-1.5 px-2 rounded-lg transition-colors text-xs ${isActive ? 'bg-indigo-600/20 text-indigo-300 font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-300'}`}
-                  style={{ borderLeft: `3px solid ${PRIORITY_CONFIG[priority].color}` }}
-                >
-                  <FileTextIcon className="w-3 h-3 shrink-0" />
-                  <span className="truncate flex-1">{d.name}</span>
-                  {annCount > 0 && (
-                    <span className="text-[9px] text-slate-500 bg-slate-800 px-1 py-0.5 rounded-full shrink-0">{annCount}</span>
-                  )}
-                </button>
-              );
-            })}
+            {Object.keys(sidebarTree)
+              .sort((a, b) => {
+                const na = sidebarTree[a], nb = sidebarTree[b];
+                if (na.type !== nb.type) return na.type === 'folder' ? -1 : 1;
+                return a.localeCompare(b);
+              })
+              .map(key => (
+                <SidebarTreeItem
+                  key={sidebarTree[key].path}
+                  node={sidebarTree[key]}
+                  level={0}
+                  activeDocId={doc.id}
+                  annotationCounts={reviewAnnotationCounts}
+                  onSwitchDocument={(d) => onSwitchDocument?.(d)}
+                />
+              ))}
           </div>
         </div>
       )}

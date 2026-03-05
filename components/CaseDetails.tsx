@@ -37,7 +37,8 @@ import {
   CheckSquareIcon,
   SquareIcon,
   LinkIcon,
-  GlobeIcon
+  GlobeIcon,
+  MessageSquareIcon
 } from 'lucide-react';
 import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, BillingEntry, DocumentPriority, PRIORITY_CONFIG, Annotation } from '../types';
 // Google Drive viewer support kept for viewing previously-imported Drive studies
@@ -294,6 +295,13 @@ const FileTreeItem: React.FC<{
             })()}
           </div>
         </div>
+
+        {/* Per-file annotation count */}
+        {annotationCounts && (annotationCounts[node.doc.id] || 0) > 0 && (
+          <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full shrink-0">
+            {annotationCounts[node.doc.id]} <MessageSquareIcon className="w-2.5 h-2.5 inline -mt-0.5" />
+          </span>
+        )}
 
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           <button
