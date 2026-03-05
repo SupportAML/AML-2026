@@ -31,45 +31,7 @@ import {
   wadouri,
 } from '@cornerstonejs/dicom-image-loader';
 
-import { parseDicomFile, type DicomMeta } from '../services/dicomParserService';
-
-// ============================================================
-// DICOM file filtering (shared logic)
-// ============================================================
-const NON_DICOM_EXT = new Set([
-  'inf', 'ini', 'txt', 'exe', 'dll', 'sys', 'bat', 'cmd', 'com', 'msi',
-  'config', 'cfg', 'conf', 'reg', 'manifest', 'pdb', 'plist',
-  'html', 'htm', 'css', 'js', 'json', 'xml', 'log', 'yaml', 'yml', 'csv',
-  'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'svg', 'ico', 'webp',
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'rtf', 'odt',
-  'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'cab',
-  'mp3', 'mp4', 'avi', 'mov', 'wmv', 'wav', 'flac', 'mkv', 'webm',
-  'db', 'sqlite', 'mdb', 'lnk', 'url', 'desktop', 'iso',
-  'ds_store', 'thumbs', 'tmp', 'bak', 'old', 'swp',
-]);
-
-function isProbablyDicom(file: File): boolean {
-  const name = file.name;
-  if (name.startsWith('.') || name === 'Thumbs.db' || name === 'desktop.ini') return false;
-  if (name.toUpperCase() === 'DICOMDIR') return false;
-  if (file.size < 200) return false;
-  const parts = name.split('.');
-  if (parts.length > 1) {
-    for (let i = 1; i < parts.length; i++) {
-      if (NON_DICOM_EXT.has(parts[i].toLowerCase())) return false;
-    }
-  }
-  return true;
-}
-
-async function isDicomFile(file: File): Promise<boolean> {
-  if (!isProbablyDicom(file)) return false;
-  try {
-    const header = await file.slice(0, 132).arrayBuffer();
-    const view = new Uint8Array(header);
-    return view[128] === 0x44 && view[129] === 0x49 && view[130] === 0x43 && view[131] === 0x4D;
-  } catch { return false; }
-}
+import { parseDicomFile, isDicomCandidate, type DicomMeta } from '../services/dicomParserService';
 
 // ============================================================
 // Study/Series types
@@ -449,15 +411,18 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
     setIsProcessing(true);
     const arr = Array.from(fileList);
     const BATCH = 50;
-    const validFiles: { file: File; imageId: string }[] = [];
+
+    // Step 1: Register valid DICOM files with Cornerstone and parse their metadata
+    type FileEntry = { file: File; imageId: string; meta: DicomMeta | null };
+    const validFiles: FileEntry[] = [];
 
     for (let i = 0; i < arr.length; i += BATCH) {
       const batch = arr.slice(i, i + BATCH);
       for (let j = 0; j < batch.length; j++) {
-        if (!isProbablyDicom(batch[j])) continue;
+        if (!isDicomCandidate(batch[j])) continue;
         try {
           const imageId = wadouri.fileManager.add(batch[j]);
-          validFiles.push({ file: batch[j], imageId });
+          validFiles.push({ file: batch[j], imageId, meta: null });
         } catch {
           // File couldn't be registered — skip silently
         }
@@ -469,8 +434,8 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       return;
     }
 
-    // Parse into study/series hierarchy
-    const folderMap = new Map<string, { file: File; imageId: string }[]>();
+    // Step 2: Group by folder first, then parse one file per folder for metadata
+    const folderMap = new Map<string, FileEntry[]>();
     for (const vf of validFiles) {
       const relPath = (vf.file as any).webkitRelativePath || vf.file.name;
       const parts = relPath.split('/');
@@ -479,90 +444,138 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       folderMap.get(folderPath)!.push(vf);
     }
 
-    const studyMap = new Map<string, Map<string, { file: File; imageId: string }[]>>();
-    for (const [fp, ff] of folderMap) {
-      const parts = fp.split('/');
-      const studyKey = parts.length >= 2 ? parts.slice(0, 2).join('/') : parts[0];
-      if (!studyMap.has(studyKey)) studyMap.set(studyKey, new Map());
-      const sm = studyMap.get(studyKey)!;
-      const ex = sm.get(fp);
-      if (ex) ex.push(...ff); else sm.set(fp, ff);
+    // Parse metadata from first file of each folder and apply to all files in that folder
+    const folderMeta = new Map<string, DicomMeta>();
+    for (const [folderPath, entries] of folderMap) {
+      for (let i = 0; i < Math.min(3, entries.length); i++) {
+        try {
+          const meta = await parseDicomFile(entries[i].file);
+          if (meta) {
+            folderMeta.set(folderPath, meta);
+            // Apply metadata to all entries in this folder
+            for (const entry of entries) entry.meta = meta;
+            break;
+          }
+        } catch {}
+      }
     }
 
+    // Step 3: Group by Study Instance UID (from metadata), falling back to folder path
+    const studyBuckets = new Map<string, Map<string, FileEntry[]>>(); // studyKey → seriesKey → entries
+    const studyMetaMap = new Map<string, DicomMeta>(); // studyKey → metadata
+
+    for (const [folderPath, entries] of folderMap) {
+      const meta = folderMeta.get(folderPath);
+      const studyKey = meta?.studyInstanceUid || `folder:${folderPath.split('/').slice(0, 2).join('/')}`;
+      const seriesKey = meta?.seriesInstanceUid || `folder:${folderPath}`;
+
+      if (!studyBuckets.has(studyKey)) {
+        studyBuckets.set(studyKey, new Map());
+        if (meta) studyMetaMap.set(studyKey, meta);
+      }
+
+      const seriesMap = studyBuckets.get(studyKey)!;
+      const existing = seriesMap.get(seriesKey);
+      if (existing) existing.push(...entries);
+      else seriesMap.set(seriesKey, [...entries]);
+
+      // Merge metadata if this folder has richer info
+      if (meta && studyMetaMap.has(studyKey)) {
+        const existing = studyMetaMap.get(studyKey)!;
+        if (!existing.patientName && meta.patientName) existing.patientName = meta.patientName;
+        if (!existing.studyDescription && meta.studyDescription) existing.studyDescription = meta.studyDescription;
+        if (!existing.modality && meta.modality) existing.modality = meta.modality;
+        if (!existing.studyDate && meta.studyDate) existing.studyDate = meta.studyDate;
+      }
+    }
+
+    // Step 4: Build ViewerStudy/ViewerSeries hierarchy
     const parsedStudies: ViewerStudy[] = [];
     let idx = 0;
-    for (const [sp, sm] of studyMap) {
+    for (const [studyKey, seriesMap] of studyBuckets) {
+      const sMeta = studyMetaMap.get(studyKey);
       const seriesList: ViewerSeries[] = [];
       let total = 0;
       let si = 0;
-      for (const [serPath, serFiles] of sm) {
-        serFiles.sort((a, b) => {
+
+      for (const [seriesKey, entries] of seriesMap) {
+        entries.sort((a, b) => {
           const ap = (a.file as any).webkitRelativePath || a.file.name;
           const bp = (b.file as any).webkitRelativePath || b.file.name;
           return ap.localeCompare(bp, undefined, { numeric: true });
         });
-        const pp = serPath.split('/');
+
+        // Derive series display name from metadata
+        const entryMeta = entries[0]?.meta;
+        let seriesDisplayName: string;
+        if (entryMeta?.seriesDescription) {
+          seriesDisplayName = entryMeta.seriesDescription;
+        } else if (entryMeta?.modality) {
+          seriesDisplayName = `${entryMeta.modality} Series ${si + 1}`;
+        } else {
+          const pp = seriesKey.replace('folder:', '').split('/');
+          seriesDisplayName = pp[pp.length - 1] || `Series ${si + 1}`;
+        }
+
         seriesList.push({
           id: `s${idx}-${si}`,
-          folderPath: serPath,
-          displayName: pp[pp.length - 1],
-          files: serFiles.map(sf => sf.file),
-          imageIds: serFiles.map(sf => sf.imageId),
-          fileCount: serFiles.length,
+          folderPath: seriesKey.replace('folder:', ''),
+          displayName: seriesDisplayName,
+          files: entries.map(e => e.file),
+          imageIds: entries.map(e => e.imageId),
+          fileCount: entries.length,
+          modality: entryMeta?.modality,
+          seriesDescription: entryMeta?.seriesDescription,
         });
-        total += serFiles.length;
+        total += entries.length;
         si++;
       }
-      const pp = sp.split('/');
+
+      // Derive study display name from metadata
+      let studyDisplayName: string;
+      if (sMeta?.studyDescription) {
+        studyDisplayName = sMeta.studyDescription;
+      } else if (sMeta?.modality) {
+        studyDisplayName = seriesList.length > 1 ? `${sMeta.modality} Study` : sMeta.modality;
+      } else {
+        const pp = studyKey.replace('folder:', '').split('/');
+        const folderName = pp[pp.length - 1] || pp[0];
+        studyDisplayName = /^\d+$/.test(folderName) ? `Study ${idx + 1}` : folderName;
+      }
+
       parsedStudies.push({
         id: `st${idx}`,
-        folderPath: sp,
-        displayName: pp[pp.length - 1] || pp[0],
+        folderPath: studyKey.replace('folder:', ''),
+        displayName: studyDisplayName,
         series: seriesList,
         totalFiles: total,
         isExpanded: true,
+        patientName: sMeta?.patientName,
+        studyDate: sMeta?.studyDate,
+        modality: sMeta?.modality,
+        studyDescription: sMeta?.studyDescription,
       });
       idx++;
     }
 
-    // Extract DICOM metadata from first file of each study to populate sidebar names
+    // Step 5: For studies with multiple series, parse each series' first file
+    // to get series-specific metadata (may differ from the study-level sample)
     for (const study of parsedStudies) {
-      const firstFile = study.series[0]?.files[0];
-      if (!firstFile) continue;
-      try {
-        const meta = await parseDicomFile(firstFile);
-        if (meta) {
-          if (meta.studyDescription) {
-            study.displayName = meta.studyDescription;
-          } else if (meta.modality) {
-            study.displayName = study.series.length > 1
-              ? `${meta.modality} Study`
-              : meta.modality;
+      if (study.series.length <= 1) continue;
+      for (const series of study.series) {
+        if (series.seriesDescription) continue; // Already has metadata
+        const firstFile = series.files[0];
+        if (!firstFile) continue;
+        try {
+          const meta = await parseDicomFile(firstFile);
+          if (meta?.seriesDescription) {
+            series.displayName = meta.seriesDescription;
+            series.modality = meta.modality;
+            series.seriesDescription = meta.seriesDescription;
+          } else if (meta?.modality && !series.modality) {
+            series.modality = meta.modality;
           }
-          study.patientName = meta.patientName;
-          study.studyDate = meta.studyDate;
-          study.modality = meta.modality;
-          study.studyDescription = meta.studyDescription;
-
-          // Update series display names from metadata
-          for (const series of study.series) {
-            const seriesFile = series.files[0];
-            if (seriesFile && seriesFile !== firstFile) {
-              try {
-                const seriesMeta = await parseDicomFile(seriesFile);
-                if (seriesMeta?.seriesDescription) {
-                  series.displayName = seriesMeta.seriesDescription;
-                  series.modality = seriesMeta.modality;
-                }
-              } catch {}
-            } else if (meta.seriesDescription) {
-              series.displayName = meta.seriesDescription;
-              series.modality = meta.modality;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[DicomStudyViewer] Failed to extract metadata for study:', study.folderPath, e);
+        } catch {}
       }
     }
 
