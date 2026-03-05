@@ -102,3 +102,42 @@ export const extractPdfTextForAnnotations = async (
 
   return blocks.join('\n\n');
 };
+
+/**
+ * Extract text from a PDF URL (e.g., a CV). Does not require annotations.
+ * Returns the extracted text up to the given character limit.
+ */
+export const extractPdfTextFromUrl = async (
+  url: string,
+  charLimit: number = 15000
+): Promise<string> => {
+  try {
+    const response = await fetch(url, { mode: 'cors', credentials: 'omit' });
+    if (!response.ok) throw new Error(`Failed to fetch PDF: ${response.status}`);
+    const arrayBuffer = await response.arrayBuffer();
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer.slice(0),
+      cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${(pdfjsLib as any).version}/cmaps/`,
+      cMapPacked: true,
+    });
+    const pdf = await loadingTask.promise;
+
+    let text = '';
+    for (let i = 1; i <= pdf.numPages && text.length < charLimit; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = (content.items as any[])
+        .map(item => item.str)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      text += (text ? '\n\n' : '') + pageText;
+    }
+
+    return text.slice(0, charLimit);
+  } catch (err) {
+    console.warn('CV PDF text extraction failed:', err);
+    return '';
+  }
+};

@@ -18,6 +18,7 @@ export interface CaseContext {
   clinicalNotes: string;
   currentDraft: string;
   writerComments?: string;
+  cvContent?: string;
 }
 
 export interface SuggestionItem {
@@ -87,7 +88,8 @@ export const buildCaseContext = (
   pdfTextContext: string,
   currentUser: UserProfile,
   currentDraft: string,
-  writerComments?: string
+  writerComments?: string,
+  cvContent?: string
 ): CaseContext => {
   const docNameById = new Map(docs.map(d => [d.id, d.name]));
 
@@ -130,6 +132,7 @@ export const buildCaseContext = (
     clinicalNotes: caseData.additionalContext || '',
     currentDraft: currentDraft || '',
     writerComments: writerComments || '',
+    cvContent: cvContent || '',
   };
 };
 

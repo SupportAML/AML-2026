@@ -101,7 +101,9 @@ export default async function handler(req, res) {
     '2) Do NOT fabricate facts; if a detail is missing, state it as a limitation.',
     '3) Be thorough and comprehensive. Do not be overly concise.',
     '4) Prefer narrative paragraphs over bullet-only sections unless the template demands bullets.',
-    '5) If asked to include U.S. expert disclosure elements, list them and mark missing items as \'Not provided\'.'
+    '5) If asked to include U.S. expert disclosure elements, list them and mark missing items as \'Not provided\'.',
+    '6) If a CV/Curriculum Vitae is provided, write a brief qualifying paragraph early in the report establishing the expert\'s credentials relevant to this specific case type. Pull specific relevant experience, certifications, publications, and training from the CV.',
+    '7) If screenshot or image references are provided, incorporate them as numbered figures (e.g., "See Figure 1") at logically appropriate locations in the report body.'
   ].join('\n');
 
   const userPrompt = `
@@ -126,6 +128,9 @@ FORMAT REQUIREMENTS (match the example style):
 
 **EXPERT CREDENTIALS:**
 ${caseContext.qualifications || 'Medical Expert'}
+
+**EXPERT CV / CURRICULUM VITAE:**
+${caseContext.cvContent || 'Not provided — use the credentials above.'}
 
 **DOCUMENTS REVIEWED:**
 ${caseContext.documents || 'No documents listed'}
