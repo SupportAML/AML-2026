@@ -186,6 +186,8 @@ export interface ResearchArticle {
   summary: string;
   url: string;
   citation: string;
+  pdfUrl?: string;
+  pmcId?: string;
 }
 
 export interface ResearchGap {
