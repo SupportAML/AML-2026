@@ -253,7 +253,9 @@ export interface InvitationToken {
   status: 'active' | 'expired' | 'used' | 'revoked';
 }
 
-export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'other';
+export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';
+
+export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'dicom-annotation' | 'other';
 
 export type DocumentPriority = 'critical' | 'notable' | 'supplemental' | 'unreviewed';
 
@@ -333,6 +335,7 @@ export enum ViewMode {
   PROFILE = 'PROFILE',
   TEAM_ADMIN = 'TEAM_ADMIN',
   ADMIN_INSIGHTS = 'ADMIN_INSIGHTS',
-  SETTINGS = 'SETTINGS'
+  SETTINGS = 'SETTINGS',
+  DICOM_VIEWER = 'DICOM_VIEWER'
 }
 

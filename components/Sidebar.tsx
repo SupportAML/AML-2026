@@ -24,7 +24,8 @@ import {
   UserIcon,
   SparklesIcon,
   PanelLeftCloseIcon,
-  PanelLeftOpenIcon
+  PanelLeftOpenIcon,
+  ScanIcon
 } from 'lucide-react';
 import { ViewMode, Case, UserProfile, AuthorizedUser, UserRole } from '../types';
 
@@ -211,6 +212,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                 />
               </>
             )}
+            <NavItem
+              icon={ScanIcon}
+              label="DICOM Viewer"
+              active={currentView === ViewMode.DICOM_VIEWER}
+              onClick={() => setView(ViewMode.DICOM_VIEWER)}
+            />
           </div>
         </nav>
       </div>

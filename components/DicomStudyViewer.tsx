@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import {
   XIcon, MaximizeIcon, MinimizeIcon, CameraIcon,
   SunIcon, MoveIcon, LayersIcon, InfoIcon,
-  ChevronRightIcon, ChevronDownIcon, FolderIcon,
+  ChevronRightIcon, ChevronDownIcon, FolderIcon, FolderOpenIcon,
   ImageIcon, Loader2Icon, RotateCcwIcon,
   CheckIcon, SaveIcon
 } from 'lucide-react';
@@ -156,6 +156,9 @@ export interface DicomAnnotationData {
   studyName: string;
   studyDate: string;
   patientInfo: string;
+  caseId?: string;
+  modality?: string;
+  sliceInfo?: string;
 }
 
 interface DicomStudyViewerProps {
@@ -164,6 +167,8 @@ interface DicomStudyViewerProps {
   onSaveAnnotation?: (data: DicomAnnotationData) => void;
   caseId: string;
   authorName: string;
+  cases?: Array<{ id: string; title: string; status: string }>;
+  onSelectNewFolder?: () => void;
 }
 
 // ============================================================
@@ -172,7 +177,7 @@ interface DicomStudyViewerProps {
 let instanceCounter = 0;
 
 const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
-  files, onClose, onSaveAnnotation, caseId, authorName
+  files, onClose, onSaveAnnotation, caseId, authorName, cases, onSelectNewFolder
 }) => {
   const idsRef = useRef(() => {
     const id = ++instanceCounter;
@@ -203,6 +208,10 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   const [showAnnotationDialog, setShowAnnotationDialog] = useState(false);
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [annotationText, setAnnotationText] = useState('');
+  const [selectedCaseId, setSelectedCaseId] = useState(() => {
+    const stored = localStorage.getItem('dicom-last-case-id');
+    return stored && cases?.some(c => c.id === stored) ? stored : '';
+  });
 
   const viewportDivRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
@@ -681,6 +690,10 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   // ===== Save annotation =====
   const handleSaveAnnotation = useCallback(() => {
     if (!screenshotDataUrl || !onSaveAnnotation) return;
+    if (cases && cases.length > 0 && !selectedCaseId) {
+      alert('Please select a case to attach this annotation to.');
+      return;
+    }
     onSaveAnnotation({
       imageUrl: screenshotDataUrl,
       text: annotationText || 'DICOM Key Image',
@@ -691,11 +704,15 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
         studyMeta?.patientId ? `ID: ${studyMeta.patientId}` : null,
         studyMeta?.modality,
       ].filter(Boolean).join(' | ') || 'Unknown Patient',
+      caseId: selectedCaseId || caseId,
+      modality: studyMeta?.modality || undefined,
+      sliceInfo: totalSlices > 1 ? `${currentSlice} of ${totalSlices}` : undefined,
     });
+    if (selectedCaseId) localStorage.setItem('dicom-last-case-id', selectedCaseId);
     setShowAnnotationDialog(false);
     setScreenshotDataUrl(null);
     setAnnotationText('');
-  }, [screenshotDataUrl, annotationText, studyMeta, activeSeries, onSaveAnnotation]);
+  }, [screenshotDataUrl, annotationText, studyMeta, activeSeries, onSaveAnnotation, selectedCaseId, caseId, cases, totalSlices, currentSlice]);
 
   // ===== Toggle study expansion =====
   const toggleStudy = (id: string) => {
@@ -783,6 +800,15 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
             <span className="text-[11px] text-cyan-400 font-mono mr-2">
               W:{wlDisplay.w} L:{wlDisplay.l}
             </span>
+          )}
+          {onSelectNewFolder && (
+            <button
+              onClick={onSelectNewFolder}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-all text-[11px] font-medium"
+              title="Select New DICOM Folder"
+            >
+              <FolderOpenIcon className="w-3.5 h-3.5" /> New Folder
+            </button>
           )}
           <button
             onClick={handleResetView}
@@ -1103,6 +1129,22 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
                 {studyMeta?.modality && <div><span className="text-slate-500">Modality:</span> {studyMeta.modality}</div>}
                 {totalSlices > 1 && <div><span className="text-slate-500">Slice:</span> {currentSlice} of {totalSlices}</div>}
               </div>
+              {/* Case selector */}
+              {cases && cases.length > 0 && (
+                <div className="mb-4">
+                  <label className="block text-xs font-bold text-slate-400 mb-1.5">Attach to Case</label>
+                  <select
+                    value={selectedCaseId}
+                    onChange={(e) => setSelectedCaseId(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                  >
+                    <option value="">— Select a case —</option>
+                    {cases.map(c => (
+                      <option key={c.id} value={c.id}>{c.title}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {/* Annotation text */}
               <label className="block text-xs font-bold text-slate-400 mb-1.5">Annotation Note</label>
               <textarea

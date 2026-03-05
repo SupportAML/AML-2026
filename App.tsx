@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut, signInAnonymously, updateProfile } from "firebase/auth";
-import { auth } from './firebase';
-import { Case, Document, DocumentFileType, DicomStudyRecord, Annotation, ViewMode, UserProfile, AuthorizedUser, UserRole } from './types';
+import { auth, storage } from './firebase';
+import { Case, Document, DocumentFileType, DicomStudyRecord, Annotation, ViewMode, UserProfile, AuthorizedUser, ReviewStatus, UserRole } from './types';
 import Sidebar from './components/Sidebar';
 const CaseList = React.lazy(() => import('./components/CaseList'));
 const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
@@ -17,9 +17,11 @@ const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup'
 const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
+const DicomViewerPage = React.lazy(() => import('./components/DicomViewerPage'));
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { createDriveFolder, getFileDownloadUrl } from './services/googleDriveService';
 import {
   subscribeToCases,
@@ -477,61 +479,129 @@ const App: React.FC = () => {
     }
   };
 
-  // Save DICOM screenshot annotation
-  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => {
-    if (!activeCase) return;
-
-    // Convert base64 data URL to a File for upload to Firebase Storage
-    const res = await fetch(data.imageUrl);
-    const blob = await res.blob();
-    const fileName = `DICOM_Screenshot_${data.studyName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`;
-    const file = new File([blob], fileName, { type: 'image/png' });
-
-    // Upload to Firebase Storage (fall back to data URL if upload fails)
-    let fileUrl = data.imageUrl;
-    let storagePath: string | undefined;
-    try {
-      const result = await uploadFile(activeCase.id, file);
-      fileUrl = result.url;
-      storagePath = result.storagePath;
-    } catch (e) {
-      console.warn('[DICOM Screenshot] Storage upload failed, using data URL:', e);
+  // Save DICOM screenshot annotation as a PDF with embedded image + metadata,
+  // then create an initial annotation so it flows into the fact matrix & legal writer.
+  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string; caseId?: string; modality?: string; sliceInfo?: string }) => {
+    const targetCaseId = data.caseId || activeCase?.id;
+    if (!targetCaseId) {
+      alert('No case selected — please select a case before saving.');
+      return;
     }
 
-    // Create Document record so the screenshot appears in Case Files
-    const docId = Math.random().toString(36).substr(2, 9);
-    const newDoc: Document = {
-      id: docId,
-      caseId: activeCase.id,
-      name: fileName,
-      type: 'image',
-      mimeType: 'image/png',
-      url: fileUrl,
-      storagePath,
-      uploadDate: new Date().toISOString(),
-      size: (blob.size / 1024).toFixed(1) + ' KB',
-      priority: 'unreviewed',
-      path: 'DICOM Screenshots',
-    };
-    await upsertDocument(newDoc);
+    try {
+      const { default: jsPDF } = await import('jspdf');
+      const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
+      const displayName = `DICOM \u2013 ${data.studyName} \u2013 ${data.studyDate}`;
 
-    // Create Annotation record linked to the Document
-    const annotation: Annotation = {
-      id: Math.random().toString(36).substr(2, 9),
-      documentId: docId,
-      caseId: activeCase.id,
-      page: 0,
-      text: `[DICOM Key Image] ${data.text}\nStudy: ${data.studyName}\nDate: ${data.studyDate}\nPatient: ${data.patientInfo}`,
-      author: currentUser?.name || 'Unknown',
-      timestamp: new Date().toISOString(),
-      eventDate: data.studyDate,
-      category: 'Medical',
-      x: 0,
-      y: 0,
-      type: 'area',
-      imageUrl: fileUrl,
-    };
-    upsertAnnotation(annotation);
+      // --- Build PDF with screenshot + metadata header ---
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 36; // 0.5 inch
+
+      // Header bar
+      pdf.setFillColor(15, 23, 42); // slate-900
+      pdf.rect(0, 0, pageW, 54, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(displayName, margin, 22);
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      const metaParts: string[] = [];
+      if (data.patientInfo) metaParts.push(`Patient: ${data.patientInfo}`);
+      if (data.modality) metaParts.push(`Modality: ${data.modality}`);
+      if (data.sliceInfo) metaParts.push(`Slice: ${data.sliceInfo}`);
+      metaParts.push(`Date: ${data.studyDate}`);
+      pdf.text(metaParts.join('  |  '), margin, 42);
+
+      // Embed the JPEG screenshot
+      const imgY = 66;
+      const maxImgW = pageW - margin * 2;
+      const maxImgH = pageH - imgY - margin - 50; // leave room for annotation text
+      try {
+        pdf.addImage(data.imageUrl, 'JPEG', margin, imgY, maxImgW, maxImgH, undefined, 'FAST');
+      } catch {
+        // If addImage fails (e.g. data URL format issue), try as PNG
+        pdf.addImage(data.imageUrl, 'PNG', margin, imgY, maxImgW, maxImgH, undefined, 'FAST');
+      }
+
+      // Annotation note at the bottom
+      if (data.text) {
+        const noteY = pageH - margin - 14;
+        pdf.setTextColor(100, 116, 139); // slate-500
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'italic');
+        pdf.text(`Note: ${data.text}`, margin, noteY, { maxWidth: maxImgW });
+      }
+
+      // Generate PDF blob
+      const pdfBlob = pdf.output('blob');
+
+      // --- Upload PDF to Firebase Storage ---
+      let fileUrl = '';
+      let storagePath = `cases/${targetCaseId}/dicom-annotations/${Date.now()}_${safeName}.pdf`;
+      try {
+        const storageRef = ref(storage, storagePath);
+        const uploadTask = uploadBytesResumable(storageRef, pdfBlob, {
+          contentType: 'application/pdf',
+          customMetadata: { uploadedAt: new Date().toISOString() }
+        });
+        await new Promise<void>((resolve, reject) => {
+          uploadTask.on('state_changed', null, reject, () => resolve());
+        });
+        fileUrl = await getDownloadURL(storageRef);
+      } catch (e) {
+        console.warn('[DICOM Annotation] PDF upload failed:', e);
+        storagePath = '';
+        // Fallback: create object URL (won't persist across sessions)
+        fileUrl = URL.createObjectURL(pdfBlob);
+      }
+
+      // --- Save as a PDF document in Case Files ---
+      const docId = Math.random().toString(36).substr(2, 9);
+      const newDoc: Document = {
+        id: docId,
+        caseId: targetCaseId,
+        name: displayName,
+        type: 'pdf' as DocumentFileType,
+        mimeType: 'application/pdf',
+        url: fileUrl,
+        storagePath: storagePath || undefined,
+        uploadDate: new Date().toISOString(),
+        size: (pdfBlob.size / 1024).toFixed(1) + ' KB',
+        reviewStatus: 'pending',
+        path: 'DICOM Annotations',
+      };
+      await upsertDocument(newDoc);
+
+      // --- Create an initial annotation on the PDF (page 1) ---
+      // This links the DICOM finding into the fact matrix & legal writer.
+      const annId = Math.random().toString(36).substr(2, 9);
+      const category = data.modality?.toUpperCase().includes('PATH') ? 'Legal' : 'Medical';
+      const annText = data.text || `Key Image: ${data.studyName}`;
+      const newAnnotation: Annotation = {
+        id: annId,
+        documentId: docId,
+        caseId: targetCaseId,
+        page: 1,
+        text: annText,
+        author: currentUser?.name || 'Expert User',
+        category,
+        x: 0.5,
+        y: 0.5,
+        timestamp: new Date().toLocaleString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+        type: 'point',
+        eventDate: data.studyDate || undefined,
+      };
+      await upsertAnnotation(newAnnotation);
+
+      const targetCase = cases.find(c => c.id === targetCaseId);
+      alert(`DICOM annotation saved as PDF to "${targetCase?.title || 'case'}". It will appear in the Fact Matrix.`);
+    } catch (e: any) {
+      console.error('[DICOM Annotation] Save failed:', e);
+      alert('Failed to save annotation: ' + (e?.message || String(e)));
+    }
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
@@ -989,6 +1059,7 @@ const App: React.FC = () => {
                 {viewMode === ViewMode.TEAM_ADMIN && "Firm Administration"}
                 {viewMode === ViewMode.ADMIN_INSIGHTS && "Admin Intelligence"}
                 {viewMode === ViewMode.SETTINGS && "Platform Settings"}
+                {viewMode === ViewMode.DICOM_VIEWER && "DICOM Viewer"}
               </h1>
               <div className={`flex items-center gap-2 px-2.5 py-1 rounded font-black text-[9px] uppercase tracking-widest ${isDemoUser ? 'bg-emerald-100 text-emerald-700' : 'bg-emerald-50 text-emerald-600'}`}>
                 {isDemoUser ? "SANDBOX" : "Firebase Realtime"}
@@ -1033,7 +1104,6 @@ const App: React.FC = () => {
                   onDeleteDoc={deleteDocumentFromStore}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-                  onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
                 />
@@ -1196,6 +1266,13 @@ const App: React.FC = () => {
               )}
               {viewMode === ViewMode.SETTINGS && (
                 <Settings currentUser={currentUser} />
+              )}
+              {viewMode === ViewMode.DICOM_VIEWER && currentUser && (
+                <DicomViewerPage
+                  cases={cases}
+                  currentUser={currentUser}
+                  onSaveAnnotation={handleSaveDicomAnnotation}
+                />
               )}
             </React.Suspense>
           </div>
