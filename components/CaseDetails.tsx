@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, lazy, Suspense } from 'react';
 import {
   FileTextIcon,
   UploadIcon,
@@ -110,6 +110,8 @@ interface CaseDetailsProps {
   onDeleteDoc: (docId: string) => void;
   onUpdateDoc: (doc: Document) => void;
   onOpenAnalysis: () => void;
+  onUpdateDocStatus?: (docId: string, status: ReviewStatus) => void;
+  onSaveDicomAnnotation?: (data: any) => void;
   googleAccessToken?: string | null;
   onRequestDriveAuth?: () => Promise<string | null>;
 }
