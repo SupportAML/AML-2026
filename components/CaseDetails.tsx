@@ -37,9 +37,10 @@ import {
   CheckSquareIcon,
   SquareIcon,
   LinkIcon,
-  GlobeIcon
+  GlobeIcon,
+  MessageSquareIcon
 } from 'lucide-react';
-import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry } from '../types';
+import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, BillingEntry, DocumentPriority, PRIORITY_CONFIG, Annotation } from '../types';
 // Google Drive viewer support kept for viewing previously-imported Drive studies
 import { parseDicomFile, groupFilesByDicomStudy, isDicomCandidate, type DicomMeta } from '../services/dicomParserService';
 
@@ -102,6 +103,7 @@ interface CaseDetailsProps {
   docs: Document[];
   currentUser: UserProfile;
   allUsers: AuthorizedUser[];
+  annotations?: Annotation[];
   onAssignUser: (caseId: string, userId: string) => void;
   onRemoveUser: (caseId: string, userId: string) => void;
   onOpenDoc: (doc: Document) => void;
@@ -109,7 +111,6 @@ interface CaseDetailsProps {
   onUploadFolder: (caseId: string, files: FileList | File[]) => void;
   onUpdateCase: (updatedCase: Case) => Promise<void> | void;
   onDeleteDoc: (docId: string) => void;
-  onUpdateDocStatus: (docId: string, status: ReviewStatus) => void;
   onUpdateDoc: (doc: Document) => void;
   onOpenAnalysis: () => void;
   onSaveDicomAnnotation?: (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string }) => void;
@@ -126,12 +127,68 @@ interface TreeNode {
   isOpen?: boolean;
 }
 
+// Helper: collect all documents from a tree node (recursively)
+const collectDocsFromNode = (node: TreeNode): Document[] => {
+  const docs: Document[] = [];
+  if (node.type === 'file' && node.doc) docs.push(node.doc);
+  for (const child of Object.values(node.children)) {
+    docs.push(...collectDocsFromNode(child));
+  }
+  return docs;
+};
+
+// Helper: compute folder priority border segments
+const getFolderPriorityColors = (node: TreeNode): string[] => {
+  const docs = collectDocsFromNode(node);
+  if (docs.length === 0) return [PRIORITY_CONFIG.unreviewed.color];
+  const priorities = docs.map(d => d.priority || 'unreviewed');
+  const unique = [...new Set(priorities)];
+  return unique.map(p => PRIORITY_CONFIG[p].color);
+};
+
+// Inline priority dropdown for file rows
+const PriorityDropdown: React.FC<{
+  currentPriority: DocumentPriority;
+  onSelect: (p: DocumentPriority) => void;
+  onClose: () => void;
+}> = ({ currentPriority, onSelect, onClose }) => {
+  const priorities: DocumentPriority[] = ['critical', 'notable', 'supplemental', 'unreviewed'];
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div ref={ref} className="absolute right-0 top-full mt-1 z-[100] bg-white border border-slate-200 rounded-lg shadow-xl py-1 min-w-[160px] animate-in fade-in zoom-in-95 duration-100" onClick={(e) => e.stopPropagation()}>
+      {priorities.map(p => {
+        const cfg = PRIORITY_CONFIG[p];
+        const isActive = p === currentPriority;
+        return (
+          <button
+            key={p}
+            onClick={(e) => { e.stopPropagation(); onSelect(p); onClose(); }}
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-slate-50 transition-colors ${isActive ? 'bg-slate-50 font-semibold' : ''}`}
+          >
+            <span className="w-2.5 h-2.5 rounded-full shrink-0 ring-1 ring-black/10" style={{ backgroundColor: cfg.color }} />
+            <span className="text-slate-700">{cfg.label}</span>
+            {isActive && <CheckIcon className="w-3 h-3 text-indigo-600 ml-auto" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 const FileTreeItem: React.FC<{
   node: TreeNode;
   level: number;
   onOpenDoc: (d: Document) => void;
   onDeleteDoc: (id: string) => void;
-  onUpdateStatus: (id: string, status: ReviewStatus) => void;
   onRenameFile?: (docId: string, newName: string) => void;
   onRenameFolder?: (folderPath: string, newName: string) => void;
   onDeleteFolder?: (folderPath: string) => void;
@@ -142,11 +199,14 @@ const FileTreeItem: React.FC<{
   onToggleDocSelect?: (docId: string) => void;
   onToggleFolderSelect?: (path: string) => void;
   onConfirmDelete?: (type: 'file' | 'folder', id?: string, path?: string, name?: string) => void;
-}> = ({ node, level, onOpenDoc, onDeleteDoc, onUpdateStatus, onRenameFile, onRenameFolder, onDeleteFolder, onDragStartDoc, onDropOnFolder, isDocSelected, isFolderSelected, onToggleDocSelect, onToggleFolderSelect, onConfirmDelete }) => {
+  onUpdatePriority?: (docId: string, priority: DocumentPriority) => void;
+  annotationCounts?: Record<string, number>;
+}> = ({ node, level, onOpenDoc, onDeleteDoc, onRenameFile, onRenameFolder, onDeleteFolder, onDragStartDoc, onDropOnFolder, isDocSelected, isFolderSelected, onToggleDocSelect, onToggleFolderSelect, onConfirmDelete, onUpdatePriority, annotationCounts }) => {
   const [isOpen, setIsOpen] = useState(true);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(node.name);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [showPriorityDropdown, setShowPriorityDropdown] = useState(false);
   const renameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -172,11 +232,8 @@ const FileTreeItem: React.FC<{
   };
 
   if (node.type === 'file' && node.doc) {
-    const statusColor = {
-      'pending': 'text-slate-300',
-      'in_review': 'text-amber-500',
-      'reviewed': 'text-green-500'
-    };
+    const docPriority = node.doc.priority || 'unreviewed';
+    const priorityColor = PRIORITY_CONFIG[docPriority].color;
 
     const docSelected = isDocSelected?.(node.doc.id) ?? false;
     return (
@@ -184,7 +241,7 @@ const FileTreeItem: React.FC<{
         draggable
         onDragStart={(e) => onDragStartDoc?.(e, node.doc!.id)}
         className={`flex items-center gap-3 py-2 px-3 rounded-lg cursor-pointer transition-colors group ${docSelected ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}
-        style={{ paddingLeft: `${level * 20}px` }}
+        style={{ paddingLeft: `${level * 20}px`, borderLeft: `3px solid ${priorityColor}` }}
         onClick={() => !isRenaming && onOpenDoc(node.doc!)}
       >
         {onToggleDocSelect && (
@@ -236,9 +293,15 @@ const FileTreeItem: React.FC<{
               }
               return null;
             })()}
-            <CheckCircle2Icon className="w-3 h-3 text-slate-400" />
           </div>
         </div>
+
+        {/* Per-file annotation count */}
+        {annotationCounts && (annotationCounts[node.doc.id] || 0) > 0 && (
+          <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full shrink-0">
+            {annotationCounts[node.doc.id]} <MessageSquareIcon className="w-2.5 h-2.5 inline -mt-0.5" />
+          </span>
+        )}
 
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           <button
@@ -248,18 +311,23 @@ const FileTreeItem: React.FC<{
           >
             <PencilIcon className="w-3.5 h-3.5" />
           </button>
-          <button
-            onClick={() => {
-              const nextStatus: ReviewStatus = node.doc!.reviewStatus === 'pending' ? 'in_review' : node.doc!.reviewStatus === 'in_review' ? 'reviewed' : 'pending';
-              onUpdateStatus(node.doc!.id, nextStatus);
-            }}
-            className={`p-1.5 rounded-full hover:bg-slate-100 transition-colors ${statusColor[node.doc!.reviewStatus || 'pending']}`}
-            title={`Status: ${node.doc!.reviewStatus || 'pending'}`}
-          >
-            {(!node.doc!.reviewStatus || node.doc!.reviewStatus === 'pending') && <ClockIcon className="w-4 h-4" />}
-            {node.doc!.reviewStatus === 'in_review' && <EyeIcon className="w-4 h-4" />}
-            {node.doc!.reviewStatus === 'reviewed' && <CheckCircle2Icon className="w-4 h-4" />}
-          </button>
+          {/* Priority dot — always visible, click to open dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowPriorityDropdown(!showPriorityDropdown)}
+              className="p-1.5 rounded-full hover:bg-slate-100 transition-colors"
+              title={`Priority: ${PRIORITY_CONFIG[docPriority].label}`}
+            >
+              <span className="block w-3 h-3 rounded-full ring-1 ring-black/10" style={{ backgroundColor: priorityColor }} />
+            </button>
+            {showPriorityDropdown && onUpdatePriority && (
+              <PriorityDropdown
+                currentPriority={docPriority}
+                onSelect={(p) => onUpdatePriority(node.doc!.id, p)}
+                onClose={() => setShowPriorityDropdown(false)}
+              />
+            )}
+          </div>
         </div>
 
         <button
@@ -275,11 +343,23 @@ const FileTreeItem: React.FC<{
   const hasChildren = Object.keys(node.children).length > 0;
   const folderSelected = isFolderSelected?.(node.path) ?? false;
 
+  // Compute folder priority border
+  const folderPriorityColors = getFolderPriorityColors(node);
+  const folderBorderStyle: React.CSSProperties = folderPriorityColors.length === 1
+    ? { borderLeft: `3px solid ${folderPriorityColors[0]}` }
+    : { borderLeft: '3px solid transparent', borderImage: `linear-gradient(to bottom, ${folderPriorityColors.join(', ')}) 1` };
+
+  // Compute folder annotation count
+  const folderDocs = collectDocsFromNode(node);
+  const folderAnnotationCount = annotationCounts
+    ? folderDocs.reduce((sum, d) => sum + (annotationCounts[d.id] || 0), 0)
+    : 0;
+
   return (
     <div className="group/folder">
       <div
         className={`flex items-center gap-2 py-2 px-3 rounded-lg cursor-pointer transition-colors select-none ${isDragOver ? 'bg-indigo-50 ring-2 ring-indigo-300' : folderSelected ? 'bg-indigo-50' : 'hover:bg-slate-50 text-slate-600'}`}
-        style={{ paddingLeft: `${level * 20}px` }}
+        style={{ paddingLeft: `${level * 20}px`, ...folderBorderStyle }}
         onClick={() => !isRenaming && setIsOpen(!isOpen)}
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setIsDragOver(true); }}
         onDragLeave={() => setIsDragOver(false)}
@@ -304,6 +384,11 @@ const FileTreeItem: React.FC<{
           />
         ) : (
           <span className="text-sm font-bold truncate flex-1">{node.name}</span>
+        )}
+        {folderAnnotationCount > 0 && (
+          <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-full shrink-0">
+            {folderAnnotationCount} annotation{folderAnnotationCount !== 1 ? 's' : ''}
+          </span>
         )}
         <div className="flex items-center gap-1 opacity-0 group-hover/folder:opacity-100 transition-all" onClick={(e) => e.stopPropagation()}>
           <button
@@ -348,7 +433,6 @@ const FileTreeItem: React.FC<{
                 level={level + 1}
                 onOpenDoc={onOpenDoc}
                 onDeleteDoc={onDeleteDoc}
-                onUpdateStatus={onUpdateStatus}
                 onRenameFile={onRenameFile}
                 onRenameFolder={onRenameFolder}
                 onDeleteFolder={onDeleteFolder}
@@ -359,6 +443,8 @@ const FileTreeItem: React.FC<{
                 onToggleDocSelect={onToggleDocSelect}
                 onToggleFolderSelect={onToggleFolderSelect}
                 onConfirmDelete={onConfirmDelete}
+                onUpdatePriority={onUpdatePriority}
+                annotationCounts={annotationCounts}
               />
             ))}
         </div>
@@ -369,7 +455,7 @@ const FileTreeItem: React.FC<{
 
 const CaseDetails: React.FC<CaseDetailsProps> = ({
   caseItem, docs, onOpenDoc, onUpload, onUploadFolder, onUpdateCase, onDeleteDoc,
-  currentUser, allUsers, onAssignUser, onRemoveUser, onUpdateDocStatus, onUpdateDoc, onOpenAnalysis,
+  currentUser, allUsers, annotations, onAssignUser, onRemoveUser, onUpdateDoc, onOpenAnalysis,
   onSaveDicomAnnotation, googleAccessToken, onRequestDriveAuth
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -443,6 +529,24 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
   const [draggedDocId, setDraggedDocId] = useState<string | null>(null);
 
   const canManageTeam = currentUser.role === 'ADMIN' || currentUser.id === caseItem.ownerId;
+
+  // Compute annotation counts per document
+  const annotationCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (annotations) {
+      for (const ann of annotations) {
+        counts[ann.documentId] = (counts[ann.documentId] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [annotations]);
+
+  // Priority update handler
+  const handleUpdatePriority = (docId: string, priority: DocumentPriority) => {
+    const doc = docs.find(d => d.id === docId);
+    if (doc) onUpdateDoc({ ...doc, priority });
+  };
+
   const fileSectionRef = useRef<HTMLDivElement>(null);
   const [isExternalDragOver, setIsExternalDragOver] = useState(false);
   const externalDragCounter = useRef(0);
@@ -1621,7 +1725,6 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 level={0}
                 onOpenDoc={onOpenDoc}
                 onDeleteDoc={onDeleteDoc}
-                onUpdateStatus={onUpdateDocStatus}
                 onRenameFile={handleRenameFile}
                 onRenameFolder={handleRenameFolder}
                 onDeleteFolder={handleDeleteFolder}
@@ -1632,6 +1735,8 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
                 onToggleDocSelect={toggleDocSelection}
                 onToggleFolderSelect={toggleFolderSelection}
                 onConfirmDelete={(type, id, path, name) => setDeleteConfirm({ type, id, path, name })}
+                onUpdatePriority={handleUpdatePriority}
+                annotationCounts={annotationCounts}
               />
             ))
           )}
