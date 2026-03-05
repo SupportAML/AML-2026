@@ -53,7 +53,7 @@ const mockStore = {
       url: "https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/web/compressed.tracemonkey-pldi-09.pdf", // Public PDF for demo
       uploadDate: "2023-10-16",
       size: "1.2 MB",
-      reviewStatus: "reviewed",
+      priority: "notable",
       path: "Medical Records/Surgery"
     } as Document,
     {
@@ -65,7 +65,7 @@ const mockStore = {
       url: "https://raw.githubusercontent.com/mozilla/pdf.js/ba2edeae/web/compressed.tracemonkey-pldi-09.pdf",
       uploadDate: "2023-10-17",
       size: "0.8 MB",
-      reviewStatus: "pending",
+      priority: "unreviewed",
       path: "Medical Records/Nursing"
     } as Document
   ],

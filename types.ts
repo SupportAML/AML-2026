@@ -253,17 +253,15 @@ export interface InvitationToken {
   status: 'active' | 'expired' | 'used' | 'revoked';
 }
 
-export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';
-
 export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'other';
 
 export type DocumentPriority = 'critical' | 'notable' | 'supplemental' | 'unreviewed';
 
 export const PRIORITY_CONFIG: Record<DocumentPriority, { label: string; emoji: string; color: string; borderColor: string; bgColor: string; textColor: string }> = {
-  critical: { label: 'Critical', emoji: '🔴', color: '#ef4444', borderColor: 'border-red-500', bgColor: 'bg-red-50', textColor: 'text-red-600' },
-  notable: { label: 'Notable', emoji: '🟠', color: '#f97316', borderColor: 'border-orange-500', bgColor: 'bg-orange-50', textColor: 'text-orange-600' },
-  supplemental: { label: 'Supplemental', emoji: '⚫', color: '#374151', borderColor: 'border-gray-700', bgColor: 'bg-gray-50', textColor: 'text-gray-700' },
-  unreviewed: { label: 'Unreviewed', emoji: '🔵', color: '#3b82f6', borderColor: 'border-blue-500', bgColor: 'bg-blue-50', textColor: 'text-blue-600' },
+  critical: { label: 'Critical', emoji: '🔴', color: '#dc2626', borderColor: 'border-red-600', bgColor: 'bg-red-50', textColor: 'text-red-700' },
+  notable: { label: 'Notable', emoji: '🟡', color: '#f59e0b', borderColor: 'border-amber-500', bgColor: 'bg-amber-50', textColor: 'text-amber-700' },
+  supplemental: { label: 'Supplemental', emoji: '⚫', color: '#6b7280', borderColor: 'border-gray-500', bgColor: 'bg-gray-50', textColor: 'text-gray-600' },
+  unreviewed: { label: 'Unreviewed', emoji: '🔵', color: '#93c5fd', borderColor: 'border-blue-300', bgColor: 'bg-blue-50', textColor: 'text-blue-400' },
 };
 
 export interface Document {
@@ -281,7 +279,6 @@ export interface Document {
   storagePath?: string;
   path?: string;
   citation?: string;
-  reviewStatus?: ReviewStatus;
   priority?: DocumentPriority;
 }
 
@@ -336,7 +333,6 @@ export enum ViewMode {
   PROFILE = 'PROFILE',
   TEAM_ADMIN = 'TEAM_ADMIN',
   ADMIN_INSIGHTS = 'ADMIN_INSIGHTS',
-  SETTINGS = 'SETTINGS',
-  REVIEW_MODE = 'REVIEW_MODE'
+  SETTINGS = 'SETTINGS'
 }
 

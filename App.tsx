@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut, signInAnonymously, updateProfile } from "firebase/auth";
 import { auth } from './firebase';
-import { Case, Document, DocumentFileType, DicomStudyRecord, Annotation, ViewMode, UserProfile, AuthorizedUser, ReviewStatus, UserRole } from './types';
+import { Case, Document, DocumentFileType, DicomStudyRecord, Annotation, ViewMode, UserProfile, AuthorizedUser, UserRole } from './types';
 import Sidebar from './components/Sidebar';
 const CaseList = React.lazy(() => import('./components/CaseList'));
 const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
@@ -17,7 +17,6 @@ const AnnotationRollup = React.lazy(() => import('./components/AnnotationRollup'
 const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({ default: m.TeamAdmin })));
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
-const ReviewMode = React.lazy(() => import('./components/ReviewMode'));
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
@@ -511,7 +510,7 @@ const App: React.FC = () => {
       storagePath,
       uploadDate: new Date().toISOString(),
       size: (blob.size / 1024).toFixed(1) + ' KB',
-      reviewStatus: 'pending',
+      priority: 'unreviewed',
       path: 'DICOM Screenshots',
     };
     await upsertDocument(newDoc);
@@ -637,7 +636,7 @@ const App: React.FC = () => {
         storagePath: (fileData as any).storagePath || undefined,
         uploadDate: new Date().toISOString(),
         size: fileData.size,
-        reviewStatus: 'pending',
+        priority: 'unreviewed',
         path: detectPath(fileData.name, fileType)
       };
       await upsertDocument(newDoc);
@@ -739,7 +738,7 @@ const App: React.FC = () => {
             storagePath: (fileData as { storagePath?: string }).storagePath,
             uploadDate: new Date().toISOString(),
             size: fileData.size,
-            reviewStatus: 'pending',
+            priority: 'unreviewed',
             path: folderPath || undefined
           };
           await upsertDocument(newDoc);
@@ -984,7 +983,6 @@ const App: React.FC = () => {
                 {viewMode === ViewMode.CASE_VIEW && activeCase?.title}
                 {viewMode === ViewMode.DOC_VIEWER && activeDoc?.name}
                 {viewMode === ViewMode.ANNOTATION_ROLLUP && `Clinical Workspace${activeCase?.title ? ` — ${activeCase.title}` : ''}`}
-                {viewMode === ViewMode.REVIEW_MODE && `Review Mode${activeCase?.title ? ` — ${activeCase.title}` : ''}`}
                 {viewMode === ViewMode.CLIENTS && "Client Directory"}
                 {viewMode === ViewMode.ORIENTATION && "Orientation"}
                 {viewMode === ViewMode.PROFILE && "My Profile"}
@@ -1033,13 +1031,8 @@ const App: React.FC = () => {
                   onUploadFolder={handleFolderUpload}
                   onUpdateCase={upsertCase}
                   onDeleteDoc={deleteDocumentFromStore}
-                  onUpdateDocStatus={(did, status) => {
-                    const d = activeDocuments.find(x => x.id === did);
-                    if (d) upsertDocument({ ...d, reviewStatus: status });
-                  }}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
-                  onEnterReviewMode={() => setViewMode(ViewMode.REVIEW_MODE)}
                   onSaveDicomAnnotation={handleSaveDicomAnnotation}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
@@ -1066,6 +1059,12 @@ const App: React.FC = () => {
                     setViewerInitialPage(1);
                   }}
                   currentUser={currentUser}
+                  onUpdateDocPriority={(docId, priority) => {
+                    const d = activeDocuments.find(x => x.id === docId);
+                    if (d) upsertDocument({ ...d, priority });
+                  }}
+                  allAnnotations={activeAnnotations}
+                  caseItem={activeCase || undefined}
                 />
               )}
               {viewMode === ViewMode.ANNOTATION_ROLLUP && activeCase && (
@@ -1081,20 +1080,6 @@ const App: React.FC = () => {
                   }}
                   onNavigateToAnnotation={handleNavigateToAnnotation}
                   currentUser={currentUser}
-                />
-              )}
-              {viewMode === ViewMode.REVIEW_MODE && activeCase && (
-                <ReviewMode
-                  caseItem={activeCase}
-                  docs={activeDocuments}
-                  annotations={activeAnnotations}
-                  currentUser={currentUser}
-                  googleAccessToken={googleAccessToken}
-                  onAddAnnotation={handleAddAnnotation}
-                  onUpdateAnnotation={upsertAnnotation}
-                  onDeleteAnnotation={deleteAnnotationFromStore}
-                  onUpdateDoc={upsertDocument}
-                  onExit={() => setViewMode(ViewMode.CASE_VIEW)}
                 />
               )}
               {viewMode === ViewMode.CLIENTS && (

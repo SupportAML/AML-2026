@@ -28,9 +28,11 @@ import {
   ImageIcon,
   FileIcon,
   ScanIcon,
-  ExternalLinkIcon
+  ExternalLinkIcon,
+  FolderTreeIcon,
+  PanelLeftIcon
 } from 'lucide-react';
-import { Document as DocType, Annotation } from '../types';
+import { Document as DocType, Annotation, DocumentPriority, PRIORITY_CONFIG, Case } from '../types';
 import { processAnnotationInput } from '../services/openaiService';
 import { pdfCacheManager } from '../services/pdfCacheManager';
 import { VoiceTranscriptionOverlay } from './VoiceTranscriptionOverlay';
@@ -62,6 +64,9 @@ interface DocumentViewerProps {
   allDocuments?: DocType[];
   onSwitchDocument?: (doc: DocType) => void;
   currentUser: { name: string; email: string };
+  onUpdateDocPriority?: (docId: string, priority: DocumentPriority) => void;
+  allAnnotations?: Annotation[];
+  caseItem?: Case;
 }
 
 const getAvatarColor = (name: string) => {
@@ -609,7 +614,8 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   doc, annotations, onAddAnnotation, onUpdateAnnotation, onDeleteAnnotation, onBack, onOpenClinicalWorkspace,
   googleAccessToken, initialPage = 1, focusedAnnotationId, isEditingFocused, onClearFocus, onSetFocus,
   allDocuments = [], onSwitchDocument,
-  currentUser
+  currentUser,
+  onUpdateDocPriority, allAnnotations, caseItem
 }) => {
   // annotations = all case annotations; currentDocAnnotations = for this document only (PDF + Comments)
   const currentDocAnnotations = React.useMemo(
@@ -640,6 +646,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [pendingText, setPendingText] = useState('');
   const [pendingAuthor, setPendingAuthor] = useState(currentUser.name);
   const [pendingDate, setPendingDate] = useState(''); // Leave empty - user manually sets if needed
+
+  // Review sidebar state
+  const [showReviewSidebar, setShowReviewSidebar] = useState(() => !!onUpdateDocPriority);
 
   // Resolve Drive URL for DICOM files stored on the user's Google Drive
   const [resolvedDicomUrl, setResolvedDicomUrl] = useState<string | null>(null);
@@ -1074,11 +1083,81 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     </div>
   );
 
+  // Review sidebar computations
+  const reviewAnnotationCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    const anns = allAnnotations || annotations;
+    for (const ann of anns) {
+      counts[ann.documentId] = (counts[ann.documentId] || 0) + 1;
+    }
+    return counts;
+  }, [allAnnotations, annotations]);
+
+  const reviewableDocs = allDocuments.filter(d => d.type !== 'dicom');
+  const reviewedCount = reviewableDocs.filter(d => d.priority && d.priority !== 'unreviewed').length;
+  const totalReviewable = reviewableDocs.length;
+  const progressPct = totalReviewable > 0 ? Math.round((reviewedCount / totalReviewable) * 100) : 0;
+
+  const currentPriority: DocumentPriority = doc.priority || 'unreviewed';
+  const priorities: DocumentPriority[] = ['critical', 'notable', 'supplemental', 'unreviewed'];
+
   return (
-    <div className="flex flex-col h-full bg-slate-100">
+    <div className="flex h-full bg-slate-100">
+      {/* Review Sidebar */}
+      {showReviewSidebar && onUpdateDocPriority && allDocuments.length > 0 && (
+        <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 overflow-hidden">
+          {/* Progress bar */}
+          <div className="p-3 border-b border-slate-800">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Review Progress</span>
+              <span className="text-[10px] text-slate-500">{progressPct}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${progressPct}%` }} />
+            </div>
+            <p className="text-[10px] text-slate-600 mt-1">{reviewedCount} of {totalReviewable} reviewed</p>
+          </div>
+
+          {/* File list */}
+          <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+            {reviewableDocs.map(d => {
+              const priority = d.priority || 'unreviewed';
+              const isActive = d.id === doc.id;
+              const annCount = reviewAnnotationCounts[d.id] || 0;
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => onSwitchDocument?.(d)}
+                  className={`w-full text-left flex items-center gap-2 py-1.5 px-2 rounded-lg transition-colors text-xs ${isActive ? 'bg-indigo-600/20 text-indigo-300 font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-300'}`}
+                  style={{ borderLeft: `3px solid ${PRIORITY_CONFIG[priority].color}` }}
+                >
+                  <FileTextIcon className="w-3 h-3 shrink-0" />
+                  <span className="truncate flex-1">{d.name}</span>
+                  {annCount > 0 && (
+                    <span className="text-[9px] text-slate-500 bg-slate-800 px-1 py-0.5 rounded-full shrink-0">{annCount}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col flex-1 min-w-0">
       <div className="h-14 bg-white border-b flex items-center justify-between px-4 z-50">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500"><ArrowLeftIcon className="w-5 h-5" /></button>
+
+          {/* Sidebar toggle */}
+          {onUpdateDocPriority && allDocuments.length > 0 && (
+            <button
+              onClick={() => setShowReviewSidebar(!showReviewSidebar)}
+              className={`p-2 rounded-lg transition-colors ${showReviewSidebar ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:bg-slate-100'}`}
+              title={showReviewSidebar ? 'Hide review panel' : 'Show review panel'}
+            >
+              <PanelLeftIcon className="w-4 h-4" />
+            </button>
+          )}
 
           {/* Document Switcher Dropdown */}
           {allDocuments.length > 0 && onSwitchDocument ? (
@@ -1144,14 +1223,14 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
                                 <span className="text-xs text-slate-400">
                                   {docAnnotations.length} {docAnnotations.length === 1 ? 'annotation' : 'annotations'}
                                 </span>
-                                {document.reviewStatus && (
+                                {document.priority && document.priority !== 'unreviewed' && (
                                   <>
                                     <span className="text-slate-300">•</span>
-                                    <span className={`text-[10px] font-bold uppercase ${document.reviewStatus === 'reviewed' ? 'text-green-600' :
-                                      document.reviewStatus === 'in_review' ? 'text-amber-600' :
-                                        'text-slate-400'
-                                      }`}>
-                                      {document.reviewStatus.replace('_', ' ')}
+                                    <span className="flex items-center gap-1">
+                                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: PRIORITY_CONFIG[document.priority].color }} />
+                                      <span className={`text-[10px] font-bold ${PRIORITY_CONFIG[document.priority].textColor}`}>
+                                        {PRIORITY_CONFIG[document.priority].label}
+                                      </span>
                                     </span>
                                   </>
                                 )}
@@ -1191,6 +1270,27 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
             >
               <SparklesIcon className="w-3.5 h-3.5" /> View Clinical Workspace
             </button>
+          )}
+
+          {/* Priority selector */}
+          {onUpdateDocPriority && (
+            <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg ml-2">
+              {priorities.map(p => {
+                const cfg = PRIORITY_CONFIG[p];
+                const isActive = p === currentPriority;
+                return (
+                  <button
+                    key={p}
+                    onClick={() => onUpdateDocPriority(doc.id, p)}
+                    className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold transition-all ${isActive ? 'bg-white shadow-sm text-slate-800' : 'text-slate-400 hover:text-slate-600'}`}
+                    title={cfg.label}
+                  >
+                    <span className="w-2 h-2 rounded-full ring-1 ring-black/10" style={{ backgroundColor: cfg.color }} />
+                    <span className="hidden xl:inline">{cfg.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           )}
 
           {!isPdf && (
@@ -1728,6 +1828,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 };
