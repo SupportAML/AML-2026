@@ -735,6 +735,7 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       ].filter(Boolean).join(' | ') || 'Unknown Patient',
       caseId: selectedCaseId || caseId,
       modality: studyMeta?.modality || undefined,
+      seriesDescription: studyMeta?.seriesDescription || activeSeries?.seriesDescription || activeSeries?.displayName || undefined,
       sliceInfo: totalSlices > 1 ? `${currentSlice} of ${totalSlices}` : undefined,
     });
     if (selectedCaseId) localStorage.setItem('dicom-last-case-id', selectedCaseId);

@@ -481,7 +481,7 @@ const App: React.FC = () => {
 
   // Save DICOM screenshot annotation as a PDF with embedded image + metadata,
   // then create an initial annotation so it flows into the fact matrix & legal writer.
-  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string; caseId?: string; modality?: string; sliceInfo?: string }) => {
+  const handleSaveDicomAnnotation = async (data: { imageUrl: string; text: string; studyName: string; studyDate: string; patientInfo: string; caseId?: string; modality?: string; seriesDescription?: string; sliceInfo?: string }) => {
     const targetCaseId = data.caseId || activeCase?.id;
     if (!targetCaseId) {
       alert('No case selected — please select a case before saving.');
@@ -490,8 +490,34 @@ const App: React.FC = () => {
 
     try {
       const { default: jsPDF } = await import('jspdf');
-      const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
-      const displayName = `DICOM \u2013 ${data.studyName} \u2013 ${data.studyDate}`;
+
+      // Build display name: "{Modality} {SeriesDescription} {Month Day, Year}"
+      // e.g. "MR AX DWI Jan 16, 2024"
+      const formatDateHuman = (d: string): string => {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        // Handle YYYY-MM-DD or YYYYMMDD
+        const cleaned = d.replace(/-/g, '');
+        if (/^\d{8}$/.test(cleaned)) {
+          const y = cleaned.slice(0, 4);
+          const m = parseInt(cleaned.slice(4, 6), 10) - 1;
+          const day = parseInt(cleaned.slice(6, 8), 10);
+          if (m >= 0 && m < 12) return `${months[m]} ${day}, ${y}`;
+        }
+        // Try parsing as a date string
+        const parsed = new Date(d);
+        if (!isNaN(parsed.getTime())) {
+          return `${months[parsed.getMonth()]} ${parsed.getDate()}, ${parsed.getFullYear()}`;
+        }
+        return d;
+      };
+
+      const nameParts: string[] = [];
+      if (data.modality) nameParts.push(data.modality);
+      if (data.seriesDescription) nameParts.push(data.seriesDescription);
+      else if (data.studyName) nameParts.push(data.studyName);
+      if (data.studyDate) nameParts.push(formatDateHuman(data.studyDate));
+      const displayName = nameParts.join(' ') || data.studyName;
+      const safeName = displayName.replace(/[^a-zA-Z0-9]/g, '_');
 
       // --- Build PDF with screenshot + metadata header ---
       const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
