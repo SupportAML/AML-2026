@@ -1106,6 +1106,7 @@ const App: React.FC = () => {
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
                   googleAccessToken={googleAccessToken}
                   onRequestDriveAuth={requestGoogleDriveAuth}
+                  onSaveDicomAnnotation={handleSaveDicomAnnotation}
                 />
               )}
               {viewMode === ViewMode.DOC_VIEWER && activeDoc && (
