@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import ReactDOM from 'react-dom';
 import * as Diff from 'diff';
 import { parse } from 'marked';
+import * as pdfjsLib from 'pdfjs-dist';
 
 // Normalize whitespace for fuzzy text matching (handles HTML whitespace drift)
 const normalizeWs = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -476,6 +477,81 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
    const [activeCitationProposal, setActiveCitationProposal] = useState<{ id: string; original: string; proposed: string; explanation: string; diff: Diff.Change[] } | null>(null);
    const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
    const [pdfPreviewTitle, setPdfPreviewTitle] = useState<string>('');
+   const [pdfPreviewDoc, setPdfPreviewDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+   const [pdfPreviewPage, setPdfPreviewPage] = useState(1);
+   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+   const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
+   const pdfPreviewCanvasRef = useRef<HTMLCanvasElement>(null);
+   const pdfPreviewContainerRef = useRef<HTMLDivElement>(null);
+
+   // PDF Preview: load document when URL changes
+   useEffect(() => {
+      if (!pdfPreviewUrl) {
+         setPdfPreviewDoc(null);
+         setPdfPreviewPage(1);
+         setPdfPreviewError(null);
+         return;
+      }
+      let cancelled = false;
+      const loadPdf = async () => {
+         setPdfPreviewLoading(true);
+         setPdfPreviewError(null);
+         setPdfPreviewDoc(null);
+         setPdfPreviewPage(1);
+         try {
+            const proxyUrl = `/api/proxy-pdf?url=${encodeURIComponent(pdfPreviewUrl)}`;
+            const resp = await fetch(proxyUrl);
+            if (!resp.ok) throw new Error(`Failed to fetch PDF (${resp.status})`);
+            const buffer = await resp.arrayBuffer();
+            if (cancelled) return;
+            const doc = await pdfjsLib.getDocument({ data: buffer }).promise;
+            if (cancelled) return;
+            setPdfPreviewDoc(doc);
+         } catch (err: any) {
+            if (!cancelled) setPdfPreviewError(err.message || 'Failed to load PDF');
+         } finally {
+            if (!cancelled) setPdfPreviewLoading(false);
+         }
+      };
+      loadPdf();
+      return () => { cancelled = true; };
+   }, [pdfPreviewUrl]);
+
+   // PDF Preview: render current page to canvas
+   useEffect(() => {
+      if (!pdfPreviewDoc || !pdfPreviewCanvasRef.current) return;
+      let active = true;
+      let renderTask: any = null;
+
+      const renderPage = async () => {
+         try {
+            const page = await pdfPreviewDoc.getPage(pdfPreviewPage);
+            if (!active) return;
+            const container = pdfPreviewContainerRef.current;
+            const canvas = pdfPreviewCanvasRef.current;
+            if (!canvas || !container) return;
+
+            // Scale to fit container width
+            const baseViewport = page.getViewport({ scale: 1.0 });
+            const scale = Math.min((container.clientWidth - 48) / baseViewport.width, 2.5);
+            const viewport = page.getViewport({ scale });
+
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const context = canvas.getContext('2d');
+            if (!context || !active) return;
+
+            if (renderTask) renderTask.cancel();
+            renderTask = page.render({ canvasContext: context, viewport });
+            await renderTask.promise;
+         } catch (err: any) {
+            if (err?.name === 'RenderingCancelledException') return;
+            if (active) console.error('PDF render error:', err);
+         }
+      };
+      renderPage();
+      return () => { active = false; if (renderTask) renderTask.cancel(); };
+   }, [pdfPreviewDoc, pdfPreviewPage]);
 
    // Manual Source Link State
    const [linkingEventId, setLinkingEventId] = useState<string | null>(null);
@@ -3725,11 +3801,12 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                            </div>
                         </div>
 
-                        {/* PDF Preview Modal */}
+                        {/* PDF Preview Modal — rendered via pdf.js canvas (PMC blocks iframes) */}
                         {pdfPreviewUrl && (
-                           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-                              <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl h-[85vh] flex flex-col animate-in zoom-in-95">
-                                 <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-emerald-50/50">
+                           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4" onClick={() => { setPdfPreviewUrl(null); setPdfPreviewTitle(''); }}>
+                              <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl h-[85vh] flex flex-col animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                                 {/* Header */}
+                                 <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-emerald-50/50 rounded-t-2xl shrink-0">
                                     <div className="flex-1 min-w-0">
                                        <h3 className="font-serif font-black text-slate-800 text-lg truncate">{pdfPreviewTitle}</h3>
                                        <p className="text-xs text-emerald-600 font-medium">Full-text PDF from PubMed Central</p>
@@ -3738,17 +3815,56 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                        <button onClick={() => window.open(pdfPreviewUrl, '_blank')} className="px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-100 rounded-lg hover:bg-emerald-200 flex items-center gap-1.5">
                                           <ExternalLinkIcon className="w-3 h-3" /> Open in New Tab
                                        </button>
-                                       <button onClick={() => { setPdfPreviewUrl(null); setPdfPreviewTitle(''); }} className="text-slate-400 hover:text-slate-600">
+                                       <button onClick={() => { setPdfPreviewUrl(null); setPdfPreviewTitle(''); }} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg">
                                           <XIcon className="w-5 h-5" />
                                        </button>
                                     </div>
                                  </div>
-                                 <div className="flex-1 overflow-hidden bg-slate-100">
-                                    <iframe
-                                       src={pdfPreviewUrl}
-                                       className="w-full h-full border-0"
-                                       title={`PDF Preview: ${pdfPreviewTitle}`}
-                                    />
+
+                                 {/* Page navigation bar */}
+                                 {pdfPreviewDoc && (
+                                    <div className="flex items-center justify-center gap-4 py-2 px-4 border-b border-slate-100 bg-white shrink-0">
+                                       <button
+                                          onClick={() => setPdfPreviewPage(p => Math.max(1, p - 1))}
+                                          disabled={pdfPreviewPage <= 1}
+                                          className="px-3 py-1 text-xs font-bold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 disabled:opacity-30"
+                                       >
+                                          Previous
+                                       </button>
+                                       <span className="text-sm font-bold text-slate-700">
+                                          Page {pdfPreviewPage} of {pdfPreviewDoc.numPages}
+                                       </span>
+                                       <button
+                                          onClick={() => setPdfPreviewPage(p => Math.min(pdfPreviewDoc!.numPages, p + 1))}
+                                          disabled={pdfPreviewPage >= pdfPreviewDoc.numPages}
+                                          className="px-3 py-1 text-xs font-bold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 disabled:opacity-30"
+                                       >
+                                          Next
+                                       </button>
+                                    </div>
+                                 )}
+
+                                 {/* PDF canvas area */}
+                                 <div ref={pdfPreviewContainerRef} className="flex-1 overflow-auto bg-slate-100 flex justify-center p-6">
+                                    {pdfPreviewLoading && (
+                                       <div className="flex flex-col items-center justify-center gap-3 py-20">
+                                          <Loader2Icon className="w-8 h-8 text-emerald-500 animate-spin" />
+                                          <p className="text-sm font-bold text-slate-500">Loading PDF from PubMed Central...</p>
+                                       </div>
+                                    )}
+                                    {pdfPreviewError && (
+                                       <div className="flex flex-col items-center justify-center gap-3 py-20">
+                                          <AlertCircleIcon className="w-8 h-8 text-red-400" />
+                                          <p className="text-sm font-bold text-red-600">Could not load PDF preview</p>
+                                          <p className="text-xs text-slate-500">{pdfPreviewError}</p>
+                                          <button onClick={() => window.open(pdfPreviewUrl, '_blank')} className="mt-2 px-4 py-2 text-xs font-bold text-emerald-700 bg-emerald-100 rounded-lg hover:bg-emerald-200">
+                                             Open PDF Directly
+                                          </button>
+                                       </div>
+                                    )}
+                                    {!pdfPreviewLoading && !pdfPreviewError && pdfPreviewDoc && (
+                                       <canvas ref={pdfPreviewCanvasRef} className="shadow-lg rounded-lg max-w-full" />
+                                    )}
                                  </div>
                               </div>
                            </div>
