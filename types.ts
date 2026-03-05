@@ -257,6 +257,15 @@ export type ReviewStatus = 'pending' | 'in_review' | 'reviewed';
 
 export type DocumentFileType = 'pdf' | 'image' | 'video' | 'dicom' | 'dicom-annotation' | 'other';
 
+export type DocumentPriority = 'critical' | 'notable' | 'supplemental' | 'unreviewed';
+
+export const PRIORITY_CONFIG: Record<DocumentPriority, { label: string; emoji: string; color: string; borderColor: string; bgColor: string; textColor: string }> = {
+  critical: { label: 'Critical', emoji: '🔴', color: '#dc2626', borderColor: 'border-red-600', bgColor: 'bg-red-50', textColor: 'text-red-700' },
+  notable: { label: 'Notable', emoji: '🟡', color: '#f59e0b', borderColor: 'border-amber-500', bgColor: 'bg-amber-50', textColor: 'text-amber-700' },
+  supplemental: { label: 'Supplemental', emoji: '⚫', color: '#6b7280', borderColor: 'border-gray-500', bgColor: 'bg-gray-50', textColor: 'text-gray-600' },
+  unreviewed: { label: 'Unreviewed', emoji: '🔵', color: '#93c5fd', borderColor: 'border-blue-300', bgColor: 'bg-blue-50', textColor: 'text-blue-400' },
+};
+
 export interface Document {
   id: string;
   caseId: string;
@@ -272,7 +281,13 @@ export interface Document {
   storagePath?: string;
   path?: string;
   citation?: string;
-  reviewStatus?: ReviewStatus;
+  priority?: DocumentPriority;
+}
+
+export interface ReviewSession {
+  lastDocumentId?: string;
+  lastPage?: number;
+  updatedAt?: string;
 }
 
 export interface Annotation {

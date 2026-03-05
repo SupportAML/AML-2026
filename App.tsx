@@ -706,7 +706,7 @@ const App: React.FC = () => {
         storagePath: (fileData as any).storagePath || undefined,
         uploadDate: new Date().toISOString(),
         size: fileData.size,
-        reviewStatus: 'pending',
+        priority: 'unreviewed',
         path: detectPath(fileData.name, fileType)
       };
       await upsertDocument(newDoc);
@@ -808,7 +808,7 @@ const App: React.FC = () => {
             storagePath: (fileData as { storagePath?: string }).storagePath,
             uploadDate: new Date().toISOString(),
             size: fileData.size,
-            reviewStatus: 'pending',
+            priority: 'unreviewed',
             path: folderPath || undefined
           };
           await upsertDocument(newDoc);
@@ -1095,16 +1095,13 @@ const App: React.FC = () => {
               {viewMode === ViewMode.CASE_VIEW && activeCase && (
                 <CaseDetails
                   currentUser={currentUser} caseItem={activeCase} docs={activeDocuments} allUsers={authorizedUsers}
+                  annotations={activeAnnotations}
                   onAssignUser={handleAssignUser} onRemoveUser={handleRemoveUser}
                   onOpenDoc={(d) => { setActiveDoc(d); setViewMode(ViewMode.DOC_VIEWER); }}
                   onUpload={handleFileUpload}
                   onUploadFolder={handleFolderUpload}
                   onUpdateCase={upsertCase}
                   onDeleteDoc={deleteDocumentFromStore}
-                  onUpdateDocStatus={(did, status) => {
-                    const d = activeDocuments.find(x => x.id === did);
-                    if (d) upsertDocument({ ...d, reviewStatus: status });
-                  }}
                   onUpdateDoc={upsertDocument}
                   onOpenAnalysis={() => setViewMode(ViewMode.ANNOTATION_ROLLUP)}
                   googleAccessToken={googleAccessToken}
@@ -1132,6 +1129,12 @@ const App: React.FC = () => {
                     setViewerInitialPage(1);
                   }}
                   currentUser={currentUser}
+                  onUpdateDocPriority={(docId, priority) => {
+                    const d = activeDocuments.find(x => x.id === docId);
+                    if (d) upsertDocument({ ...d, priority });
+                  }}
+                  allAnnotations={activeAnnotations}
+                  caseItem={activeCase || undefined}
                 />
               )}
               {viewMode === ViewMode.ANNOTATION_ROLLUP && activeCase && (

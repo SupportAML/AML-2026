@@ -4,6 +4,36 @@ import ReactDOM from 'react-dom';
 import * as Diff from 'diff';
 import { parse } from 'marked';
 
+// Normalize whitespace for fuzzy text matching (handles HTML whitespace drift)
+const normalizeWs = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+// Find and replace original text in content, with fallback to whitespace-normalized matching
+function findAndReplace(content: string, original: string, replacement: string): string | null {
+   // 1. Exact match (fast path)
+   if (content.includes(original)) {
+      return content.replace(original, replacement);
+   }
+   // 2. Whitespace-normalized search
+   const normOriginal = normalizeWs(original);
+   // Build a sliding window over content to find the normalized match
+   // We search through the content character by character to find a substring
+   // whose normalized form matches the normalized original
+   const contentLen = content.length;
+   const origLen = original.length;
+   // Search with a window size range around the original length (allow ±30% for whitespace differences)
+   const minWindow = Math.max(1, Math.floor(origLen * 0.7));
+   const maxWindow = Math.ceil(origLen * 1.3);
+   for (let winSize = minWindow; winSize <= maxWindow; winSize++) {
+      for (let i = 0; i <= contentLen - winSize; i++) {
+         const slice = content.substring(i, i + winSize);
+         if (normalizeWs(slice) === normOriginal) {
+            return content.substring(0, i) + replacement + content.substring(i + winSize);
+         }
+      }
+   }
+   return null;
+}
+
 // Format date from YYYY-MM-DD to "MM/DD/YYYY"
 const formatDisplayDate = (dateStr?: string): string | null => {
    if (!dateStr) return null;
@@ -1619,13 +1649,13 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
 
    const handleAcceptSuggestion = (suggestion: SuggestionItem & { id: string }) => {
       const currentContent = reportContentRef.current || reportContent;
-      if (!currentContent.includes(suggestion.original)) {
-         alert("Could not locate the original excerpt in the document.");
+      const updated = findAndReplace(currentContent, suggestion.original, suggestion.suggested);
+      if (updated === null) {
+         alert("Could not locate the original excerpt in the document. The section may have been modified since this suggestion was generated.");
          return;
       }
       setUndoStack(prev => [...prev, currentContent].slice(-50));
       setRedoStack([]);
-      const updated = currentContent.replace(suggestion.original, suggestion.suggested);
       setReportContent(updated);
       lastContentRef.current = updated;
       setWriterContentKey(prev => prev + 1);
@@ -1642,8 +1672,9 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
       setUndoStack(prev => [...prev, updated].slice(-50));
       setRedoStack([]);
       for (const s of sidebarSuggestions) {
-         if (updated.includes(s.original)) {
-            updated = updated.replace(s.original, s.suggested);
+         const result = findAndReplace(updated, s.original, s.suggested);
+         if (result !== null) {
+            updated = result;
          }
       }
       setReportContent(updated);
@@ -4141,6 +4172,8 @@ export const AnnotationRollup: React.FC<AnnotationRollupProps> = ({
                                              setReportContent(html);
                                              lastContentRef.current = html;
                                              setWriterContentKey(prev => prev + 1);
+                                             // Clear stale suggestions — they reference pre-regeneration content
+                                             setSidebarSuggestions([]);
                                           } catch (error) {
                                              console.error("Failed to generate report:", error);
                                              alert("Failed to generate report. Please try again.");
