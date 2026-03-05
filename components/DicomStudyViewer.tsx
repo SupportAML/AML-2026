@@ -208,7 +208,10 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
   const [showAnnotationDialog, setShowAnnotationDialog] = useState(false);
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [annotationText, setAnnotationText] = useState('');
-  const [selectedCaseId, setSelectedCaseId] = useState('');
+  const [selectedCaseId, setSelectedCaseId] = useState(() => {
+    const stored = localStorage.getItem('dicom-last-case-id');
+    return stored && cases?.some(c => c.id === stored) ? stored : '';
+  });
 
   const viewportDivRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RenderingEngine | null>(null);
@@ -705,10 +708,10 @@ const DicomStudyViewer: React.FC<DicomStudyViewerProps> = ({
       modality: studyMeta?.modality || undefined,
       sliceInfo: totalSlices > 1 ? `${currentSlice} of ${totalSlices}` : undefined,
     });
+    if (selectedCaseId) localStorage.setItem('dicom-last-case-id', selectedCaseId);
     setShowAnnotationDialog(false);
     setScreenshotDataUrl(null);
     setAnnotationText('');
-    setSelectedCaseId('');
   }, [screenshotDataUrl, annotationText, studyMeta, activeSeries, onSaveAnnotation, selectedCaseId, caseId, cases, totalSlices, currentSlice]);
 
   // ===== Toggle study expansion =====

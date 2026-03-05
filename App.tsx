@@ -489,9 +489,13 @@ const App: React.FC = () => {
     }
 
     try {
-      // Convert base64 data URL to a JPEG blob for upload to Firebase Storage
-      const res = await fetch(data.imageUrl);
-      const blob = await res.blob();
+      // Convert base64 data URL to blob (avoid fetch() which fails on data URLs in Safari)
+      const dataUrlParts = data.imageUrl.split(',');
+      const dataUrlMime = dataUrlParts[0].match(/:(.*?);/)?.[1] || 'image/png';
+      const bstr = atob(dataUrlParts[1]);
+      const u8arr = new Uint8Array(bstr.length);
+      for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+      const blob = new Blob([u8arr], { type: dataUrlMime });
       const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
 
       // Convert to JPEG
