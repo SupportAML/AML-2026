@@ -138,13 +138,13 @@ const FileTreeItem: React.FC<{
         <div className={`w-8 h-8 rounded-lg flex items-center justify-center border shadow-sm shrink-0 ${
           node.doc.type === 'video' ? 'bg-purple-50 border-purple-100 text-purple-500' :
           node.doc.type === 'image' ? 'bg-emerald-50 border-emerald-100 text-emerald-500' :
-          node.doc.type === 'dicom' ? 'bg-cyan-50 border-cyan-100 text-cyan-600' :
+          node.doc.type === 'dicom' || node.doc.type === 'dicom-annotation' ? 'bg-cyan-50 border-cyan-100 text-cyan-600' :
           node.doc.type === 'other' ? 'bg-slate-50 border-slate-200 text-slate-500' :
           node.doc.category === 'research' ? 'bg-indigo-50 border-indigo-100 text-indigo-500' : 'bg-white border-slate-100 text-red-500'
         }`}>
           {node.doc.type === 'video' ? <VideoIcon className="w-4 h-4" /> :
            node.doc.type === 'image' ? <ImageIcon className="w-4 h-4" /> :
-           node.doc.type === 'dicom' ? <ScanIcon className="w-4 h-4" /> :
+           node.doc.type === 'dicom' || node.doc.type === 'dicom-annotation' ? <ScanIcon className="w-4 h-4" /> :
            node.doc.type === 'other' ? <FileIcon className="w-4 h-4" /> :
            <FileTextIcon className="w-4 h-4" />}
         </div>

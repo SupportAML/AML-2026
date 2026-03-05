@@ -484,85 +484,93 @@ const App: React.FC = () => {
     // Determine target case — from annotation data (standalone viewer) or activeCase (legacy)
     const targetCaseId = data.caseId || activeCase?.id;
     if (!targetCaseId) {
-      console.warn('[DICOM Annotation] No case ID — cannot save.');
+      alert('No case selected — please select a case before saving.');
       return;
     }
 
-    // Convert base64 data URL to a JPEG blob for upload to Firebase Storage
-    const res = await fetch(data.imageUrl);
-    const blob = await res.blob();
-    const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
-    const fileName = `DICOM_Annotation_${safeName}_${Date.now()}.jpg`;
-
-    // Convert to JPEG
-    let jpegBlob: Blob = blob;
     try {
-      const img = await createImageBitmap(blob);
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0);
-        jpegBlob = await new Promise<Blob>((resolve) => {
-          canvas.toBlob((b) => resolve(b || blob), 'image/jpeg', 0.92);
-        });
+      // Convert base64 data URL to a JPEG blob for upload to Firebase Storage
+      const res = await fetch(data.imageUrl);
+      const blob = await res.blob();
+      const safeName = data.studyName.replace(/[^a-zA-Z0-9]/g, '_');
+
+      // Convert to JPEG
+      let jpegBlob: Blob = blob;
+      try {
+        const img = await createImageBitmap(blob);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          jpegBlob = await new Promise<Blob>((resolve) => {
+            canvas.toBlob((b) => resolve(b || blob), 'image/jpeg', 0.92);
+          });
+        }
+      } catch {
+        // Fall back to original blob if JPEG conversion fails
       }
-    } catch {
-      // Fall back to original blob if JPEG conversion fails
+
+      // Upload to Firebase Storage under cases/{caseId}/dicom-annotations/
+      let fileUrl = data.imageUrl;
+      let storagePath = `cases/${targetCaseId}/dicom-annotations/${Date.now()}_${safeName}.jpg`;
+      try {
+        const storageRef = ref(storage, storagePath);
+        const uploadTask = uploadBytesResumable(storageRef, jpegBlob, {
+          contentType: 'image/jpeg',
+          customMetadata: { uploadedAt: new Date().toISOString() }
+        });
+        await new Promise<void>((resolve, reject) => {
+          uploadTask.on('state_changed', null, reject, () => resolve());
+        });
+        fileUrl = await getDownloadURL(storageRef);
+      } catch (e) {
+        console.warn('[DICOM Annotation] Storage upload failed, using data URL:', e);
+        storagePath = '';
+      }
+
+      // Build display name: DICOM – [Study Type] – [Date]
+      const displayName = `DICOM \u2013 ${data.studyName} \u2013 ${data.studyDate}`;
+
+      // Write Firestore document to the documents collection
+      const docId = Math.random().toString(36).substr(2, 9);
+      const newDoc: Document = {
+        id: docId,
+        caseId: targetCaseId,
+        name: displayName,
+        type: 'dicom-annotation',
+        mimeType: 'image/jpeg',
+        url: fileUrl,
+        storagePath: storagePath || undefined,
+        uploadDate: new Date().toISOString(),
+        size: (jpegBlob.size / 1024).toFixed(1) + ' KB',
+        reviewStatus: 'pending',
+        path: 'DICOM Annotations',
+      };
+
+      // Extend with DICOM-specific metadata (stored as part of the document)
+      const extendedDoc = {
+        ...newDoc,
+        imageUrl: fileUrl,
+        patient: data.patientInfo,
+        study: data.studyName,
+        date: data.studyDate,
+        modality: data.modality || '',
+        slice: data.sliceInfo || '',
+        annotationNote: data.text,
+        uploadedBy: currentUser?.id || '',
+        uploadedAt: new Date().toISOString(),
+      };
+      await upsertDocument(extendedDoc as Document);
+
+      // Find the case title for the success message
+      const targetCase = cases.find(c => c.id === targetCaseId);
+      alert(`Annotation saved to "${targetCase?.title || 'case'}".`);
+    } catch (e: any) {
+      console.error('[DICOM Annotation] Save failed:', e);
+      alert('Failed to save annotation: ' + (e?.message || String(e)));
     }
-
-    // Upload to Firebase Storage under cases/{caseId}/dicom-annotations/
-    let fileUrl = data.imageUrl;
-    let storagePath = `cases/${targetCaseId}/dicom-annotations/${Date.now()}_${safeName}.jpg`;
-    try {
-      const storageRef = ref(storage, storagePath);
-      const uploadTask = uploadBytesResumable(storageRef, jpegBlob, {
-        contentType: 'image/jpeg',
-        customMetadata: { uploadedAt: new Date().toISOString() }
-      });
-      await new Promise<void>((resolve, reject) => {
-        uploadTask.on('state_changed', null, reject, () => resolve());
-      });
-      fileUrl = await getDownloadURL(storageRef);
-    } catch (e) {
-      console.warn('[DICOM Annotation] Storage upload failed, using data URL:', e);
-      storagePath = '';
-    }
-
-    // Build display name: DICOM – [Study Type] – [Date]
-    const displayName = `DICOM – ${data.studyName} – ${data.studyDate}`;
-
-    // Write Firestore document to cases/{caseId}/files
-    const docId = Math.random().toString(36).substr(2, 9);
-    const newDoc: Document = {
-      id: docId,
-      caseId: targetCaseId,
-      name: displayName,
-      type: 'dicom-annotation',
-      mimeType: 'image/jpeg',
-      url: fileUrl,
-      storagePath: storagePath || undefined,
-      uploadDate: new Date().toISOString(),
-      size: (jpegBlob.size / 1024).toFixed(1) + ' KB',
-      reviewStatus: 'pending',
-      path: 'DICOM Annotations',
-    };
-
-    // Extend with DICOM-specific metadata (stored as part of the document)
-    const extendedDoc = {
-      ...newDoc,
-      imageUrl: fileUrl,
-      patient: data.patientInfo,
-      study: data.studyName,
-      date: data.studyDate,
-      modality: data.modality || '',
-      slice: data.sliceInfo || '',
-      annotationNote: data.text,
-      uploadedBy: currentUser?.id || '',
-      uploadedAt: new Date().toISOString(),
-    };
-    await upsertDocument(extendedDoc as Document);
   };
 
   const handleFileUpload = async (caseId: string, file: File) => {
