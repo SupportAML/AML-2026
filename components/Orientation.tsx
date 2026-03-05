@@ -1,4 +1,3 @@
-
 import React from 'react';
 import {
     LayoutDashboardIcon,
@@ -7,7 +6,6 @@ import {
     SparklesIcon,
     TableIcon,
     SearchIcon,
-    PlusIcon,
     FolderIcon,
     FileTextIcon,
     DownloadIcon,
@@ -16,13 +14,9 @@ import {
     RulerIcon,
     CameraIcon,
     MessageSquareIcon,
-    BrainCircuitIcon,
     ArrowRightIcon,
-    CalendarIcon,
     ClipboardListIcon,
-    BookOpenIcon,
     PenToolIcon,
-    GavelIcon,
     FileIcon,
     ImageIcon,
 } from 'lucide-react';
