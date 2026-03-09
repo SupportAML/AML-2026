@@ -56,6 +56,15 @@ export interface StructuredChronology {
   irrelevantFacts: ChronologyEvent[];
 }
 
+export type TodoPriority = 'urgent' | 'high' | 'normal' | 'low';
+
+export const TODO_PRIORITY_CONFIG: Record<TodoPriority, { label: string; color: string; bgColor: string; textColor: string; icon: string }> = {
+  urgent: { label: 'Urgent', color: '#dc2626', bgColor: 'bg-red-50', textColor: 'text-red-700', icon: '🔴' },
+  high: { label: 'High', color: '#f59e0b', bgColor: 'bg-amber-50', textColor: 'text-amber-700', icon: '🟡' },
+  normal: { label: 'Normal', color: '#6b7280', bgColor: 'bg-slate-50', textColor: 'text-slate-600', icon: '⚫' },
+  low: { label: 'Low', color: '#93c5fd', bgColor: 'bg-blue-50', textColor: 'text-blue-400', icon: '🔵' },
+};
+
 export interface TodoItem {
   id: string;
   text: string;
@@ -63,6 +72,8 @@ export interface TodoItem {
   completed: boolean;
   createdAt: string;
   completedAt?: string;
+  dueDate?: string;
+  priority?: TodoPriority;
   createdBy: string;
   createdByName: string;
 }

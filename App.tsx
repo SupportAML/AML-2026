@@ -18,6 +18,7 @@ const TeamAdmin = React.lazy(() => import('./components/TeamAdmin').then(m => ({
 const AdminInsights = React.lazy(() => import('./components/AdminInsights').then(m => ({ default: m.AdminInsights })));
 const Settings = React.lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
 const DicomViewerPage = React.lazy(() => import('./components/DicomViewerPage'));
+const AggregatedTodoView = React.lazy(() => import('./components/AggregatedTodoView'));
 import { NewCaseModal } from './components/NewCaseModal';
 import { UploadProgress } from './components/UploadProgress';
 import { uploadFile, uploadCV } from './services/fileService';
@@ -1107,16 +1108,24 @@ const App: React.FC = () => {
               </div>
             }>
               {viewMode === ViewMode.DASHBOARD && (
-                <CaseList
-                  cases={cases}
-                  onSelect={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }}
-                  onCreate={handleCreateCase}
-                  onEdit={handleEditCase}
-                  currentUser={currentUser}
-                  onDeleteCase={deleteCaseFromStore}
-                  onUpdateCase={upsertCase}
-                  authorizedUsers={authorizedUsers}
-                />
+                <>
+                  <CaseList
+                    cases={cases}
+                    onSelect={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }}
+                    onCreate={handleCreateCase}
+                    onEdit={handleEditCase}
+                    currentUser={currentUser}
+                    onDeleteCase={deleteCaseFromStore}
+                    onUpdateCase={upsertCase}
+                    authorizedUsers={authorizedUsers}
+                  />
+                  <AggregatedTodoView
+                    cases={cases}
+                    currentUser={currentUser}
+                    onSelectCase={(c) => { setActiveCase(c); setViewMode(ViewMode.CASE_VIEW); }}
+                    onUpdateCase={upsertCase}
+                  />
+                </>
               )}
               {viewMode === ViewMode.CASE_VIEW && activeCase && (
                 <CaseDetails
