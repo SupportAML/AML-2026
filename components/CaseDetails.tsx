@@ -37,7 +37,8 @@ import {
   DownloadIcon,
   MessageSquareIcon
 } from 'lucide-react';
-import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry, DocumentPriority, PRIORITY_CONFIG, Annotation } from '../types';
+import { Case, Document, DicomStudyRecord, DocumentFileType, AuthorizedUser, UserProfile, Client, ReviewStatus, BillingEntry, TodoItem, DocumentPriority, PRIORITY_CONFIG, Annotation } from '../types';
+import CaseTodoList from './CaseTodoList';
 // Google Drive viewer support kept for viewing previously-imported Drive studies
 import { parseDicomFile, groupFilesByDicomStudy, isDicomCandidate, type DicomMeta } from '../services/dicomParserService';
 
@@ -1083,6 +1084,15 @@ const CaseDetails: React.FC<CaseDetailsProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Case To-Do List */}
+      <div className="mb-8">
+        <CaseTodoList
+          todoItems={caseItem.todoItems || []}
+          currentUser={currentUser}
+          onUpdate={(items) => onUpdateCase({ ...caseItem, todoItems: items })}
+        />
       </div>
 
       {isEditingMetadata && (

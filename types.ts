@@ -56,6 +56,17 @@ export interface StructuredChronology {
   irrelevantFacts: ChronologyEvent[];
 }
 
+export interface TodoItem {
+  id: string;
+  text: string;
+  notes: string;
+  completed: boolean;
+  createdAt: string;
+  completedAt?: string;
+  createdBy: string;
+  createdByName: string;
+}
+
 export interface BillingEntry {
   id: string;
   type: 'retainer' | 'work';
@@ -163,6 +174,9 @@ export interface Case {
 
   // Billing & Hours Tracking
   billingEntries?: BillingEntry[];
+
+  // Case To-Do List
+  todoItems?: TodoItem[];
 
   // Finalization
   isFinal?: boolean;
